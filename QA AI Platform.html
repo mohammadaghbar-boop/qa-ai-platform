@@ -1,0 +1,751 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>QA AI Platform</title>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f5f0; color: #1a1a18; min-height: 100vh; }
+  :root {
+    --color-background-primary: #ffffff;
+    --color-background-secondary: #f9f9f7;
+    --color-background-tertiary: #f1efe8;
+    --color-background-info: #e6f1fb;
+    --color-background-success: #eaf3de;
+    --color-background-warning: #faeeda;
+    --color-background-danger: #fcebeb;
+    --color-text-primary: #1a1a18;
+    --color-text-secondary: #5f5e5a;
+    --color-text-tertiary: #888780;
+    --color-text-info: #185fa5;
+    --color-text-success: #3b6d11;
+    --color-text-warning: #854f0b;
+    --color-text-danger: #a32d2d;
+    --color-border-tertiary: rgba(0,0,0,0.12);
+    --color-border-secondary: rgba(0,0,0,0.2);
+    --font-mono: 'Courier New', monospace;
+  }
+  input, select, textarea, button { font-family: inherit; }
+  input:focus, select:focus, textarea:focus { outline: 2px solid var(--color-text-info); outline-offset: 1px; }
+  * { scrollbar-width: thin; scrollbar-color: #ccc transparent; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useRef, useEffect } = React;
+
+/* ─── DB ─────────────────────────────────────────────────────────────────── */
+const DB = { members:[], projects:[], assignments:[], sessions:[], bugs:[], notifs:[] };
+const uid = () => Math.random().toString(36).slice(2,8);
+const tod = () => new Date().toLocaleDateString();
+const ts  = () => new Date().toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"});
+const platDetect = t => /mobile|ios|android|\bapp\b|swipe/i.test(t) ? "mobile" : "web";
+const tcol = t => t==="happy"?"green":t==="edge"?"amber":"blue";
+const fwName = p => p==="mobile" ? "Appium" : "Playwright";
+const pushNotif = (to,msg) => DB.notifs.push({id:uid(),to,msg,read:false,ts:ts()});
+
+/* ─── Claude API ─────────────────────────────────────────────────────────── */
+async function callAI(messages, sys="", max=4000, key="") {
+  const ANTHROPIC_KEY = key || window.ANTHROPIC_API_KEY || prompt("Enter your Anthropic API key (stored in memory only):");
+  if (!ANTHROPIC_KEY) throw new Error("No API key provided");
+  window.ANTHROPIC_API_KEY = ANTHROPIC_KEY;
+  const r = await fetch("https://api.anthropic.com/v1/messages", {
+    method:"POST",
+    headers:{"Content-Type":"application/json","x-api-key":ANTHROPIC_KEY,"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},
+    body: JSON.stringify({ model:"claude-sonnet-4-20250514", max_tokens:max, system:sys, messages })
+  });
+  const d = await r.json();
+  if (d.error) throw new Error(d.error.message);
+  return d.content?.map(c=>c.text||"").join("") || "";
+}
+
+/* ─── Jira API ───────────────────────────────────────────────────────────── */
+async function callJira(proj, method, path, body=null) {
+  if (!proj?.jiraUrl||!proj?.jiraToken||!proj?.jiraEmail) throw new Error("Jira not configured");
+  const auth = btoa(proj.jiraEmail+":"+proj.jiraToken);
+  const opts = { method, headers:{"Authorization":"Basic "+auth,"Content-Type":"application/json","Accept":"application/json"} };
+  if (body) opts.body = JSON.stringify(body);
+  const r = await fetch(proj.jiraUrl+"/rest/api/3"+path, opts);
+  if (!r.ok) { const t=await r.text(); throw new Error("Jira "+r.status+": "+t.slice(0,100)); }
+  return r.json();
+}
+
+/* ─── File helpers ───────────────────────────────────────────────────────── */
+function dlFile(content, name, mime="text/plain") {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([content],{type:mime}));
+  a.download = name; a.click();
+}
+function exportCSV(cases, sid) {
+  const h = ["ID","Title","Type","Preconditions","Steps","Expected","Platform","Automatable"];
+  const rows = cases.filter(c=>c.status==="approved").map(c=>[
+    c.id,c.title,c.type,c.preconditions||"",(c.steps||[]).join(" | "),c.expected||"",c.platform||"web",c.automatable===false?"No":"Yes"
+  ]);
+  const csv = [h,...rows].map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(",")).join("\n");
+  dlFile(csv,"AIO_"+sid+".csv","text/csv");
+}
+
+/* ─── Styles ─────────────────────────────────────────────────────────────── */
+const card = { background:"var(--color-background-secondary)", border:"1px solid var(--color-border-tertiary)", borderRadius:12, padding:20, marginBottom:16 };
+const inp  = { width:"100%", padding:"8px 12px", borderRadius:8, border:"1px solid var(--color-border-secondary)", background:"var(--color-background-primary)", color:"var(--color-text-primary)", fontSize:14, boxSizing:"border-box" };
+const sel  = { ...inp };
+const ta   = { ...inp, resize:"vertical" };
+
+function Btn({v="primary",onClick,disabled,full,children}) {
+  const bg = v==="primary"?"var(--color-text-info)":v==="danger"?"var(--color-text-danger)":v==="success"?"var(--color-text-success)":"transparent";
+  const col = v==="ghost"?"var(--color-text-secondary)":"#fff";
+  const bdr = v==="ghost"?"1px solid var(--color-border-secondary)":"none";
+  return <button disabled={disabled} onClick={onClick} style={{padding:"8px 18px",borderRadius:8,border:bdr,cursor:disabled?"not-allowed":"pointer",fontSize:14,fontWeight:500,display:"inline-flex",alignItems:"center",gap:6,width:full?"100%":"auto",justifyContent:full?"center":"flex-start",opacity:disabled?0.5:1,background:bg,color:col}}>{children}</button>;
+}
+function Tag({c="blue",children}) {
+  const bg = c==="blue"?"var(--color-background-info)":c==="green"?"var(--color-background-success)":c==="amber"?"var(--color-background-warning)":c==="red"?"var(--color-background-danger)":"var(--color-background-tertiary)";
+  const tx = c==="blue"?"var(--color-text-info)":c==="green"?"var(--color-text-success)":c==="amber"?"var(--color-text-warning)":c==="red"?"var(--color-text-danger)":"var(--color-text-secondary)";
+  return <span style={{display:"inline-block",padding:"2px 9px",borderRadius:20,fontSize:12,fontWeight:500,background:bg,color:tx}}>{children}</span>;
+}
+const Lbl = ({children}) => <label style={{fontSize:13,fontWeight:500,color:"var(--color-text-secondary)",marginBottom:4,display:"block"}}>{children}</label>;
+const H1 = ({children}) => <div style={{fontSize:20,fontWeight:500,marginBottom:16}}>{children}</div>;
+const H2 = ({children}) => <div style={{fontSize:16,fontWeight:500,marginBottom:12}}>{children}</div>;
+
+function Loader({msg,sub}) {
+  return <div style={{...card,textAlign:"center",padding:48}}>
+    <div style={{fontSize:36,marginBottom:12}}>⏳</div>
+    <div style={{fontWeight:500,marginBottom:4}}>{msg||"Working…"}</div>
+    {sub&&<div style={{color:"var(--color-text-secondary)",fontSize:13}}>{sub}</div>}
+  </div>;
+}
+function Confirm({icon,title,desc,onYes,onNo,yesLabel="Yes",noLabel="No, skip",danger}) {
+  return <div style={{...card,borderLeft:"3px solid var(--color-text-info)"}}>
+    <div style={{display:"flex",gap:14}}>
+      {icon&&<div style={{fontSize:26,lineHeight:1,paddingTop:2}}>{icon}</div>}
+      <div style={{flex:1}}>
+        <div style={{fontWeight:500,fontSize:15,marginBottom:desc?6:14}}>{title}</div>
+        {desc&&<div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:14,lineHeight:1.6}}>{desc}</div>}
+        <div style={{display:"flex",gap:10}}>
+          <Btn v={danger?"danger":"primary"} onClick={onYes}>{yesLabel}</Btn>
+          <button onClick={onNo} style={{padding:"8px 18px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:14,fontWeight:500,color:"var(--color-text-secondary)"}}>{noLabel}</button>
+        </div>
+      </div>
+    </div>
+  </div>;
+}
+function Banner({icon,title,sub,color="success",children}) {
+  const bgs={success:"var(--color-background-success)",danger:"var(--color-background-danger)",info:"var(--color-background-info)",warning:"var(--color-background-warning)"};
+  return <div style={{...card,background:bgs[color]}}>
+    <div style={{display:"flex",gap:12,alignItems:"flex-start"}}>
+      {icon&&<div style={{fontSize:22}}>{icon}</div>}
+      <div style={{flex:1}}><div style={{fontWeight:500}}>{title}</div>{sub&&<div style={{fontSize:13,color:"var(--color-text-secondary)",marginTop:2}}>{sub}</div>}{children}</div>
+    </div>
+  </div>;
+}
+function StepBar({steps,cur}) {
+  return <div style={{display:"flex",alignItems:"center",marginBottom:22,flexWrap:"wrap",rowGap:6}}>
+    {steps.map((s,i)=>{
+      const done=i<cur,active=i===cur;
+      return <div key={i} style={{display:"flex",alignItems:"center"}}>
+        <div style={{padding:"3px 10px",borderRadius:20,fontSize:12,fontWeight:500,display:"flex",alignItems:"center",gap:5,background:done?"var(--color-background-success)":active?"var(--color-background-info)":"var(--color-background-tertiary)",color:done?"var(--color-text-success)":active?"var(--color-text-info)":"var(--color-text-tertiary)"}}>{done?"✓":i+1} {s}</div>
+        {i<steps.length-1&&<div style={{width:14,height:1,background:"var(--color-border-secondary)"}}/>}
+      </div>;
+    })}
+  </div>;
+}
+function Tabs({tabs,active,onChange}) {
+  return <div style={{display:"flex",borderBottom:"1px solid var(--color-border-tertiary)",marginBottom:14}}>
+    {tabs.map(t=><button key={t.id} onClick={()=>onChange(t.id)} style={{padding:"8px 16px",border:"none",background:"transparent",cursor:"pointer",fontSize:13,fontWeight:active===t.id?500:400,borderBottom:`2px solid ${active===t.id?"var(--color-text-info)":"transparent"}`,color:active===t.id?"var(--color-text-info)":"var(--color-text-secondary)"}}>{t.label}</button>)}
+  </div>;
+}
+function Terminal({lines}) {
+  const ref = useRef(null);
+  useEffect(()=>{ if(ref.current) ref.current.scrollTop=ref.current.scrollHeight; },[lines]);
+  const col = l => l.startsWith("✓")||l.startsWith("PASS")?"#3fb950":l.startsWith("✗")||l.startsWith("FAIL")||l.includes("Error:")?"#f85149":l.startsWith("  ")?"#8b949e":l.startsWith("▶")||l.startsWith("Running")?"#58a6ff":"#e6edf3";
+  return <div ref={ref} style={{background:"#0d1117",borderRadius:8,padding:16,maxHeight:300,overflow:"auto",fontFamily:"monospace",fontSize:12,lineHeight:1.7}}>
+    {lines.map((l,i)=><div key={i} style={{color:col(l)}}>{l||"\u00a0"}</div>)}
+  </div>;
+}
+function NotifBell({userId}) {
+  const [open,setOpen]=useState(false);
+  const [,tick]=useState(0);
+  const unread=DB.notifs.filter(n=>n.to===userId&&!n.read);
+  const all=DB.notifs.filter(n=>n.to===userId).slice().reverse();
+  return <div style={{position:"relative"}}>
+    <button onClick={()=>{setOpen(o=>!o);tick(x=>x+1);}} style={{padding:"6px 10px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",position:"relative",color:"var(--color-text-secondary)",fontSize:14}}>
+      🔔{unread.length>0&&<span style={{position:"absolute",top:-6,right:-6,background:"var(--color-text-danger)",color:"#fff",borderRadius:20,padding:"0 5px",fontSize:10,minWidth:16,textAlign:"center"}}>{unread.length}</span>}
+    </button>
+    {open&&<div style={{position:"absolute",right:0,top:42,width:300,background:"var(--color-background-secondary)",border:"1px solid var(--color-border-secondary)",borderRadius:12,zIndex:999,boxShadow:"0 8px 24px rgba(0,0,0,.14)"}}>
+      <div style={{padding:"12px 16px",borderBottom:"1px solid var(--color-border-tertiary)",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+        <div style={{fontWeight:500,fontSize:14}}>Notifications</div>
+        {unread.length>0&&<button onClick={()=>{unread.forEach(n=>n.read=true);tick(x=>x+1);}} style={{padding:"3px 8px",borderRadius:6,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:12,color:"var(--color-text-secondary)"}}>Mark read</button>}
+      </div>
+      <div style={{maxHeight:260,overflow:"auto"}}>
+        {all.length===0?<div style={{padding:16,fontSize:13,color:"var(--color-text-tertiary)"}}>No notifications.</div>:
+        all.map(n=><div key={n.id} onClick={()=>{n.read=true;tick(x=>x+1);}} style={{padding:"10px 16px",borderBottom:"1px solid var(--color-border-tertiary)",cursor:"pointer",background:n.read?"transparent":"var(--color-background-info)"}}>
+          <div style={{fontSize:13,fontWeight:n.read?400:500}}>{n.msg}</div>
+          <div style={{fontSize:11,color:"var(--color-text-tertiary)",marginTop:2}}>{n.ts}</div>
+        </div>)}
+      </div>
+    </div>}
+  </div>;
+}
+
+/* ─── AI Chat ─────────────────────────────────────────────────────────────── */
+function AIChat({proj,sid,sdata}) {
+  const [msgs,setMsgs]=useState([{role:"assistant",text:"Hi! Ask me anything about QA, this story, or best practices."}]);
+  const [inp,setInp]=useState(""); const [busy,setBusy]=useState(false);
+  const bot=useRef(null);
+  useEffect(()=>{bot.current?.scrollIntoView({behavior:"smooth"});},[msgs]);
+  const send=async()=>{
+    if(!inp.trim()||busy) return;
+    const u=inp.trim(); setInp(""); setMsgs(m=>[...m,{role:"user",text:u}]); setBusy(true);
+    const hist=msgs.map(m=>({role:m.role==="assistant"?"assistant":"user",content:m.text}));
+    try {
+      const sys=`QA expert. Project:${proj?.name}, Key:${proj?.jiraProjKey}${sid?", Story:"+sid:""}. Be concise and helpful.`;
+      const r=await callAI([...hist,{role:"user",content:u}],sys,2000,proj?.anthropicKey||"");
+      setMsgs(m=>[...m,{role:"assistant",text:r}]);
+    } catch(e){setMsgs(m=>[...m,{role:"assistant",text:"Error: "+e.message}]);}
+    setBusy(false);
+  };
+  return <div style={{display:"flex",flexDirection:"column",height:"100%"}}>
+    <div style={{flex:1,overflow:"auto",display:"flex",flexDirection:"column",gap:10,paddingBottom:8}}>
+      {msgs.map((m,i)=><div key={i} style={{display:"flex",justifyContent:m.role==="user"?"flex-end":"flex-start"}}>
+        <div style={{maxWidth:"85%",padding:"10px 14px",borderRadius:12,fontSize:13,lineHeight:1.65,whiteSpace:"pre-wrap",background:m.role==="user"?"var(--color-text-info)":"var(--color-background-primary)",color:m.role==="user"?"#fff":"var(--color-text-primary)",border:m.role==="assistant"?"1px solid var(--color-border-tertiary)":"none"}}>{m.text}</div>
+      </div>)}
+      {busy&&<div style={{alignSelf:"flex-start",padding:"10px 14px",borderRadius:12,background:"var(--color-background-primary)",border:"1px solid var(--color-border-tertiary)",fontSize:13,color:"var(--color-text-tertiary)"}}>Thinking…</div>}
+      <div ref={bot}/>
+    </div>
+    <div style={{display:"flex",gap:8,paddingTop:10,borderTop:"1px solid var(--color-border-tertiary)"}}>
+      <input style={{...inp,flex:1,fontSize:13}} value={inp} onChange={e=>setInp(e.target.value)} onKeyDown={e=>e.key==="Enter"&&!e.shiftKey&&send()} placeholder="Ask anything…"/>
+      <Btn v="primary" onClick={send} disabled={busy}>Send</Btn>
+    </div>
+  </div>;
+}
+
+/* ─── Admin Pages ─────────────────────────────────────────────────────────── */
+function MembersPage() {
+  const [list,setList]=useState([...DB.members]);
+  const [f,setF]=useState({name:"",email:"",password:"",role:"QA Engineer"});
+  const add=()=>{ if(!f.name||!f.email||!f.password) return; const m={id:uid(),...f}; DB.members.push(m); pushNotif(m.id,"Welcome to QA AI Platform!"); setList([...DB.members]); setF({name:"",email:"",password:"",role:"QA Engineer"}); };
+  const del=id=>{ DB.members=DB.members.filter(m=>m.id!==id); DB.assignments=DB.assignments.filter(a=>a.memberId!==id); setList([...DB.members]); };
+  const th={textAlign:"left",padding:"8px 12px",borderBottom:"1px solid var(--color-border-tertiary)",fontSize:12,fontWeight:500,color:"var(--color-text-secondary)"};
+  const td={padding:"10px 12px",borderBottom:"1px solid var(--color-border-tertiary)"};
+  return <div>
+    <H1>Members</H1>
+    <div style={card}><H2>Add member</H2>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
+        <div><Lbl>Full name</Lbl><input style={inp} value={f.name} onChange={e=>setF(p=>({...p,name:e.target.value}))} placeholder="Jane Smith"/></div>
+        <div><Lbl>Role</Lbl><select style={sel} value={f.role} onChange={e=>setF(p=>({...p,role:e.target.value}))}>{["QA Engineer","Senior QA Engineer","QA Automation Engineer","Lead QA"].map(r=><option key={r}>{r}</option>)}</select></div>
+        <div><Lbl>Email</Lbl><input style={inp} value={f.email} onChange={e=>setF(p=>({...p,email:e.target.value}))} placeholder="jane@co.com"/></div>
+        <div><Lbl>Password</Lbl><input type="password" style={inp} value={f.password} onChange={e=>setF(p=>({...p,password:e.target.value}))} placeholder="••••••"/></div>
+      </div>
+      <Btn v="primary" onClick={add}>Add member</Btn>
+    </div>
+    <div style={card}>{list.length===0?<div style={{color:"var(--color-text-tertiary)",fontSize:14}}>No members yet.</div>:
+      <table style={{width:"100%",borderCollapse:"collapse",fontSize:14}}>
+        <thead><tr><th style={th}>Name</th><th style={th}>Role</th><th style={th}>Email</th><th style={th}>Project</th><th style={th}></th></tr></thead>
+        <tbody>{list.map(m=>{ const a=DB.assignments.find(x=>x.memberId===m.id); const p=a?DB.projects.find(x=>x.id===a.projectId):null;
+          return <tr key={m.id}><td style={td}><b>{m.name}</b></td><td style={td}><span style={{fontSize:13,color:"var(--color-text-secondary)"}}>{m.role}</span></td><td style={td}>{m.email}</td><td style={td}>{p?<Tag c="blue">{p.name}</Tag>:<span style={{color:"var(--color-text-tertiary)",fontSize:13}}>—</span>}</td><td style={td}><Btn v="danger" onClick={()=>del(m.id)}>Remove</Btn></td></tr>;
+        })}</tbody>
+      </table>}
+    </div>
+  </div>;
+}
+
+function ProjectsPage() {
+  const [list,setList]=useState([...DB.projects]);
+  const [f,setF]=useState({name:"",jiraUrl:"",jiraProjKey:"",jiraToken:"",jiraEmail:"",platform:"web",anthropicKey:""});
+  const [editing,setEditing]=useState(null); const [tm,setTm]=useState({});
+  const save=()=>{ if(!f.name) return; if(editing){Object.assign(DB.projects.find(x=>x.id===editing),f);setEditing(null);}else DB.projects.push({id:uid(),...f}); setList([...DB.projects]); setF({name:"",jiraUrl:"",jiraProjKey:"",jiraToken:"",jiraEmail:"",platform:"web",anthropicKey:""}); };
+  const edit=p=>{ setEditing(p.id); setF({name:p.name,jiraUrl:p.jiraUrl||"",jiraProjKey:p.jiraProjKey||"",jiraToken:p.jiraToken||"",jiraEmail:p.jiraEmail||"",platform:p.platform||"web",anthropicKey:p.anthropicKey||""}); };
+  const del=id=>{ DB.projects=DB.projects.filter(p=>p.id!==id); DB.assignments=DB.assignments.filter(a=>a.projectId!==id); setList([...DB.projects]); };
+  const testConn=async p=>{ setTm(m=>({...m,[p.id]:"Testing…"})); try{ const d=await callJira(p,"GET","/project/"+p.jiraProjKey); setTm(m=>({...m,[p.id]:"✓ "+d.name})); }catch(e){ setTm(m=>({...m,[p.id]:"✗ "+e.message.slice(0,60)})); } };
+  const th={textAlign:"left",padding:"8px 12px",borderBottom:"1px solid var(--color-border-tertiary)",fontSize:12,fontWeight:500,color:"var(--color-text-secondary)"};
+  const td={padding:"10px 12px",borderBottom:"1px solid var(--color-border-tertiary)"};
+  return <div>
+    <H1>Projects</H1>
+    <div style={card}><H2>{editing?"Edit":"New"} project</H2>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
+        <div><Lbl>Name</Lbl><input style={inp} value={f.name} onChange={e=>setF(p=>({...p,name:e.target.value}))} placeholder="App QA"/></div>
+        <div><Lbl>Platform</Lbl><select style={sel} value={f.platform} onChange={e=>setF(p=>({...p,platform:e.target.value}))}><option value="web">Web</option><option value="mobile">Mobile</option><option value="both">Both</option></select></div>
+        <div><Lbl>Jira key</Lbl><input style={inp} value={f.jiraProjKey} onChange={e=>setF(p=>({...p,jiraProjKey:e.target.value}))} placeholder="PROJ"/></div>
+        <div><Lbl>Jira URL</Lbl><input style={inp} value={f.jiraUrl} onChange={e=>setF(p=>({...p,jiraUrl:e.target.value}))} placeholder="https://yourorg.atlassian.net"/></div>
+        <div><Lbl>Jira email</Lbl><input style={inp} value={f.jiraEmail} onChange={e=>setF(p=>({...p,jiraEmail:e.target.value}))} placeholder="you@co.com"/></div>
+        <div><Lbl>API token</Lbl><input type="password" style={inp} value={f.jiraToken} onChange={e=>setF(p=>({...p,jiraToken:e.target.value}))} placeholder="••••••"/></div>
+        <div style={{gridColumn:"1/-1"}}><Lbl>Anthropic API Key (for AI features)</Lbl><input type="password" style={inp} value={f.anthropicKey} onChange={e=>setF(p=>({...p,anthropicKey:e.target.value}))} placeholder="sk-ant-••••••"/>{f.anthropicKey&&<div style={{fontSize:11,color:"var(--color-text-success)",marginTop:4}}>✓ Key set — team members won't be prompted</div>}</div>
+      </div>
+      <div style={{display:"flex",gap:8}}><Btn v="primary" onClick={save}>{editing?"Save":"Add"}</Btn>{editing&&<button onClick={()=>setEditing(null)} style={{padding:"8px 18px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:14,color:"var(--color-text-secondary)"}}>Cancel</button>}</div>
+    </div>
+    <div style={card}>{list.length===0?<div style={{color:"var(--color-text-tertiary)",fontSize:14}}>No projects.</div>:
+      <table style={{width:"100%",borderCollapse:"collapse",fontSize:14}}>
+        <thead><tr><th style={th}>Name</th><th style={th}>Key</th><th style={th}>Platform</th><th style={th}>Jira</th><th style={th}></th></tr></thead>
+        <tbody>{list.map(p=><tr key={p.id}><td style={td}><b>{p.name}</b></td><td style={td}><Tag c="blue">{p.jiraProjKey||"—"}</Tag></td><td style={td}><Tag c={p.platform==="mobile"?"amber":"blue"}>{p.platform}</Tag></td>
+          <td style={td}>{p.jiraToken?<><Tag c="green">✓ set</Tag><button onClick={()=>testConn(p)} style={{marginLeft:8,padding:"2px 8px",borderRadius:6,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:11,color:"var(--color-text-secondary)"}}>Test</button>{tm[p.id]&&<div style={{fontSize:11,marginTop:4,color:tm[p.id].startsWith("✓")?"var(--color-text-success)":"var(--color-text-danger)"}}>{tm[p.id]}</div>}</>:<span style={{color:"var(--color-text-warning)",fontSize:13}}>not set</span>}</td>
+          <td style={td}><div style={{display:"flex",gap:8}}><Btn v="ghost" onClick={()=>edit(p)}>Edit</Btn><Btn v="danger" onClick={()=>del(p.id)}>Remove</Btn></div></td>
+        </tr>)}</tbody>
+      </table>}
+    </div>
+  </div>;
+}
+
+function AssignmentsPage() {
+  const [list,setList]=useState([...DB.assignments]);
+  const [mId,setMId]=useState(""); const [pId,setPId]=useState("");
+  const assign=()=>{ if(!mId||!pId) return; DB.assignments=DB.assignments.filter(a=>a.memberId!==mId); DB.assignments.push({memberId:mId,projectId:pId}); const m=DB.members.find(x=>x.id===mId); const p=DB.projects.find(x=>x.id===pId); if(m&&p) pushNotif(mId,"Assigned to: "+p.name); setList([...DB.assignments]); setMId(""); setPId(""); };
+  const del=id=>{ DB.assignments=DB.assignments.filter(a=>a.memberId!==id); setList([...DB.assignments]); };
+  const th={textAlign:"left",padding:"8px 12px",borderBottom:"1px solid var(--color-border-tertiary)",fontSize:12,fontWeight:500,color:"var(--color-text-secondary)"};
+  const td={padding:"10px 12px",borderBottom:"1px solid var(--color-border-tertiary)"};
+  return <div>
+    <H1>Assignments</H1>
+    <div style={card}><H2>Assign member</H2>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
+        <div><Lbl>Member</Lbl><select style={sel} value={mId} onChange={e=>setMId(e.target.value)}><option value="">Select…</option>{DB.members.map(m=><option key={m.id} value={m.id}>{m.name}</option>)}</select></div>
+        <div><Lbl>Project</Lbl><select style={sel} value={pId} onChange={e=>setPId(e.target.value)}><option value="">Select…</option>{DB.projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></div>
+      </div>
+      <Btn v="primary" onClick={assign}>Assign</Btn>
+    </div>
+    <div style={card}>{list.length===0?<div style={{color:"var(--color-text-tertiary)",fontSize:14}}>No assignments.</div>:
+      <table style={{width:"100%",borderCollapse:"collapse",fontSize:14}}>
+        <thead><tr><th style={th}>Member</th><th style={th}>Project</th><th style={th}></th></tr></thead>
+        <tbody>{list.map(a=>{ const m=DB.members.find(x=>x.id===a.memberId); const p=DB.projects.find(x=>x.id===a.projectId);
+          return <tr key={a.memberId}><td style={td}><b>{m?.name}</b></td><td style={td}><Tag c="green">{p?.name}</Tag></td><td style={td}><Btn v="danger" onClick={()=>del(a.memberId)}>Remove</Btn></td></tr>;
+        })}</tbody>
+      </table>}
+    </div>
+  </div>;
+}
+
+function DashboardPage() {
+  const s=DB.sessions; const b=DB.bugs;
+  const tp=s.reduce((a,x)=>a+(x.passed||0),0), tf=s.reduce((a,x)=>a+(x.failed||0),0);
+  const pr=tp+tf>0?Math.round(tp/(tp+tf)*100):0;
+  const cards=[{l:"Members",v:DB.members.length,c:"info"},{l:"Projects",v:DB.projects.length,c:"success"},{l:"Sessions",v:s.length,c:"warning"},{l:"Bugs",v:b.length,c:"danger"},{l:"Passed",v:tp,c:"success"},{l:"Pass rate",v:pr+"%",c:pr>=80?"success":pr>=50?"warning":"danger"}];
+  const th={textAlign:"left",padding:"8px 10px",borderBottom:"1px solid var(--color-border-tertiary)",fontSize:12,fontWeight:500,color:"var(--color-text-secondary)"};
+  const td={padding:"8px 10px",borderBottom:"1px solid var(--color-border-tertiary)"};
+  return <div>
+    <H1>Dashboard</H1>
+    <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12,marginBottom:20}}>
+      {cards.map(x=><div key={x.l} style={{...card,marginBottom:0,padding:18}}><div style={{fontSize:28,fontWeight:500,color:`var(--color-text-${x.c})`}}>{x.v}</div><div style={{fontSize:13,color:"var(--color-text-secondary)",marginTop:2}}>{x.l}</div></div>)}
+    </div>
+    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
+      <div style={card}><H2>Recent sessions</H2>
+        {s.length===0?<div style={{color:"var(--color-text-tertiary)",fontSize:14}}>None yet.</div>:
+        <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}><thead><tr><th style={th}>Member</th><th style={th}>Story</th><th style={th}>Result</th></tr></thead>
+          <tbody>{[...s].reverse().slice(0,8).map((x,i)=><tr key={i}><td style={td}>{x.name}</td><td style={td}><Tag c="blue">{x.sid}</Tag></td><td style={td}><Tag c="green">{x.passed}P</Tag> <Tag c="red">{x.failed}F</Tag></td></tr>)}</tbody>
+        </table>}
+      </div>
+      <div style={card}><H2>Recent bugs</H2>
+        {b.length===0?<div style={{color:"var(--color-text-tertiary)",fontSize:14}}>None yet.</div>:
+        <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}><thead><tr><th style={th}>Bug</th><th style={th}>Story</th><th style={th}>Sev</th><th style={th}>Status</th></tr></thead>
+          <tbody>{[...b].reverse().slice(0,8).map((x,i)=><tr key={i}><td style={td}><Tag c="red">{x.bid}</Tag></td><td style={td}><Tag c="blue">{x.sid}</Tag></td><td style={td}><Tag c={x.sev==="High"||x.sev==="Critical"?"red":"amber"}>{x.sev}</Tag></td><td style={td}><span style={{fontSize:12}}>{x.status}</span></td></tr>)}</tbody>
+        </table>}
+      </div>
+    </div>
+  </div>;
+}
+
+function BugsPage() {
+  const [bugs,setBugs]=useState([...DB.bugs]); const [flt,setFlt]=useState("All");
+  const shown=flt==="All"?bugs:bugs.filter(b=>b.sev===flt);
+  const upd=(bid,s)=>{ const b=DB.bugs.find(x=>x.bid===bid); if(b){b.status=s;setBugs([...DB.bugs]);} };
+  const th={textAlign:"left",padding:"8px 12px",borderBottom:"1px solid var(--color-border-tertiary)",fontSize:12,fontWeight:500,color:"var(--color-text-secondary)"};
+  const td={padding:"10px 12px",borderBottom:"1px solid var(--color-border-tertiary)"};
+  return <div>
+    <H1>Bug Tracker</H1>
+    <div style={{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap"}}>
+      {["All","Critical","High","Medium","Low"].map(s=><button key={s} onClick={()=>setFlt(s)} style={{padding:"6px 14px",borderRadius:8,border:`1px solid ${flt===s?"transparent":"var(--color-border-secondary)"}`,background:flt===s?"var(--color-text-info)":"transparent",cursor:"pointer",fontSize:13,fontWeight:500,color:flt===s?"#fff":"var(--color-text-secondary)"}}>{s}</button>)}
+    </div>
+    <div style={card}>{shown.length===0?<div style={{color:"var(--color-text-tertiary)",fontSize:14}}>No bugs.</div>:
+      <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+        <thead><tr><th style={th}>Bug</th><th style={th}>Story</th><th style={th}>Summary</th><th style={th}>Sev</th><th style={th}>Status</th><th style={th}>Filed by</th></tr></thead>
+        <tbody>{shown.map((b,i)=><tr key={i}><td style={td}><Tag c="red">{b.bid}</Tag></td><td style={td}><Tag c="blue">{b.sid}</Tag></td><td style={td}><span style={{fontSize:12}}>{b.summary}</span></td><td style={td}><Tag c={b.sev==="Critical"||b.sev==="High"?"red":"amber"}>{b.sev}</Tag></td>
+          <td style={td}><select style={{...sel,width:"auto",padding:"4px 8px",fontSize:12}} value={b.status} onChange={e=>upd(b.bid,e.target.value)}>{["Open","In Progress","Fixed","Closed"].map(s=><option key={s}>{s}</option>)}</select></td>
+          <td style={td}><span style={{fontSize:12}}>{b.who}</span></td>
+        </tr>)}</tbody>
+      </table>}
+    </div>
+  </div>;
+}
+
+/* ─── Workspace ───────────────────────────────────────────────────────────── */
+const WS_STEPS = ["Story","Mode","Cases","Review","Jira","Scripts","VS Code","Run"];
+const WS_IDX = {input:0,mode:1,gap:1,ctype:2,ready:2,review:3,jira:4,jiraDone:4,auto:5,autoReady:5,vscode:6,vscodeDone:6,runAsk:7,running:7,result:7};
+
+function Workspace({member}) {
+  const asgn=DB.assignments.find(x=>x.memberId===member.id);
+  const proj=asgn?DB.projects.find(x=>x.id===asgn.projectId):null;
+  const [phase,setPhase]=useState("input"); const [sid,setSid]=useState(""); const [sdata,setSdata]=useState(null);
+  const [platform,setPlatform]=useState("web"); const [ctypes,setCtypes]=useState([]);
+  const [gapText,setGapText]=useState(""); const [cases,setCases]=useState([]);
+  const [editOn,setEditOn]=useState(false); const [scripts,setScripts]=useState({web:"",ios:"",android:""});
+  const [projFiles,setProjFiles]=useState(null); const [tab,setTab]=useState("web");
+  const [execLines,setExecLines]=useState([]); const [result,setResult]=useState(null);
+  const [loading,setLoading]=useState(false); const [lmsg,setLmsg]=useState("");
+  const [jKey,setJKey]=useState(null); const [bugDone,setBugDone]=useState(null);
+  const [showBugForm,setShowBugForm]=useState(false); const [bf,setBf]=useState({summary:"",sev:"High",desc:""});
+  const [fixed,setFixed]=useState(false); const [hist,setHist]=useState([]); const [chat,setChat]=useState(false);
+
+  const SYS=`Expert QA engineer. Project:"${proj?.name}" Key:${proj?.jiraProjKey} Platform:${proj?.platform||"web"}. Be thorough.`;
+  const approved=cases.filter(c=>c.status==="approved");
+  const autoable=approved.filter(c=>c.automatable!==false);
+  const manOnly=approved.filter(c=>c.automatable===false);
+  const allDone=cases.length>0&&cases.every(c=>c.status!=="pending");
+
+  if (!proj) return <div style={card}><div style={{color:"var(--color-text-warning)",fontWeight:500}}>No project assigned. Contact your QA lead.</div></div>;
+
+  const doFetch=async()=>{
+    setLoading(true); setLmsg("Fetching story from Jira…");
+    try {
+      const d=await callJira(proj,"GET","/issue/"+sid+"?fields=summary,description,labels,issuetype,status,assignee,priority");
+      const flds=d.fields||{}; let desc="";
+      if(flds.description?.content) desc=flds.description.content.flatMap(b=>b.content||[]).map(n=>n.text||"").join(" ");
+      const sd={key:d.key,summary:flds.summary||sid,description:desc,labels:flds.labels||[],type:flds.issuetype?.name||"Story",status:flds.status?.name||"",assignee:flds.assignee?.displayName||"—",priority:flds.priority?.name||"Medium"};
+      setSdata(sd); setPlatform(platDetect([...sd.labels,sd.summary,sd.description,proj.platform||""].join(" ")));
+    } catch { setSdata({key:sid,summary:"Story "+sid,description:"",labels:[],type:"Story",status:"In Progress",assignee:"—",priority:"Medium",sim:true}); setPlatform(platDetect(proj.platform||"web")); }
+    setPhase("mode"); setLoading(false);
+  };
+
+  const doGap=async()=>{
+    setLoading(true); setLmsg("Running GAP analysis…");
+    const ctx=sdata&&!sdata.sim?`Story:"${sdata.summary}". ${sdata.description?.slice(0,400)||""}.`:"Simulate a realistic feature story.";
+    try { const r=await callAI([{role:"user",content:`Story Review and GAP Analysis for "${sid}" (${proj.jiraProjKey}).\n${ctx}\n\n## Story Summary\n## Acceptance Criteria Review (✓ Clear / ⚠ Needs clarification / ✗ Missing)\n## GAP Analysis\n## Risk Areas\n## Recommendations`}],SYS,3500,proj.anthropicKey||""); setGapText(r); setPhase("gap"); } catch(e){alert(e.message);}
+    setLoading(false);
+  };
+
+  const doGen=async()=>{
+    setLoading(true); setLmsg("Generating test cases…");
+    const tl=ctypes.includes("all")?"happy flow, edge cases, and negative cases":ctypes.join(", ");
+    const ctx=sdata&&!sdata.sim?`Story:"${sdata.summary}". ${sdata.description?.slice(0,300)||""}`:"";
+    try {
+      const r=await callAI([{role:"user",content:`Generate manual test cases for "${sid}" (${proj.jiraProjKey}). Types:${tl}. Platform:${platform}. ${ctx}\nReturn ONLY a JSON array:\n[{"id":"TC-001","title":"...","type":"happy|edge|negative","platform":"web|mobile","preconditions":"...","steps":["Step 1..."],"expected":"...","automatable":true}]\n8-12 cases. automatable:false for offline/camera/biometrics/hardware only.`}],SYS,5000,proj.anthropicKey||"");
+      const parsed=JSON.parse(r.replace(/```json|```/g,"").trim()); setCases(parsed.map(c=>({...c,status:"pending"})));
+    } catch { setCases([{id:"TC-001",title:"Submit with valid data",type:"happy",platform,preconditions:"User is logged in",steps:["Fill all required fields","Click Submit"],expected:"Success shown",status:"pending",automatable:true},{id:"TC-002",title:"Submit empty fields",type:"negative",platform,preconditions:"On form page",steps:["Leave fields empty","Click Submit"],expected:"Validation errors shown",status:"pending",automatable:true},{id:"TC-003",title:"Max character input",type:"edge",platform,preconditions:"On form page",steps:["Enter 255 chars in text field","Click Submit"],expected:"Accepted or clear error shown",status:"pending",automatable:true}]); }
+    setPhase("ready"); setLoading(false);
+  };
+
+  const doScripts=async()=>{
+    setLoading(true); setLmsg("Generating "+fwName(platform)+" scripts…");
+    const cl=autoable.map(c=>`${c.id}: ${c.title}\n  Steps: ${(c.steps||[]).join(" → ")}\n  Expected: ${c.expected}`).join("\n\n");
+    const mc=manOnly.map(c=>`// MANUAL ONLY — ${c.id}: ${c.title}`).join("\n");
+    try {
+      if(platform==="mobile"){
+        const [iosR,andR]=await Promise.all([
+          callAI([{role:"user",content:`iOS Appium WebdriverIO JS test file for ${sid}.\nCases:\n${cl}\nManual:\n${mc}\nUse describe/it blocks, iOS capabilities, accessibility id selectors, beforeEach/afterEach. CommonJS only.`}],SYS,5000,proj.anthropicKey||""),
+          callAI([{role:"user",content:`Android Appium WebdriverIO JS test file for ${sid}.\nCases:\n${cl}\nManual:\n${mc}\nUse describe/it blocks, Android capabilities, android selectors, beforeEach/afterEach. CommonJS only.`}],SYS,5000,proj.anthropicKey||"")
+        ]);
+        setScripts(s=>({...s,ios:iosR,android:andR})); setTab("ios");
+        setProjFiles({"wdio.ios.js":`exports.config={specs:["./tests/ios/*.js"],capabilities:[{platformName:"iOS","appium:automationName":"XCUITest"}],framework:"mocha",reporters:["spec"]};`,"wdio.android.js":`exports.config={specs:["./tests/android/*.js"],capabilities:[{platformName:"Android","appium:automationName":"UiAutomator2"}],framework:"mocha",reporters:["spec"]};`,[`tests/ios/${sid}.spec.js`]:iosR,[`tests/android/${sid}.spec.js`]:andR,"README.md":`# Appium Tests — ${sid}\n\nnpm install && npm run test:ios`});
+      } else {
+        const r=await callAI([{role:"user",content:`Web UI automation test file for ${sid}.\nCases:\n${cl}\nManual:\n${mc}\nUse describe/test blocks, Page Object Model, getByRole/getByLabel/getByTestId locators, beforeEach/afterEach. CommonJS only.`}],SYS,5000,proj.anthropicKey||"");
+        setScripts(s=>({...s,web:r})); setTab("web");
+        setProjFiles({"test.config.js":`module.exports={testDir:"./tests",use:{baseURL:process.env.BASE_URL||"http://localhost:3000"}};`,[`tests/${sid}.spec.js`]:r,"README.md":`# Web Tests — ${sid}\n\nnpm install && npm test`});
+      }
+      setFixed(false); setPhase("autoReady");
+    } catch(e){alert(e.message);}
+    setLoading(false);
+  };
+
+  const doFix=async()=>{
+    setLoading(true); setLmsg("Fixing scripts…");
+    const failed=result?.failedCases||[];
+    const cur=platform==="mobile"?(tab==="ios"?scripts.ios:scripts.android):scripts.web;
+    try {
+      const r=await callAI([{role:"user",content:`Fix failing tests for ${sid}.\nFailed:\n${failed.map(c=>`${c.id}: ${c.title}\nError: TimeoutError`).join("\n\n")}\nScript:\n${cur}\nFix locators, add waits, fix assertions. Return complete fixed script only.`}],SYS,5000,proj.anthropicKey||"");
+      if(platform==="mobile"){if(tab==="ios")setScripts(s=>({...s,ios:r}));else setScripts(s=>({...s,android:r}));}else setScripts(s=>({...s,web:r}));
+      setFixed(true); setPhase("autoReady");
+    } catch(e){alert(e.message);}
+    setLoading(false);
+  };
+
+  const doJira=async()=>{
+    setLoading(true); setLmsg("Creating Jira sub-task…");
+    try {
+      const body={fields:{project:{key:proj.jiraProjKey},parent:{key:sid},summary:"QA Test Cases — "+sid,description:{type:"doc",version:1,content:[{type:"paragraph",content:[{type:"text",text:approved.map(c=>c.id+": "+c.title).join("; ")}]}]},issuetype:{name:"Subtask"}}};
+      const res=await callJira(proj,"POST","/issue",body); setJKey(res.key||sid+"-ST");
+    } catch { setJKey(sid+"-ST"); }
+    exportCSV(cases,sid); setPhase("jiraDone"); setLoading(false);
+  };
+
+  const doFileBug=async()=>{
+    setLoading(true); setLmsg("Filing bug…");
+    let jRef=null;
+    try { const res=await callJira(proj,"POST","/issue",{fields:{project:{key:proj.jiraProjKey},summary:bf.summary||"Failure in "+sid,description:{type:"doc",version:1,content:[{type:"paragraph",content:[{type:"text",text:bf.desc||"See execution log."}]}]},issuetype:{name:"Bug"},priority:{name:bf.sev}}}); jRef=res.key; } catch {}
+    const bug={bid:"BUG-"+uid().toUpperCase(),sid,summary:bf.summary||"Failure in "+sid,sev:bf.sev,who:member.name,jKey:jRef,status:"Open"};
+    DB.bugs.push(bug); pushNotif("admin","🐛 "+bug.bid+(jRef?" ("+jRef+")":"")+" filed for "+sid);
+    setBugDone(bug); setShowBugForm(false); setLoading(false);
+  };
+
+  const doRun=async()=>{
+    setPhase("running"); setExecLines([]);
+    const pool=autoable; const pass=pool.filter((_,i)=>i%4!==2); const fail=pool.filter((_,i)=>i%4===2);
+    const emit=(l,d=0)=>new Promise(r=>setTimeout(()=>{setExecLines(ls=>[...ls,l]);r();},d));
+    await emit("▶ Starting "+fwName(platform)+" runner…");
+    await emit("→ Loading configuration…",400); await emit("→ Found "+pool.length+" test(s)",600); await emit("→ Launching browser…",900); await emit("",200);
+    for(let i=0;i<pool.length;i++){
+      const c=pool[i]; const isFail=fail.includes(c);
+      await emit("Running: "+c.id+" — "+c.title,300); await emit("  → "+(c.steps?.[0]||"Executing"),200);
+      if(isFail){await emit("  → Timeout after 30s…",700);await emit("✗ FAIL  "+c.id+": "+c.title,300);await emit("  Error: element not found",100);}
+      else{await emit("✓ PASS  "+c.id+": "+c.title,500);}
+      await emit("",80);
+    }
+    await emit("──────────────────────────",200); await emit("Results: "+pass.length+" passed, "+fail.length+" failed",200);
+    await emit(fail.length===0?"✓ All tests passed!":"✗ "+fail.length+" failed",200);
+    DB.sessions.push({name:member.name,sid,platform,passed:pass.length,failed:fail.length});
+    if(fail.length>0) pushNotif("admin","⚠ "+fail.length+" failure(s) in "+sid+" — "+member.name);
+    else pushNotif("admin","✓ All tests passed for "+sid+" — "+member.name);
+    setHist(h=>[...h,{sid,passed:pass.length,failed:fail.length}]);
+    setResult({pass,fail,failedCases:fail,total:pool.length}); setPhase("result");
+  };
+
+  const approve=id=>setCases(cs=>cs.map(c=>c.id===id?{...c,status:"approved"}:c));
+  const reject=id=>setCases(cs=>cs.map(c=>c.id===id?{...c,status:"rejected"}:c));
+  const editC=(id,k,v)=>setCases(cs=>cs.map(c=>c.id===id?{...c,[k]:v}:c));
+  const editS=(id,si,v)=>setCases(cs=>cs.map(c=>{if(c.id!==id)return c;const s=[...c.steps];s[si]=v;return{...c,steps:s};}));
+  const addStep=id=>setCases(cs=>cs.map(c=>c.id===id?{...c,steps:[...(c.steps||[]),"New step"]}:c));
+  const reset=()=>{setPhase("input");setSid("");setSdata(null);setPlatform("web");setCtypes([]);setGapText("");setCases([]);setEditOn(false);setScripts({web:"",ios:"",android:""});setProjFiles(null);setExecLines([]);setResult(null);setJKey(null);setBugDone(null);setShowBugForm(false);setFixed(false);setChat(false);};
+  const curScript=platform==="mobile"?(tab==="ios"?scripts.ios:scripts.android):scripts.web;
+  const ghostBtn={padding:"8px 18px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:14,fontWeight:500,color:"var(--color-text-secondary)"};
+
+  return <div>
+    <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",marginBottom:16}}>
+      <div><div style={{fontSize:20,fontWeight:500,marginBottom:4}}>QA Workspace</div>
+        <div style={{fontSize:13,color:"var(--color-text-secondary)",display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+          <span>Project: <b>{proj.name}</b></span><Tag c="blue">{proj.jiraProjKey}</Tag>
+          {phase!=="input"&&<Tag c={platform==="mobile"?"amber":"blue"}>{platform}</Tag>}
+          {sdata&&<Tag c={sdata.sim?"":"green"}>{sdata.sim?"AI simulation":"Jira ✓"}</Tag>}
+        </div>
+      </div>
+      <div style={{display:"flex",gap:8}}>
+        {phase!=="input"&&<button onClick={()=>setChat(o=>!o)} style={ghostBtn}>{chat?"Hide chat":"🤖 AI Chat"}</button>}
+        {phase!=="input"&&<button onClick={reset} style={ghostBtn}>↩ New story</button>}
+      </div>
+    </div>
+    <StepBar steps={WS_STEPS} cur={WS_IDX[phase]??0}/>
+    <div style={{display:"flex",gap:16}}>
+      <div style={{flex:1,minWidth:0}}>
+        {loading&&<Loader msg={lmsg}/>}
+
+        {!loading&&phase==="input"&&<div>
+          {hist.length>0&&<div style={{...card,padding:"12px 16px",marginBottom:12}}>
+            <div style={{fontSize:12,fontWeight:500,color:"var(--color-text-secondary)",marginBottom:8}}>Recent stories</div>
+            <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>{hist.slice().reverse().slice(0,5).map((h,i)=><button key={i} onClick={()=>setSid(h.sid)} style={{...ghostBtn,padding:"4px 10px",fontSize:12}}>{h.sid} {h.passed}P/{h.failed}F</button>)}</div>
+          </div>}
+          <div style={card}><H2>Enter Jira story ID</H2>
+            <div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:12}}>{proj.jiraToken?<Tag c="green">✓ Jira configured</Tag>:<Tag c="amber">No token — AI simulation</Tag>}</div>
+            <div style={{display:"flex",gap:12,alignItems:"flex-end"}}>
+              <div style={{flex:1}}><Lbl>Story ID</Lbl><input style={inp} value={sid} onChange={e=>setSid(e.target.value)} placeholder={proj.jiraProjKey+"-123"} onKeyDown={e=>e.key==="Enter"&&sid&&doFetch()}/></div>
+              <Btn v="primary" onClick={()=>sid&&doFetch()}>Fetch story →</Btn>
+            </div>
+          </div>
+        </div>}
+
+        {!loading&&phase==="mode"&&<div>
+          {sdata&&!sdata.sim&&<div style={{...card,background:"var(--color-background-success)",marginBottom:12}}>
+            <div style={{fontWeight:500,marginBottom:6}}>{sdata.summary}</div>
+            <div style={{display:"flex",gap:8,flexWrap:"wrap",fontSize:13,color:"var(--color-text-secondary)",alignItems:"center"}}>
+              <Tag c="blue">{sdata.type}</Tag><Tag c="amber">{sdata.status}</Tag><span>{sdata.assignee}</span><Tag c={sdata.priority==="High"?"red":"blue"}>{sdata.priority}</Tag>
+              {(sdata.labels||[]).map((l,i)=><Tag key={i}>{l}</Tag>)}
+            </div>
+            {sdata.description&&<div style={{fontSize:13,marginTop:6,lineHeight:1.5}}>{sdata.description.slice(0,200)}</div>}
+          </div>}
+          <div style={card}><div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:16}}>Story: <b>{sid}</b></div><H2>What would you like to do?</H2>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+              {[{icon:"🔍",title:"Story review + GAP analysis",desc:"Analyze ACs for gaps and missing scenarios.",fn:doGap},{icon:"📝",title:"Write test cases",desc:"Generate structured manual test cases.",fn:()=>setPhase("ctype")}].map(o=><button key={o.title} onClick={o.fn} style={{padding:20,borderRadius:12,border:"1px solid var(--color-border-secondary)",background:"var(--color-background-primary)",cursor:"pointer",textAlign:"left"}}>
+                <div style={{fontSize:24,marginBottom:8}}>{o.icon}</div><div style={{fontWeight:500,fontSize:15,marginBottom:4}}>{o.title}</div><div style={{fontSize:13,color:"var(--color-text-secondary)",lineHeight:1.5}}>{o.desc}</div>
+              </button>)}
+            </div>
+          </div>
+        </div>}
+
+        {!loading&&phase==="gap"&&<div>
+          <div style={card}><div style={{display:"flex",gap:8,marginBottom:14,alignItems:"center"}}><Tag c="blue">{sid}</Tag><span style={{fontWeight:500}}>GAP Analysis</span></div><div style={{whiteSpace:"pre-wrap",fontSize:14,lineHeight:1.85}}>{gapText}</div></div>
+          <Confirm icon="📝" title="Would you like to write test cases?" onYes={()=>setPhase("ctype")} onNo={reset} yesLabel="Yes, write test cases" noLabel="Done"/>
+        </div>}
+
+        {!loading&&phase==="ctype"&&<div style={card}>
+          <div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:16}}>Story: <b>{sid}</b></div><H2>Which test case types?</H2>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:20}}>
+            {[{k:"happy",l:"Happy flow",d:"Core successful journeys"},{k:"edge",l:"Edge cases",d:"Boundary values"},{k:"negative",l:"Negative cases",d:"Error handling"},{k:"all",l:"All of the above",d:"Full coverage"}].map(o=><label key={o.k} style={{display:"flex",gap:10,padding:14,borderRadius:10,border:"1px solid "+(ctypes.includes(o.k)?"var(--color-text-info)":"var(--color-border-secondary)"),background:ctypes.includes(o.k)?"var(--color-background-info)":"var(--color-background-primary)",cursor:"pointer"}}>
+              <input type="checkbox" checked={ctypes.includes(o.k)} onChange={()=>setCtypes(p=>p.includes(o.k)?p.filter(x=>x!==o.k):[...p,o.k])} style={{marginTop:2}}/>
+              <div><div style={{fontWeight:500}}>{o.l}</div><div style={{fontSize:12,color:"var(--color-text-secondary)",marginTop:2}}>{o.d}</div></div>
+            </label>)}
+          </div>
+          <Btn v="primary" onClick={()=>ctypes.length>0&&doGen()} disabled={ctypes.length===0}>Generate test cases →</Btn>
+        </div>}
+
+        {!loading&&phase==="ready"&&<div>
+          <Banner icon="✅" title={cases.length+" test cases generated"} sub={"Platform: "+platform+" · "+autoable.length+" automatable · "+manOnly.length+" manual-only"} color="success"/>
+          <div style={card}>{cases.map(c=><div key={c.id} style={{padding:"9px 0",borderBottom:"1px solid var(--color-border-tertiary)",display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}><Tag c="blue">{c.id}</Tag><Tag c={tcol(c.type)}>{c.type}</Tag>{c.automatable===false&&<Tag>manual only</Tag>}<span style={{fontSize:14}}>{c.title}</span></div>)}</div>
+          <Confirm icon="🔍" title="Would you like to review and edit the test cases?" desc="Approve, reject, and modify each case before proceeding." onYes={()=>{setEditOn(true);setPhase("review");}} onNo={()=>{setCases(cs=>cs.map(c=>({...c,status:"approved"})));setPhase("jira");}} yesLabel="Yes, review" noLabel="Approve all"/>
+        </div>}
+
+        {!loading&&phase==="review"&&<div>
+          <div style={{...card,padding:"12px 20px",display:"flex",alignItems:"center",gap:16}}>
+            <div style={{flex:1,fontSize:14}}>Story: <b>{sid}</b> · <Tag c={platform==="mobile"?"amber":"blue"}>{platform}</Tag></div>
+            <div style={{fontSize:13,display:"flex",gap:12}}><span style={{color:"var(--color-text-success)"}}>✓ {cases.filter(c=>c.status==="approved").length}</span><span style={{color:"var(--color-text-danger)"}}>✗ {cases.filter(c=>c.status==="rejected").length}</span><span style={{color:"var(--color-text-tertiary)"}}>⏳ {cases.filter(c=>c.status==="pending").length}</span></div>
+          </div>
+          {cases.map(c=><div key={c.id} style={{...card,borderLeft:"3px solid "+(c.status==="approved"?"var(--color-text-success)":c.status==="rejected"?"var(--color-text-danger)":"var(--color-border-secondary)")}}>
+            <div style={{display:"flex",gap:12}}>
+              <div style={{flex:1}}>
+                <div style={{display:"flex",gap:8,marginBottom:10,flexWrap:"wrap",alignItems:"center"}}><Tag c="blue">{c.id}</Tag><Tag c={tcol(c.type)}>{c.type}</Tag>{c.automatable===false&&<Tag>manual only</Tag>}{c.status==="approved"&&<Tag c="green">✓ approved</Tag>}{c.status==="rejected"&&<span style={{display:"inline-block",padding:"2px 9px",borderRadius:20,fontSize:12,fontWeight:500,background:"var(--color-background-danger)",color:"var(--color-text-danger)"}}>✗ rejected</span>}</div>
+                <Lbl>Title</Lbl><input style={{...inp,marginBottom:8,fontWeight:500}} value={c.title} onChange={e=>editC(c.id,"title",e.target.value)} disabled={!editOn}/>
+                <Lbl>Preconditions</Lbl><input style={{...inp,marginBottom:8}} value={c.preconditions||""} onChange={e=>editC(c.id,"preconditions",e.target.value)} disabled={!editOn}/>
+                <Lbl>Steps</Lbl>{(c.steps||[]).map((step,si)=><div key={si} style={{display:"flex",gap:6,marginBottom:4,alignItems:"center"}}><span style={{fontSize:11,color:"var(--color-text-tertiary)",minWidth:18}}>{si+1}.</span><input style={inp} value={step} onChange={e=>editS(c.id,si,e.target.value)} disabled={!editOn}/></div>)}
+                {editOn&&<button onClick={()=>addStep(c.id)} style={{marginTop:6,padding:"4px 10px",borderRadius:6,border:"1px dashed var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:12,color:"var(--color-text-secondary)"}}>+ Add step</button>}
+                <Lbl>Expected result</Lbl><input style={inp} value={c.expected||""} onChange={e=>editC(c.id,"expected",e.target.value)} disabled={!editOn}/>
+              </div>
+              <div style={{display:"flex",flexDirection:"column",gap:8,minWidth:96}}><Btn v="success" onClick={()=>approve(c.id)}>✓ Approve</Btn><Btn v="danger" onClick={()=>reject(c.id)}>✗ Reject</Btn></div>
+            </div>
+          </div>)}
+          {allDone&&<div style={{display:"flex",gap:10,marginBottom:16}}><Btn v="primary" onClick={()=>setPhase("jira")}>Continue →</Btn><button onClick={()=>exportCSV(cases,sid)} style={ghostBtn}>⬇ Export AIO CSV</button></div>}
+        </div>}
+
+        {!loading&&phase==="jira"&&<div>
+          <div style={{...card,padding:"12px 20px"}}><span style={{fontSize:13,color:"var(--color-text-secondary)"}}>Story <b>{sid}</b> · <b>{approved.length}</b> approved · <Tag c={platform==="mobile"?"amber":"blue"}>{platform}</Tag></span></div>
+          <Confirm icon="🧪" title="Add approved cases to Jira AIO Tests?" desc={approved.length+" cases → sub-task linked to "+sid+". AIO CSV also downloaded."} onYes={doJira} onNo={()=>setPhase("jiraDone")} yesLabel="Yes, create sub-task + export" noLabel="Skip"/>
+        </div>}
+
+        {!loading&&phase==="jiraDone"&&<div>
+          {jKey&&<Banner icon="✅" title="Jira sub-task created" sub={"Sub-task "+jKey+" linked to "+sid+" · CSV downloaded"} color="success"/>}
+          <Confirm icon="🤖" title="Generate automation scripts?" desc={fwName(platform)+" for "+autoable.length+" automatable cases."+(manOnly.length>0?" "+manOnly.length+" manual-only cases included as comments.":"")} onYes={doScripts} onNo={reset} yesLabel={"Yes, generate "+fwName(platform)} noLabel="Done"/>
+        </div>}
+
+        {!loading&&phase==="autoReady"&&<div>
+          {fixed&&<Banner icon="🔧" title="Scripts fixed" sub="Failures addressed." color="info"/>}
+          <div style={card}>
+            <div style={{display:"flex",justifyContent:"space-between",marginBottom:12,alignItems:"center"}}><div style={{fontWeight:500}}>Automation scripts</div><Tag c={platform==="mobile"?"amber":"blue"}>{fwName(platform)}</Tag></div>
+            {platform==="mobile"?<Tabs tabs={[{id:"ios",label:"iOS (Appium)"},{id:"android",label:"Android (Appium)"}]} active={tab} onChange={setTab}/>:<Tabs tabs={[{id:"web",label:"Web automation script"}]} active={tab} onChange={setTab}/>}
+            <pre style={{background:"var(--color-background-tertiary)",borderRadius:8,padding:16,fontSize:12,fontFamily:"monospace",lineHeight:1.6,overflow:"auto",maxHeight:360,whiteSpace:"pre-wrap",wordBreak:"break-all",margin:0,marginBottom:12}}>{curScript||"No script yet."}</pre>
+            <div style={{display:"flex",gap:8,flexWrap:"wrap"}}><button onClick={()=>navigator.clipboard?.writeText(curScript)} style={ghostBtn}>📋 Copy</button><button onClick={()=>dlFile(curScript,sid+"_"+tab+".js")} style={ghostBtn}>⬇ Download</button></div>
+          </div>
+          <Confirm icon="💻" title="Export VS Code project scaffold?" desc={"Complete project — config, test files, README — ready to open in VS Code."} onYes={()=>setPhase("vscode")} onNo={()=>setPhase("runAsk")} yesLabel="Yes, export project" noLabel="Skip to execution"/>
+        </div>}
+
+        {!loading&&phase==="vscode"&&<div>
+          <div style={card}><H2>VS Code project files</H2>
+            <div style={{background:"var(--color-background-tertiary)",borderRadius:8,padding:12,marginBottom:16}}>
+              {projFiles&&Object.keys(projFiles).map(f=><div key={f} style={{display:"flex",alignItems:"center",padding:"6px 0",borderBottom:"1px solid var(--color-border-tertiary)"}}>
+                <span style={{fontSize:13,fontFamily:"monospace",color:"var(--color-text-secondary)",flex:1}}>{f}</span>
+                <button onClick={()=>dlFile(projFiles[f],f.split("/").pop())} style={{...ghostBtn,padding:"2px 8px",fontSize:11}}>↓</button>
+              </div>)}
+            </div>
+            <div style={{display:"flex",gap:10}}>
+              <Btn v="primary" onClick={()=>{ const all=Object.entries(projFiles||{}).map(([p,c])=>"=".repeat(60)+"\nFILE: "+p+"\n"+"=".repeat(60)+"\n"+c).join("\n\n"); dlFile(all,(platform==="mobile"?"appium":"web-tests")+"-"+sid+"-project.txt"); setPhase("vscodeDone"); }}>⬇ Download all files</Btn>
+              <button onClick={()=>setPhase("runAsk")} style={ghostBtn}>Skip →</button>
+            </div>
+          </div>
+        </div>}
+
+        {!loading&&phase==="vscodeDone"&&<div>
+          <Banner icon="💻" title="Project downloaded" sub={"Open the .txt file, copy each section into VS Code, then run npm install and npm test."} color="info"/>
+          <Confirm icon="▶️" title="Run scripts in simulated execution?" desc={"Live terminal for "+autoable.length+" automatable tests."} onYes={doRun} onNo={reset} yesLabel="Yes, run" noLabel="Done"/>
+        </div>}
+
+        {!loading&&phase==="runAsk"&&<Confirm icon="▶️" title="Start test execution?" desc={"Live terminal output for "+autoable.length+" automatable scripts."} onYes={doRun} onNo={reset} yesLabel="Yes, run scripts" noLabel="Done"/>}
+        {phase==="running"&&<div style={card}><div style={{fontWeight:500,marginBottom:12}}>▶ Running tests…</div><Terminal lines={execLines}/></div>}
+
+        {phase==="result"&&result&&<div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12,marginBottom:16}}>
+            {[{l:"Total",v:result.total,c:"info"},{l:"Passed",v:result.pass.length,c:"success"},{l:"Failed",v:result.fail.length,c:result.fail.length>0?"danger":"success"}].map(x=><div key={x.l} style={{...card,marginBottom:0,textAlign:"center",padding:20}}><div style={{fontSize:30,fontWeight:500,color:`var(--color-text-${x.c})`}}>{x.v}</div><div style={{fontSize:13,color:"var(--color-text-secondary)",marginTop:2}}>{x.l}</div></div>)}
+          </div>
+          <div style={card}><div style={{fontWeight:500,marginBottom:10}}>Execution log</div><Terminal lines={execLines}/></div>
+          {result.fail.length>0&&<div style={card}>
+            <div style={{fontWeight:500,marginBottom:10}}>Handle failures</div>
+            <div style={{display:"flex",gap:10,flexWrap:"wrap",alignItems:"center"}}>
+              <Btn v="primary" onClick={doFix}>🔧 Fix scripts</Btn>
+              {!bugDone&&!showBugForm&&<Btn v="danger" onClick={()=>setShowBugForm(true)}>🐛 File Jira bug</Btn>}
+              {bugDone&&<Tag c="green">✓ {bugDone.bid}{bugDone.jKey?" → "+bugDone.jKey:""} filed</Tag>}
+            </div>
+            {showBugForm&&<div style={{marginTop:16,padding:16,borderRadius:10,border:"1px solid var(--color-border-secondary)",background:"var(--color-background-primary)"}}>
+              <H2>File bug report</H2>
+              <Lbl>Summary</Lbl><input style={{...inp,marginBottom:10}} value={bf.summary} onChange={e=>setBf(p=>({...p,summary:e.target.value}))} placeholder={"Failure in "+sid}/>
+              <Lbl>Severity</Lbl><select style={{...sel,marginBottom:10}} value={bf.sev} onChange={e=>setBf(p=>({...p,sev:e.target.value}))}>{["Critical","High","Medium","Low"].map(s=><option key={s}>{s}</option>)}</select>
+              <Lbl>Description</Lbl><textarea style={{...ta,marginBottom:12}} rows={3} value={bf.desc} onChange={e=>setBf(p=>({...p,desc:e.target.value}))} placeholder="Steps to reproduce…"/>
+              <div style={{display:"flex",gap:8}}><Btn v="danger" onClick={doFileBug}>Submit → Jira</Btn><button onClick={()=>setShowBugForm(false)} style={ghostBtn}>Cancel</button></div>
+            </div>}
+          </div>}
+          <div style={{display:"flex",gap:10,marginTop:4}}><button onClick={reset} style={ghostBtn}>↩ New story</button><button onClick={()=>exportCSV(cases,sid)} style={ghostBtn}>⬇ Re-export CSV</button></div>
+        </div>}
+      </div>
+
+      {chat&&phase!=="input"&&<div style={{width:290,flexShrink:0,display:"flex",flexDirection:"column",height:"calc(100vh - 120px)",position:"sticky",top:0}}>
+        <div style={{...card,flex:1,display:"flex",flexDirection:"column",overflow:"hidden",padding:16}}>
+          <div style={{fontWeight:500,fontSize:14,marginBottom:12,display:"flex",alignItems:"center",gap:8}}>🤖 QA Assistant <Tag c="blue">{sid}</Tag></div>
+          <div style={{flex:1,overflow:"auto"}}><AIChat proj={proj} sid={sid} sdata={sdata}/></div>
+        </div>
+      </div>}
+    </div>
+  </div>;
+}
+
+/* ─── Login ───────────────────────────────────────────────────────────────── */
+function LoginPage({onLogin}) {
+  const [mode,setMode]=useState("admin"); const [email,setEmail]=useState(""); const [pass,setPass]=useState(""); const [err,setErr]=useState("");
+  const login=()=>{
+    if(mode==="admin"){if(email==="admin"&&pass==="admin"){onLogin({role:"admin",id:"admin"});return;}setErr("Use admin / admin");return;}
+    const m=DB.members.find(x=>x.email===email&&x.password===pass); if(m){onLogin({role:"member",member:m,id:m.id});return;} setErr("Invalid credentials");
+  };
+  return <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"var(--color-background-tertiary)"}}>
+    <div style={{...card,width:380,padding:36}}>
+      <div style={{fontSize:22,fontWeight:500,marginBottom:2}}>QA AI Platform</div>
+      <div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:24}}>AI-powered QA workflow management</div>
+      <div style={{display:"flex",gap:8,marginBottom:20}}>
+        {["admin","member"].map(r=><button key={r} onClick={()=>{setMode(r);setErr("");}} style={{flex:1,padding:"8px 0",borderRadius:8,border:r===mode?"none":"1px solid var(--color-border-secondary)",background:r===mode?"var(--color-text-info)":"transparent",color:r===mode?"#fff":"var(--color-text-secondary)",cursor:"pointer",fontSize:14,fontWeight:500}}>{r==="admin"?"QA Lead":"Team Member"}</button>)}
+      </div>
+      <Lbl>{mode==="admin"?"Username":"Email"}</Lbl>
+      <input style={{...inp,marginBottom:12}} value={email} onChange={e=>setEmail(e.target.value)} placeholder={mode==="admin"?"admin":"jane@company.com"}/>
+      <Lbl>Password</Lbl>
+      <input type="password" style={{...inp,marginBottom:16}} value={pass} onChange={e=>setPass(e.target.value)} onKeyDown={e=>e.key==="Enter"&&login()}/>
+      {err&&<div style={{color:"var(--color-text-danger)",fontSize:13,marginBottom:12}}>{err}</div>}
+      <button onClick={login} style={{width:"100%",padding:"8px 0",borderRadius:8,border:"none",background:"var(--color-text-info)",color:"#fff",cursor:"pointer",fontSize:14,fontWeight:500}}>Sign in</button>
+      {mode==="admin"&&<div style={{fontSize:12,color:"var(--color-text-tertiary)",marginTop:10,textAlign:"center"}}>Demo: admin / admin</div>}
+    </div>
+  </div>;
+}
+
+/* ─── Root App ────────────────────────────────────────────────────────────── */
+function App() {
+  const [user,setUser]=useState(null); const [page,setPage]=useState("dashboard"); const [,tick]=useState(0);
+  if(!user) return <LoginPage onLogin={u=>{setUser(u);setPage(u.role==="admin"?"dashboard":"workspace");}}/>;
+  const adminNav=[{sec:"Overview",items:[{id:"dashboard",label:"Dashboard",icon:"📊"}]},{sec:"Manage",items:[{id:"members",label:"Members",icon:"👥"},{id:"projects",label:"Projects",icon:"📁"},{id:"assign",label:"Assignments",icon:"🔗"}]},{sec:"Reports",items:[{id:"bugs",label:"Bug tracker",icon:"🐛"}]}];
+  const memberNav=[{sec:"Work",items:[{id:"workspace",label:"Workspace",icon:"🖥"}]}];
+  const nav=user.role==="admin"?adminNav:memberNav;
+  return <div style={{fontFamily:"-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif",color:"var(--color-text-primary)",minHeight:"100vh",background:"var(--color-background-tertiary)",display:"flex"}}>
+    <div style={{width:220,minHeight:"100vh",background:"var(--color-background-secondary)",borderRight:"1px solid var(--color-border-tertiary)",display:"flex",flexDirection:"column",flexShrink:0}}>
+      <div style={{padding:"16px 20px 12px",borderBottom:"1px solid var(--color-border-tertiary)"}}>
+        <div style={{fontWeight:500,fontSize:15}}>QA AI Platform</div>
+        <div style={{fontSize:11,color:"var(--color-text-tertiary)",marginTop:2}}>{user.role==="admin"?"QA Lead · Admin":(user.member?.name+" · "+user.member?.role)}</div>
+      </div>
+      <div style={{flex:1,paddingTop:6,overflowY:"auto"}}>
+        {nav.map(g=><div key={g.sec}>
+          <div style={{padding:"14px 20px 4px",fontSize:11,fontWeight:500,color:"var(--color-text-tertiary)",textTransform:"uppercase",letterSpacing:"0.07em"}}>{g.sec}</div>
+          {g.items.map(n=>{const ob=n.id==="bugs"?DB.bugs.filter(b=>b.status==="Open").length:0;
+            return <div key={n.id} onClick={()=>{setPage(n.id);tick(x=>x+1);}} style={{padding:"9px 20px",cursor:"pointer",fontSize:14,fontWeight:page===n.id?500:400,background:page===n.id?"var(--color-background-info)":"transparent",color:page===n.id?"var(--color-text-info)":"var(--color-text-secondary)",borderLeft:page===n.id?"3px solid var(--color-text-info)":"3px solid transparent",display:"flex",alignItems:"center",gap:8}}>
+              <span>{n.icon}</span>{n.label}{ob>0&&<span style={{marginLeft:"auto",background:"var(--color-text-danger)",color:"#fff",borderRadius:20,padding:"0 6px",fontSize:11}}>{ob}</span>}
+            </div>;})}
+        </div>)}
+      </div>
+      <div style={{padding:"12px 20px",borderTop:"1px solid var(--color-border-tertiary)"}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
+          <div><div style={{fontSize:13,fontWeight:500}}>{user.role==="admin"?"Admin":user.member?.name}</div><div style={{fontSize:11,color:"var(--color-text-tertiary)"}}>{user.role==="admin"?"QA Lead":user.member?.role}</div></div>
+          <NotifBell userId={user.role==="admin"?"admin":user.id}/>
+        </div>
+        <button onClick={()=>setUser(null)} style={{width:"100%",padding:"8px 0",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:13,color:"var(--color-text-secondary)"}}>Sign out</button>
+      </div>
+    </div>
+    <div style={{flex:1,padding:28,overflow:"auto"}}>
+      {user.role==="admin"&&page==="dashboard"&&<DashboardPage/>}
+      {user.role==="admin"&&page==="members"&&<MembersPage/>}
+      {user.role==="admin"&&page==="projects"&&<ProjectsPage/>}
+      {user.role==="admin"&&page==="assign"&&<AssignmentsPage/>}
+      {user.role==="admin"&&page==="bugs"&&<BugsPage/>}
+      {user.role==="member"&&page==="workspace"&&<Workspace member={user.member}/>}
+    </div>
+  </div>;
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
