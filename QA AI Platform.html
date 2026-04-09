@@ -41,23 +41,51 @@ const { useState, useRef, useEffect } = React;
 
 /* ─── DB ─────────────────────────────────────────────────────────────────── */
 const DB = { members:[], projects:[], assignments:[], sessions:[], bugs:[], notifs:[] };
+const STORAGE_KEY = "qa_platform_db";
+function loadDB() {
+  try { const s=localStorage.getItem(STORAGE_KEY); if(s){ const p=JSON.parse(s); Object.keys(p).forEach(k=>{ if(Array.isArray(p[k])) DB[k]=p[k]; }); } } catch(e){}
+}
+function saveDB() {
+  try { localStorage.setItem(STORAGE_KEY,JSON.stringify(DB)); } catch(e){}
+}
+loadDB();
 const uid = () => Math.random().toString(36).slice(2,8);
 const tod = () => new Date().toLocaleDateString();
 const ts  = () => new Date().toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"});
 const platDetect = t => /mobile|ios|android|\bapp\b|swipe/i.test(t) ? "mobile" : "web";
 const tcol = t => t==="happy"?"green":t==="edge"?"amber":"blue";
 const fwName = p => p==="mobile" ? "Appium" : "Playwright";
-const pushNotif = (to,msg) => DB.notifs.push({id:uid(),to,msg,read:false,ts:ts()});
+const pushNotif = (to,msg) => { DB.notifs.push({id:uid(),to,msg,read:false,ts:ts()}); saveDB(); };
 
 /* ─── Claude API ─────────────────────────────────────────────────────────── */
 async function callAI(messages, sys="", max=4000, key="") {
-  const ANTHROPIC_KEY = key || window.ANTHROPIC_API_KEY || prompt("Enter your Anthropic API key (stored in memory only):");
+  // 1 — Try local Claude Code proxy (node server.js)
+  try {
+    const r = await fetch("http://localhost:3456/api/ai", {
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({ messages, system:sys })
+    });
+    if (r.ok) {
+      const d = await r.json();
+      if (d.error) throw new Error(d.error);
+      return d.text || "";
+    }
+  } catch(proxyErr) {
+    if (!proxyErr.message.includes("fetch")) {
+      throw proxyErr; // real error from proxy, surface it
+    }
+    // proxy not running — fall through to direct API
+  }
+
+  // 2 — Fall back to direct Anthropic API key
+  const ANTHROPIC_KEY = key || window.ANTHROPIC_API_KEY || prompt("Enter your Anthropic API key:\n(Or run server.js to use Claude Code instead)");
   if (!ANTHROPIC_KEY) throw new Error("No API key provided");
   window.ANTHROPIC_API_KEY = ANTHROPIC_KEY;
   const r = await fetch("https://api.anthropic.com/v1/messages", {
     method:"POST",
     headers:{"Content-Type":"application/json","x-api-key":ANTHROPIC_KEY,"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},
-    body: JSON.stringify({ model:"claude-sonnet-4-20250514", max_tokens:max, system:sys, messages })
+    body: JSON.stringify({ model:"claude-sonnet-4-6", max_tokens:max, system:sys, messages })
   });
   const d = await r.json();
   if (d.error) throw new Error(d.error.message);
@@ -68,11 +96,25 @@ async function callAI(messages, sys="", max=4000, key="") {
 async function callJira(proj, method, path, body=null) {
   if (!proj?.jiraUrl||!proj?.jiraToken||!proj?.jiraEmail) throw new Error("Jira not configured");
   const auth = btoa(proj.jiraEmail+":"+proj.jiraToken);
-  const opts = { method, headers:{"Authorization":"Basic "+auth,"Content-Type":"application/json","Accept":"application/json"} };
-  if (body) opts.body = JSON.stringify(body);
-  const r = await fetch(proj.jiraUrl+"/rest/api/3"+path, opts);
-  if (!r.ok) { const t=await r.text(); throw new Error("Jira "+r.status+": "+t.slice(0,100)); }
-  return r.json();
+  // Route through local proxy to avoid CORS
+  try {
+    const r = await fetch("http://localhost:3456/api/jira", {
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({ jiraUrl:proj.jiraUrl, path, method, auth, body })
+    });
+    const d = await r.json();
+    if (d.error) throw new Error(d.error);
+    return d;
+  } catch(proxyErr) {
+    if (!proxyErr.message.includes("fetch")) throw proxyErr;
+    // Proxy not running — try direct (may fail due to CORS)
+    const opts = { method, headers:{"Authorization":"Basic "+auth,"Content-Type":"application/json","Accept":"application/json"} };
+    if (body) opts.body = JSON.stringify(body);
+    const r = await fetch(proj.jiraUrl+"/rest/api/3"+path, opts);
+    if (!r.ok) { const t=await r.text(); throw new Error("Jira "+r.status+": "+t.slice(0,100)); }
+    return r.json();
+  }
 }
 
 /* ─── File helpers ───────────────────────────────────────────────────────── */
@@ -203,7 +245,7 @@ function AIChat({proj,sid,sdata}) {
     const hist=msgs.map(m=>({role:m.role==="assistant"?"assistant":"user",content:m.text}));
     try {
       const sys=`QA expert. Project:${proj?.name}, Key:${proj?.jiraProjKey}${sid?", Story:"+sid:""}. Be concise and helpful.`;
-      const r=await callAI([...hist,{role:"user",content:u}],sys,2000,proj?.anthropicKey||"");
+      const r=await callAI([...hist,{role:"user",content:u}],sys,2000,"");
       setMsgs(m=>[...m,{role:"assistant",text:r}]);
     } catch(e){setMsgs(m=>[...m,{role:"assistant",text:"Error: "+e.message}]);}
     setBusy(false);
@@ -227,8 +269,8 @@ function AIChat({proj,sid,sdata}) {
 function MembersPage() {
   const [list,setList]=useState([...DB.members]);
   const [f,setF]=useState({name:"",email:"",password:"",role:"QA Engineer"});
-  const add=()=>{ if(!f.name||!f.email||!f.password) return; const m={id:uid(),...f}; DB.members.push(m); pushNotif(m.id,"Welcome to QA AI Platform!"); setList([...DB.members]); setF({name:"",email:"",password:"",role:"QA Engineer"}); };
-  const del=id=>{ DB.members=DB.members.filter(m=>m.id!==id); DB.assignments=DB.assignments.filter(a=>a.memberId!==id); setList([...DB.members]); };
+  const add=()=>{ if(!f.name||!f.email||!f.password) return; const m={id:uid(),...f}; DB.members.push(m); pushNotif(m.id,"Welcome to QA AI Platform!"); saveDB(); setList([...DB.members]); setF({name:"",email:"",password:"",role:"QA Engineer"}); };
+  const del=id=>{ DB.members=DB.members.filter(m=>m.id!==id); DB.assignments=DB.assignments.filter(a=>a.memberId!==id); saveDB(); setList([...DB.members]); };
   const th={textAlign:"left",padding:"8px 12px",borderBottom:"1px solid var(--color-border-tertiary)",fontSize:12,fontWeight:500,color:"var(--color-text-secondary)"};
   const td={padding:"10px 12px",borderBottom:"1px solid var(--color-border-tertiary)"};
   return <div>
@@ -255,11 +297,11 @@ function MembersPage() {
 
 function ProjectsPage() {
   const [list,setList]=useState([...DB.projects]);
-  const [f,setF]=useState({name:"",jiraUrl:"",jiraProjKey:"",jiraToken:"",jiraEmail:"",platform:"web",anthropicKey:""});
+  const [f,setF]=useState({name:"",jiraUrl:"",jiraProjKey:"",jiraToken:"",jiraEmail:"",platform:"web"});
   const [editing,setEditing]=useState(null); const [tm,setTm]=useState({});
-  const save=()=>{ if(!f.name) return; if(editing){Object.assign(DB.projects.find(x=>x.id===editing),f);setEditing(null);}else DB.projects.push({id:uid(),...f}); setList([...DB.projects]); setF({name:"",jiraUrl:"",jiraProjKey:"",jiraToken:"",jiraEmail:"",platform:"web",anthropicKey:""}); };
-  const edit=p=>{ setEditing(p.id); setF({name:p.name,jiraUrl:p.jiraUrl||"",jiraProjKey:p.jiraProjKey||"",jiraToken:p.jiraToken||"",jiraEmail:p.jiraEmail||"",platform:p.platform||"web",anthropicKey:p.anthropicKey||""}); };
-  const del=id=>{ DB.projects=DB.projects.filter(p=>p.id!==id); DB.assignments=DB.assignments.filter(a=>a.projectId!==id); setList([...DB.projects]); };
+  const save=()=>{ if(!f.name) return; if(editing){Object.assign(DB.projects.find(x=>x.id===editing),f);setEditing(null);}else DB.projects.push({id:uid(),...f}); saveDB(); setList([...DB.projects]); setF({name:"",jiraUrl:"",jiraProjKey:"",jiraToken:"",jiraEmail:"",platform:"web"}); };
+  const edit=p=>{ setEditing(p.id); setF({name:p.name,jiraUrl:p.jiraUrl||"",jiraProjKey:p.jiraProjKey||"",jiraToken:p.jiraToken||"",jiraEmail:p.jiraEmail||"",platform:p.platform||"web"}); };
+  const del=id=>{ DB.projects=DB.projects.filter(p=>p.id!==id); DB.assignments=DB.assignments.filter(a=>a.projectId!==id); saveDB(); setList([...DB.projects]); };
   const testConn=async p=>{ setTm(m=>({...m,[p.id]:"Testing…"})); try{ const d=await callJira(p,"GET","/project/"+p.jiraProjKey); setTm(m=>({...m,[p.id]:"✓ "+d.name})); }catch(e){ setTm(m=>({...m,[p.id]:"✗ "+e.message.slice(0,60)})); } };
   const th={textAlign:"left",padding:"8px 12px",borderBottom:"1px solid var(--color-border-tertiary)",fontSize:12,fontWeight:500,color:"var(--color-text-secondary)"};
   const td={padding:"10px 12px",borderBottom:"1px solid var(--color-border-tertiary)"};
@@ -273,7 +315,6 @@ function ProjectsPage() {
         <div><Lbl>Jira URL</Lbl><input style={inp} value={f.jiraUrl} onChange={e=>setF(p=>({...p,jiraUrl:e.target.value}))} placeholder="https://yourorg.atlassian.net"/></div>
         <div><Lbl>Jira email</Lbl><input style={inp} value={f.jiraEmail} onChange={e=>setF(p=>({...p,jiraEmail:e.target.value}))} placeholder="you@co.com"/></div>
         <div><Lbl>API token</Lbl><input type="password" style={inp} value={f.jiraToken} onChange={e=>setF(p=>({...p,jiraToken:e.target.value}))} placeholder="••••••"/></div>
-        <div style={{gridColumn:"1/-1"}}><Lbl>Anthropic API Key (for AI features)</Lbl><input type="password" style={inp} value={f.anthropicKey} onChange={e=>setF(p=>({...p,anthropicKey:e.target.value}))} placeholder="sk-ant-••••••"/>{f.anthropicKey&&<div style={{fontSize:11,color:"var(--color-text-success)",marginTop:4}}>✓ Key set — team members won't be prompted</div>}</div>
       </div>
       <div style={{display:"flex",gap:8}}><Btn v="primary" onClick={save}>{editing?"Save":"Add"}</Btn>{editing&&<button onClick={()=>setEditing(null)} style={{padding:"8px 18px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:14,color:"var(--color-text-secondary)"}}>Cancel</button>}</div>
     </div>
@@ -292,8 +333,8 @@ function ProjectsPage() {
 function AssignmentsPage() {
   const [list,setList]=useState([...DB.assignments]);
   const [mId,setMId]=useState(""); const [pId,setPId]=useState("");
-  const assign=()=>{ if(!mId||!pId) return; DB.assignments=DB.assignments.filter(a=>a.memberId!==mId); DB.assignments.push({memberId:mId,projectId:pId}); const m=DB.members.find(x=>x.id===mId); const p=DB.projects.find(x=>x.id===pId); if(m&&p) pushNotif(mId,"Assigned to: "+p.name); setList([...DB.assignments]); setMId(""); setPId(""); };
-  const del=id=>{ DB.assignments=DB.assignments.filter(a=>a.memberId!==id); setList([...DB.assignments]); };
+  const assign=()=>{ if(!mId||!pId) return; DB.assignments=DB.assignments.filter(a=>a.memberId!==mId); DB.assignments.push({memberId:mId,projectId:pId}); const m=DB.members.find(x=>x.id===mId); const p=DB.projects.find(x=>x.id===pId); if(m&&p) pushNotif(mId,"Assigned to: "+p.name); saveDB(); setList([...DB.assignments]); setMId(""); setPId(""); };
+  const del=id=>{ DB.assignments=DB.assignments.filter(a=>a.memberId!==id); saveDB(); setList([...DB.assignments]); };
   const th={textAlign:"left",padding:"8px 12px",borderBottom:"1px solid var(--color-border-tertiary)",fontSize:12,fontWeight:500,color:"var(--color-text-secondary)"};
   const td={padding:"10px 12px",borderBottom:"1px solid var(--color-border-tertiary)"};
   return <div>
@@ -348,7 +389,7 @@ function DashboardPage() {
 function BugsPage() {
   const [bugs,setBugs]=useState([...DB.bugs]); const [flt,setFlt]=useState("All");
   const shown=flt==="All"?bugs:bugs.filter(b=>b.sev===flt);
-  const upd=(bid,s)=>{ const b=DB.bugs.find(x=>x.bid===bid); if(b){b.status=s;setBugs([...DB.bugs]);} };
+  const upd=(bid,s)=>{ const b=DB.bugs.find(x=>x.bid===bid); if(b){b.status=s;saveDB();setBugs([...DB.bugs]);} };
   const th={textAlign:"left",padding:"8px 12px",borderBottom:"1px solid var(--color-border-tertiary)",fontSize:12,fontWeight:500,color:"var(--color-text-secondary)"};
   const td={padding:"10px 12px",borderBottom:"1px solid var(--color-border-tertiary)"};
   return <div>
@@ -409,7 +450,7 @@ function Workspace({member}) {
   const doGap=async()=>{
     setLoading(true); setLmsg("Running GAP analysis…");
     const ctx=sdata&&!sdata.sim?`Story:"${sdata.summary}". ${sdata.description?.slice(0,400)||""}.`:"Simulate a realistic feature story.";
-    try { const r=await callAI([{role:"user",content:`Story Review and GAP Analysis for "${sid}" (${proj.jiraProjKey}).\n${ctx}\n\n## Story Summary\n## Acceptance Criteria Review (✓ Clear / ⚠ Needs clarification / ✗ Missing)\n## GAP Analysis\n## Risk Areas\n## Recommendations`}],SYS,3500,proj.anthropicKey||""); setGapText(r); setPhase("gap"); } catch(e){alert(e.message);}
+    try { const r=await callAI([{role:"user",content:`Story Review and GAP Analysis for "${sid}" (${proj.jiraProjKey}).\n${ctx}\n\n## Story Summary\n## Acceptance Criteria Review (✓ Clear / ⚠ Needs clarification / ✗ Missing)\n## GAP Analysis\n## Risk Areas\n## Recommendations`}],SYS,3500,""); setGapText(r); setPhase("gap"); } catch(e){alert(e.message);}
     setLoading(false);
   };
 
@@ -418,7 +459,7 @@ function Workspace({member}) {
     const tl=ctypes.includes("all")?"happy flow, edge cases, and negative cases":ctypes.join(", ");
     const ctx=sdata&&!sdata.sim?`Story:"${sdata.summary}". ${sdata.description?.slice(0,300)||""}`:"";
     try {
-      const r=await callAI([{role:"user",content:`Generate manual test cases for "${sid}" (${proj.jiraProjKey}). Types:${tl}. Platform:${platform}. ${ctx}\nReturn ONLY a JSON array:\n[{"id":"TC-001","title":"...","type":"happy|edge|negative","platform":"web|mobile","preconditions":"...","steps":["Step 1..."],"expected":"...","automatable":true}]\n8-12 cases. automatable:false for offline/camera/biometrics/hardware only.`}],SYS,5000,proj.anthropicKey||"");
+      const r=await callAI([{role:"user",content:`Generate manual test cases for "${sid}" (${proj.jiraProjKey}). Types:${tl}. Platform:${platform}. ${ctx}\nReturn ONLY a JSON array:\n[{"id":"TC-001","title":"...","type":"happy|edge|negative","platform":"web|mobile","preconditions":"...","steps":["Step 1..."],"expected":"...","automatable":true}]\n8-12 cases. automatable:false for offline/camera/biometrics/hardware only.`}],SYS,5000,"");
       const parsed=JSON.parse(r.replace(/```json|```/g,"").trim()); setCases(parsed.map(c=>({...c,status:"pending"})));
     } catch { setCases([{id:"TC-001",title:"Submit with valid data",type:"happy",platform,preconditions:"User is logged in",steps:["Fill all required fields","Click Submit"],expected:"Success shown",status:"pending",automatable:true},{id:"TC-002",title:"Submit empty fields",type:"negative",platform,preconditions:"On form page",steps:["Leave fields empty","Click Submit"],expected:"Validation errors shown",status:"pending",automatable:true},{id:"TC-003",title:"Max character input",type:"edge",platform,preconditions:"On form page",steps:["Enter 255 chars in text field","Click Submit"],expected:"Accepted or clear error shown",status:"pending",automatable:true}]); }
     setPhase("ready"); setLoading(false);
@@ -431,13 +472,13 @@ function Workspace({member}) {
     try {
       if(platform==="mobile"){
         const [iosR,andR]=await Promise.all([
-          callAI([{role:"user",content:`iOS Appium WebdriverIO JS test file for ${sid}.\nCases:\n${cl}\nManual:\n${mc}\nUse describe/it blocks, iOS capabilities, accessibility id selectors, beforeEach/afterEach. CommonJS only.`}],SYS,5000,proj.anthropicKey||""),
-          callAI([{role:"user",content:`Android Appium WebdriverIO JS test file for ${sid}.\nCases:\n${cl}\nManual:\n${mc}\nUse describe/it blocks, Android capabilities, android selectors, beforeEach/afterEach. CommonJS only.`}],SYS,5000,proj.anthropicKey||"")
+          callAI([{role:"user",content:`iOS Appium WebdriverIO JS test file for ${sid}.\nCases:\n${cl}\nManual:\n${mc}\nUse describe/it blocks, iOS capabilities, accessibility id selectors, beforeEach/afterEach. CommonJS only.`}],SYS,5000,""),
+          callAI([{role:"user",content:`Android Appium WebdriverIO JS test file for ${sid}.\nCases:\n${cl}\nManual:\n${mc}\nUse describe/it blocks, Android capabilities, android selectors, beforeEach/afterEach. CommonJS only.`}],SYS,5000,"")
         ]);
         setScripts(s=>({...s,ios:iosR,android:andR})); setTab("ios");
         setProjFiles({"wdio.ios.js":`exports.config={specs:["./tests/ios/*.js"],capabilities:[{platformName:"iOS","appium:automationName":"XCUITest"}],framework:"mocha",reporters:["spec"]};`,"wdio.android.js":`exports.config={specs:["./tests/android/*.js"],capabilities:[{platformName:"Android","appium:automationName":"UiAutomator2"}],framework:"mocha",reporters:["spec"]};`,[`tests/ios/${sid}.spec.js`]:iosR,[`tests/android/${sid}.spec.js`]:andR,"README.md":`# Appium Tests — ${sid}\n\nnpm install && npm run test:ios`});
       } else {
-        const r=await callAI([{role:"user",content:`Web UI automation test file for ${sid}.\nCases:\n${cl}\nManual:\n${mc}\nUse describe/test blocks, Page Object Model, getByRole/getByLabel/getByTestId locators, beforeEach/afterEach. CommonJS only.`}],SYS,5000,proj.anthropicKey||"");
+        const r=await callAI([{role:"user",content:`Web UI automation test file for ${sid}.\nCases:\n${cl}\nManual:\n${mc}\nUse describe/test blocks, Page Object Model, getByRole/getByLabel/getByTestId locators, beforeEach/afterEach. CommonJS only.`}],SYS,5000,"");
         setScripts(s=>({...s,web:r})); setTab("web");
         setProjFiles({"test.config.js":`module.exports={testDir:"./tests",use:{baseURL:process.env.BASE_URL||"http://localhost:3000"}};`,[`tests/${sid}.spec.js`]:r,"README.md":`# Web Tests — ${sid}\n\nnpm install && npm test`});
       }
@@ -451,7 +492,7 @@ function Workspace({member}) {
     const failed=result?.failedCases||[];
     const cur=platform==="mobile"?(tab==="ios"?scripts.ios:scripts.android):scripts.web;
     try {
-      const r=await callAI([{role:"user",content:`Fix failing tests for ${sid}.\nFailed:\n${failed.map(c=>`${c.id}: ${c.title}\nError: TimeoutError`).join("\n\n")}\nScript:\n${cur}\nFix locators, add waits, fix assertions. Return complete fixed script only.`}],SYS,5000,proj.anthropicKey||"");
+      const r=await callAI([{role:"user",content:`Fix failing tests for ${sid}.\nFailed:\n${failed.map(c=>`${c.id}: ${c.title}\nError: TimeoutError`).join("\n\n")}\nScript:\n${cur}\nFix locators, add waits, fix assertions. Return complete fixed script only.`}],SYS,5000,"");
       if(platform==="mobile"){if(tab==="ios")setScripts(s=>({...s,ios:r}));else setScripts(s=>({...s,android:r}));}else setScripts(s=>({...s,web:r}));
       setFixed(true); setPhase("autoReady");
     } catch(e){alert(e.message);}
@@ -472,7 +513,7 @@ function Workspace({member}) {
     let jRef=null;
     try { const res=await callJira(proj,"POST","/issue",{fields:{project:{key:proj.jiraProjKey},summary:bf.summary||"Failure in "+sid,description:{type:"doc",version:1,content:[{type:"paragraph",content:[{type:"text",text:bf.desc||"See execution log."}]}]},issuetype:{name:"Bug"},priority:{name:bf.sev}}}); jRef=res.key; } catch {}
     const bug={bid:"BUG-"+uid().toUpperCase(),sid,summary:bf.summary||"Failure in "+sid,sev:bf.sev,who:member.name,jKey:jRef,status:"Open"};
-    DB.bugs.push(bug); pushNotif("admin","🐛 "+bug.bid+(jRef?" ("+jRef+")":"")+" filed for "+sid);
+    DB.bugs.push(bug); saveDB(); pushNotif("admin","🐛 "+bug.bid+(jRef?" ("+jRef+")":"")+" filed for "+sid);
     setBugDone(bug); setShowBugForm(false); setLoading(false);
   };
 
@@ -491,7 +532,7 @@ function Workspace({member}) {
     }
     await emit("──────────────────────────",200); await emit("Results: "+pass.length+" passed, "+fail.length+" failed",200);
     await emit(fail.length===0?"✓ All tests passed!":"✗ "+fail.length+" failed",200);
-    DB.sessions.push({name:member.name,sid,platform,passed:pass.length,failed:fail.length});
+    DB.sessions.push({name:member.name,sid,platform,passed:pass.length,failed:fail.length}); saveDB();
     if(fail.length>0) pushNotif("admin","⚠ "+fail.length+" failure(s) in "+sid+" — "+member.name);
     else pushNotif("admin","✓ All tests passed for "+sid+" — "+member.name);
     setHist(h=>[...h,{sid,passed:pass.length,failed:fail.length}]);
