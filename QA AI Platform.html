@@ -75,21 +75,8 @@ async function callAI(messages, sys="", max=4000, key="") {
     if (!proxyErr.message.includes("fetch")) {
       throw proxyErr; // real error from proxy, surface it
     }
-    // proxy not running — fall through to direct API
+    throw new Error("AI server is not running.\n\nPlease open a terminal and run:\n  node server.js\n\nKeep it open while using the app.");
   }
-
-  // 2 — Fall back to direct Anthropic API key
-  const ANTHROPIC_KEY = key || window.ANTHROPIC_API_KEY || prompt("Enter your Anthropic API key:\n(Or run server.js to use Claude Code instead)");
-  if (!ANTHROPIC_KEY) throw new Error("No API key provided");
-  window.ANTHROPIC_API_KEY = ANTHROPIC_KEY;
-  const r = await fetch("https://api.anthropic.com/v1/messages", {
-    method:"POST",
-    headers:{"Content-Type":"application/json","x-api-key":ANTHROPIC_KEY,"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},
-    body: JSON.stringify({ model:"claude-sonnet-4-6", max_tokens:max, system:sys, messages })
-  });
-  const d = await r.json();
-  if (d.error) throw new Error(d.error.message);
-  return d.content?.map(c=>c.text||"").join("") || "";
 }
 
 /* ─── Jira API ───────────────────────────────────────────────────────────── */
