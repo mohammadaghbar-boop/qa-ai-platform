@@ -794,7 +794,7 @@ function LoginPage({onLogin}) {
 const SESSION_KEY="qa_session";
 function loadSession(){try{const s=JSON.parse(localStorage.getItem(SESSION_KEY)||sessionStorage.getItem(SESSION_KEY));if(!s)return null;if(s.role==="admin")return s;if(s.role==="member"){const m=DB.members.find(x=>x.id===s.id);return m?{role:"member",member:m,id:m.id}:null;}return null;}catch{return null;}}
 function App() {
-  const [user,setUser]=useState(loadSession); const [page,setPage]=useState(u=>u?.role==="admin"?"dashboard":"workspace"); const [,tick]=useState(0);
+  const [user,setUser]=useState(loadSession); const [page,setPage]=useState(()=>{const u=loadSession();return u?.role==="admin"?"dashboard":"workspace";}); const [,tick]=useState(0);
   const handleLogin=(u,remember)=>{
     const data=u.role==="admin"?{role:"admin",id:"admin"}:{role:"member",id:u.id};
     if(remember){localStorage.setItem(SESSION_KEY,JSON.stringify(data));sessionStorage.removeItem(SESSION_KEY);}
