@@ -20,7 +20,7 @@ function callClaude(messages, system) {
       : conversation;
 
     const proc = spawn('claude', ['-p', '--output-format', 'text'], {
-      shell: false,
+      shell: true,
       env: process.env
     });
 
