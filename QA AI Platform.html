@@ -32,6 +32,8 @@
   input, select, textarea, button { font-family: inherit; }
   input:focus, select:focus, textarea:focus { outline: 2px solid var(--color-text-info); outline-offset: 1px; }
   * { scrollbar-width: thin; scrollbar-color: #ccc transparent; }
+  @keyframes qa-spin { to { transform: rotate(360deg); } }
+  @keyframes qa-pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.5;transform:scale(1.15)} }
 </style>
 </head>
 <body>
@@ -70,6 +72,9 @@ async function callAI(messages, sys="", max=4000, key="") {
       const d = await r.json();
       if (d.error) throw new Error(d.error);
       return d.text || "";
+    } else {
+      const d = await r.json().catch(()=>({}));
+      throw new Error(d.error || "Server error " + r.status);
     }
   } catch(proxyErr) {
     if (!proxyErr.message.includes("fetch")) {
@@ -142,7 +147,7 @@ const H2 = ({children}) => <div style={{fontSize:16,fontWeight:500,marginBottom:
 
 function Loader({msg,sub}) {
   return <div style={{...card,textAlign:"center",padding:48}}>
-    <div style={{fontSize:36,marginBottom:12}}>⏳</div>
+    <div style={{width:40,height:40,border:"4px solid var(--color-border-tertiary)",borderTop:"4px solid var(--color-text-info)",borderRadius:"50%",animation:"qa-spin .85s linear infinite",margin:"0 auto 20px"}}/>
     <div style={{fontWeight:500,marginBottom:4}}>{msg||"Working…"}</div>
     {sub&&<div style={{color:"var(--color-text-secondary)",fontSize:13}}>{sub}</div>}
   </div>;
@@ -171,12 +176,12 @@ function Banner({icon,title,sub,color="success",children}) {
     </div>
   </div>;
 }
-function StepBar({steps,cur}) {
+function StepBar({steps,cur,onStepClick}) {
   return <div style={{display:"flex",alignItems:"center",marginBottom:22,flexWrap:"wrap",rowGap:6}}>
     {steps.map((s,i)=>{
       const done=i<cur,active=i===cur;
       return <div key={i} style={{display:"flex",alignItems:"center"}}>
-        <div style={{padding:"3px 10px",borderRadius:20,fontSize:12,fontWeight:500,display:"flex",alignItems:"center",gap:5,background:done?"var(--color-background-success)":active?"var(--color-background-info)":"var(--color-background-tertiary)",color:done?"var(--color-text-success)":active?"var(--color-text-info)":"var(--color-text-tertiary)"}}>{done?"✓":i+1} {s}</div>
+        <div onClick={done&&onStepClick?()=>onStepClick(i):undefined} style={{padding:"3px 10px",borderRadius:20,fontSize:12,fontWeight:500,display:"flex",alignItems:"center",gap:5,cursor:done&&onStepClick?"pointer":"default",background:done?"var(--color-background-success)":active?"var(--color-background-info)":"var(--color-background-tertiary)",color:done?"var(--color-text-success)":active?"var(--color-text-info)":"var(--color-text-tertiary)"}}>{done?"✓":i+1} {s}</div>
         {i<steps.length-1&&<div style={{width:14,height:1,background:"var(--color-border-secondary)"}}/>}
       </div>;
     })}
@@ -413,6 +418,7 @@ function Workspace({member}) {
   const [jKey,setJKey]=useState(null); const [bugDone,setBugDone]=useState(null);
   const [showBugForm,setShowBugForm]=useState(false); const [bf,setBf]=useState({summary:"",sev:"High",desc:""});
   const [fixed,setFixed]=useState(false); const [hist,setHist]=useState([]); const [chat,setChat]=useState(false);
+  const [showAddCase,setShowAddCase]=useState(false); const [newCase,setNewCase]=useState({title:"",type:"happy",platform:"web",preconditions:"",steps:[""],expected:"",automatable:true});
 
   const SYS=`Expert QA engineer. Project:"${proj?.name}" Key:${proj?.jiraProjKey} Platform:${proj?.platform||"web"}. Be thorough.`;
   const approved=cases.filter(c=>c.status==="approved");
@@ -437,7 +443,14 @@ function Workspace({member}) {
   const doGap=async()=>{
     setLoading(true); setLmsg("Running GAP analysis…");
     const ctx=sdata&&!sdata.sim?`Story:"${sdata.summary}". ${sdata.description?.slice(0,400)||""}.`:"Simulate a realistic feature story.";
-    try { const r=await callAI([{role:"user",content:`Story Review and GAP Analysis for "${sid}" (${proj.jiraProjKey}).\n${ctx}\n\n## Story Summary\n## Acceptance Criteria Review (✓ Clear / ⚠ Needs clarification / ✗ Missing)\n## GAP Analysis\n## Risk Areas\n## Recommendations`}],SYS,3500,""); setGapText(r); setPhase("gap"); } catch(e){alert(e.message);}
+    try {
+      const r=await callAI([{role:"user",content:`You are a senior QA engineer. Perform a thorough story review and GAP analysis.\n\nStory: ${sid} | Project: ${proj.jiraProjKey} | Platform: ${platform}\n${ctx}\n\nIMPORTANT: Write in plain text only. No markdown, no --- separators, no ** bold **, no > quotes, no tables, no backticks, no # headings. Use emoji + colon for section titles. Use numbered lists or dashes for items.\n\nStructure your response exactly like this:\n\n📋 Story Summary:\n[2-3 sentence summary]\n\n✅ Acceptance Criteria Review:\n[For each AC: ✓ Clear / ⚠ Needs clarification / ✗ Missing — with explanation]\n\n🔍 GAP Analysis:\n[List missing scenarios, boundary conditions, untested areas]\n\n⚠️ Risk Areas:\n[Each risk with rating: 🔴 High / 🟡 Medium / 🟢 Low]\n\n💡 Recommendations:\n[Actionable steps to improve story quality]\n\n📊 Test Coverage Estimate:\n[Breakdown: Happy flows / Edge cases / Negative cases / Automation %]`}],SYS,4000,"");
+      const isPermErr = /permission|approve the tool|atlassian|fetch.*jira|jira.*fetch/i.test(r);
+      const cleanGap = t => t.replace(/^#{1,6}\s*/gm,"").replace(/\*{1,2}([^*]+)\*{1,2}/g,"$1").replace(/^[-─]{3,}\s*$/gm,"").replace(/^\|.*\|$/gm,"").replace(/^>\s*/gm,"").replace(/`([^`]*)`/g,"$1").trim();
+      if(isPermErr){ setGapText("⚠️ Please update your Jira API token to enable full analysis.\n\nGo to Admin → Projects → Edit \""+proj.name+"\" and fill in your Jira URL, email, and API token."); }
+      else { setGapText(cleanGap(r)); }
+      setPhase("gap");
+    } catch(e){alert(e.message);}
     setLoading(false);
   };
 
@@ -531,7 +544,25 @@ function Workspace({member}) {
   const editC=(id,k,v)=>setCases(cs=>cs.map(c=>c.id===id?{...c,[k]:v}:c));
   const editS=(id,si,v)=>setCases(cs=>cs.map(c=>{if(c.id!==id)return c;const s=[...c.steps];s[si]=v;return{...c,steps:s};}));
   const addStep=id=>setCases(cs=>cs.map(c=>c.id===id?{...c,steps:[...(c.steps||[]),"New step"]}:c));
-  const reset=()=>{setPhase("input");setSid("");setSdata(null);setPlatform("web");setCtypes([]);setGapText("");setCases([]);setEditOn(false);setScripts({web:"",ios:"",android:""});setProjFiles(null);setExecLines([]);setResult(null);setJKey(null);setBugDone(null);setShowBugForm(false);setFixed(false);setChat(false);};
+  const reset=()=>{setPhase("input");setSid("");setSdata(null);setPlatform("web");setCtypes([]);setGapText("");setCases([]);setEditOn(false);setScripts({web:"",ios:"",android:""});setProjFiles(null);setExecLines([]);setResult(null);setJKey(null);setBugDone(null);setShowBugForm(false);setFixed(false);setChat(false);setShowAddCase(false);};
+  const goToStep=i=>{
+    const cur=WS_IDX[phase]??0; if(i>=cur) return;
+    if(i===0){setPhase("input");return;}
+    if(i===1&&sdata){setPhase(cases.length>0?"ready":"mode");return;}
+    if(i===2&&cases.length>0){setPhase("ready");return;}
+    if(i===3&&cases.length>0){setPhase("review");return;}
+    if(i===4&&approved.length>0){setPhase("jira");return;}
+    if(i===5&&(scripts.web||scripts.ios)){setPhase("autoReady");return;}
+    if(i===6&&projFiles){setPhase("vscode");return;}
+    if(i===7){setPhase("runAsk");return;}
+  };
+  const addManualCase=()=>{
+    if(!newCase.title.trim()) return;
+    const id="TC-M"+String(cases.filter(c=>c.id.startsWith("TC-M")).length+1).padStart(3,"0");
+    setCases(cs=>[...cs,{...newCase,id,status:"pending",steps:newCase.steps.filter(s=>s.trim())}]);
+    setNewCase({title:"",type:"happy",platform:"web",preconditions:"",steps:[""],expected:"",automatable:true});
+    setShowAddCase(false);
+  };
   const curScript=platform==="mobile"?(tab==="ios"?scripts.ios:scripts.android):scripts.web;
   const ghostBtn={padding:"8px 18px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:14,fontWeight:500,color:"var(--color-text-secondary)"};
 
@@ -549,7 +580,7 @@ function Workspace({member}) {
         {phase!=="input"&&<button onClick={reset} style={ghostBtn}>↩ New story</button>}
       </div>
     </div>
-    <StepBar steps={WS_STEPS} cur={WS_IDX[phase]??0}/>
+    <StepBar steps={WS_STEPS} cur={WS_IDX[phase]??0} onStepClick={goToStep}/>
     <div style={{display:"flex",gap:16}}>
       <div style={{flex:1,minWidth:0}}>
         {loading&&<Loader msg={lmsg}/>}
@@ -626,6 +657,30 @@ function Workspace({member}) {
               <div style={{display:"flex",flexDirection:"column",gap:8,minWidth:96}}><Btn v="success" onClick={()=>approve(c.id)}>✓ Approve</Btn><Btn v="danger" onClick={()=>reject(c.id)}>✗ Reject</Btn></div>
             </div>
           </div>)}
+          <div style={{marginBottom:16}}>
+            <button onClick={()=>setShowAddCase(o=>!o)} style={{...ghostBtn,borderStyle:"dashed"}}>+ Add test case manually</button>
+          </div>
+          {showAddCase&&<div style={{...card,border:"2px dashed var(--color-border-secondary)",marginBottom:16}}>
+            <div style={{fontWeight:500,marginBottom:12}}>New manual test case</div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
+              <div style={{gridColumn:"1/-1"}}><Lbl>Title</Lbl><input style={inp} value={newCase.title} onChange={e=>setNewCase(p=>({...p,title:e.target.value}))} placeholder="e.g. Submit form with valid data"/></div>
+              <div><Lbl>Type</Lbl><select style={sel} value={newCase.type} onChange={e=>setNewCase(p=>({...p,type:e.target.value}))}><option value="happy">Happy flow</option><option value="edge">Edge case</option><option value="negative">Negative</option></select></div>
+              <div><Lbl>Platform</Lbl><select style={sel} value={newCase.platform} onChange={e=>setNewCase(p=>({...p,platform:e.target.value}))}><option value="web">Web</option><option value="mobile">Mobile</option></select></div>
+              <div style={{gridColumn:"1/-1"}}><Lbl>Preconditions</Lbl><input style={inp} value={newCase.preconditions} onChange={e=>setNewCase(p=>({...p,preconditions:e.target.value}))} placeholder="e.g. User is logged in"/></div>
+            </div>
+            <Lbl>Steps</Lbl>
+            {newCase.steps.map((s,i)=><div key={i} style={{display:"flex",gap:6,marginBottom:4,alignItems:"center"}}>
+              <span style={{fontSize:11,color:"var(--color-text-tertiary)",minWidth:18}}>{i+1}.</span>
+              <input style={inp} value={s} onChange={e=>setNewCase(p=>({...p,steps:p.steps.map((x,j)=>j===i?e.target.value:x)}))} placeholder={"Step "+(i+1)}/>
+              {newCase.steps.length>1&&<button onClick={()=>setNewCase(p=>({...p,steps:p.steps.filter((_,j)=>j!==i)}))} style={{padding:"4px 8px",borderRadius:6,border:"none",background:"var(--color-background-danger)",color:"var(--color-text-danger)",cursor:"pointer",fontSize:12}}>✕</button>}
+            </div>)}
+            <button onClick={()=>setNewCase(p=>({...p,steps:[...p.steps,""]}))} style={{marginBottom:10,padding:"4px 10px",borderRadius:6,border:"1px dashed var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:12,color:"var(--color-text-secondary)"}}>+ Add step</button>
+            <div style={{marginBottom:12}}><Lbl>Expected result</Lbl><input style={inp} value={newCase.expected} onChange={e=>setNewCase(p=>({...p,expected:e.target.value}))} placeholder="e.g. Success message shown"/></div>
+            <label style={{display:"flex",alignItems:"center",gap:8,fontSize:13,marginBottom:14,cursor:"pointer"}}>
+              <input type="checkbox" checked={newCase.automatable} onChange={e=>setNewCase(p=>({...p,automatable:e.target.checked}))}/> Automatable
+            </label>
+            <div style={{display:"flex",gap:8}}><Btn v="primary" onClick={addManualCase}>Add case</Btn><button onClick={()=>setShowAddCase(false)} style={ghostBtn}>Cancel</button></div>
+          </div>}
           {allDone&&<div style={{display:"flex",gap:10,marginBottom:16}}><Btn v="primary" onClick={()=>setPhase("jira")}>Continue →</Btn><button onClick={()=>exportCSV(cases,sid)} style={ghostBtn}>⬇ Export AIO CSV</button></div>}
         </div>}
 
@@ -709,10 +764,10 @@ function Workspace({member}) {
 
 /* ─── Login ───────────────────────────────────────────────────────────────── */
 function LoginPage({onLogin}) {
-  const [mode,setMode]=useState("admin"); const [email,setEmail]=useState(""); const [pass,setPass]=useState(""); const [err,setErr]=useState("");
+  const [mode,setMode]=useState("admin"); const [email,setEmail]=useState(""); const [pass,setPass]=useState(""); const [err,setErr]=useState(""); const [remember,setRemember]=useState(false);
   const login=()=>{
-    if(mode==="admin"){if(email==="admin"&&pass==="admin"){onLogin({role:"admin",id:"admin"});return;}setErr("Use admin / admin");return;}
-    const m=DB.members.find(x=>x.email===email&&x.password===pass); if(m){onLogin({role:"member",member:m,id:m.id});return;} setErr("Invalid credentials");
+    if(mode==="admin"){if(email==="admin"&&pass==="admin"){onLogin({role:"admin",id:"admin"},remember);return;}setErr("Use admin / admin");return;}
+    const m=DB.members.find(x=>x.email===email&&x.password===pass); if(m){onLogin({role:"member",member:m,id:m.id},remember);return;} setErr("Invalid credentials");
   };
   return <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"var(--color-background-tertiary)"}}>
     <div style={{...card,width:380,padding:36}}>
@@ -724,7 +779,10 @@ function LoginPage({onLogin}) {
       <Lbl>{mode==="admin"?"Username":"Email"}</Lbl>
       <input style={{...inp,marginBottom:12}} value={email} onChange={e=>setEmail(e.target.value)} placeholder={mode==="admin"?"admin":"jane@company.com"}/>
       <Lbl>Password</Lbl>
-      <input type="password" style={{...inp,marginBottom:16}} value={pass} onChange={e=>setPass(e.target.value)} onKeyDown={e=>e.key==="Enter"&&login()}/>
+      <input type="password" style={{...inp,marginBottom:12}} value={pass} onChange={e=>setPass(e.target.value)} onKeyDown={e=>e.key==="Enter"&&login()}/>
+      <label style={{display:"flex",alignItems:"center",gap:8,fontSize:13,color:"var(--color-text-secondary)",marginBottom:16,cursor:"pointer"}}>
+        <input type="checkbox" checked={remember} onChange={e=>setRemember(e.target.checked)}/> Remember me
+      </label>
       {err&&<div style={{color:"var(--color-text-danger)",fontSize:13,marginBottom:12}}>{err}</div>}
       <button onClick={login} style={{width:"100%",padding:"8px 0",borderRadius:8,border:"none",background:"var(--color-text-info)",color:"#fff",cursor:"pointer",fontSize:14,fontWeight:500}}>Sign in</button>
       {mode==="admin"&&<div style={{fontSize:12,color:"var(--color-text-tertiary)",marginTop:10,textAlign:"center"}}>Demo: admin / admin</div>}
@@ -733,9 +791,18 @@ function LoginPage({onLogin}) {
 }
 
 /* ─── Root App ────────────────────────────────────────────────────────────── */
+const SESSION_KEY="qa_session";
+function loadSession(){try{const s=JSON.parse(localStorage.getItem(SESSION_KEY)||sessionStorage.getItem(SESSION_KEY));if(!s)return null;if(s.role==="admin")return s;if(s.role==="member"){const m=DB.members.find(x=>x.id===s.id);return m?{role:"member",member:m,id:m.id}:null;}return null;}catch{return null;}}
 function App() {
-  const [user,setUser]=useState(null); const [page,setPage]=useState("dashboard"); const [,tick]=useState(0);
-  if(!user) return <LoginPage onLogin={u=>{setUser(u);setPage(u.role==="admin"?"dashboard":"workspace");}}/>;
+  const [user,setUser]=useState(loadSession); const [page,setPage]=useState(u=>u?.role==="admin"?"dashboard":"workspace"); const [,tick]=useState(0);
+  const handleLogin=(u,remember)=>{
+    const data=u.role==="admin"?{role:"admin",id:"admin"}:{role:"member",id:u.id};
+    if(remember){localStorage.setItem(SESSION_KEY,JSON.stringify(data));sessionStorage.removeItem(SESSION_KEY);}
+    else{sessionStorage.setItem(SESSION_KEY,JSON.stringify(data));localStorage.removeItem(SESSION_KEY);}
+    setUser(u); setPage(u.role==="admin"?"dashboard":"workspace");
+  };
+  const handleLogout=()=>{localStorage.removeItem(SESSION_KEY);sessionStorage.removeItem(SESSION_KEY);setUser(null);};
+  if(!user) return <LoginPage onLogin={handleLogin}/>;
   const adminNav=[{sec:"Overview",items:[{id:"dashboard",label:"Dashboard",icon:"📊"}]},{sec:"Manage",items:[{id:"members",label:"Members",icon:"👥"},{id:"projects",label:"Projects",icon:"📁"},{id:"assign",label:"Assignments",icon:"🔗"}]},{sec:"Reports",items:[{id:"bugs",label:"Bug tracker",icon:"🐛"}]}];
   const memberNav=[{sec:"Work",items:[{id:"workspace",label:"Workspace",icon:"🖥"}]}];
   const nav=user.role==="admin"?adminNav:memberNav;
@@ -759,7 +826,7 @@ function App() {
           <div><div style={{fontSize:13,fontWeight:500}}>{user.role==="admin"?"Admin":user.member?.name}</div><div style={{fontSize:11,color:"var(--color-text-tertiary)"}}>{user.role==="admin"?"QA Lead":user.member?.role}</div></div>
           <NotifBell userId={user.role==="admin"?"admin":user.id}/>
         </div>
-        <button onClick={()=>setUser(null)} style={{width:"100%",padding:"8px 0",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:13,color:"var(--color-text-secondary)"}}>Sign out</button>
+        <button onClick={handleLogout} style={{width:"100%",padding:"8px 0",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:13,color:"var(--color-text-secondary)"}}>Sign out</button>
       </div>
     </div>
     <div style={{flex:1,padding:28,overflow:"auto"}}>
