@@ -741,15 +741,16 @@ function Workspace({member}) {
         </div>}
 
         {!loading&&phase==="jira"&&<div>
-          <div style={{...card,padding:"12px 20px",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-            <span style={{fontSize:13,color:"var(--color-text-secondary)"}}>Story <b>{sid}</b> · <b>{approved.length}</b> approved · <Tag c={platform==="mobile"?"amber":"blue"}>{platform}</Tag></span>
-            <button onClick={()=>exportCSV(cases,sid)} style={{...ghostBtn,padding:"5px 14px",fontSize:13}}>⬇ Export AIO CSV</button>
+          <div style={{...card,padding:"16px 20px"}}>
+            <div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:14}}>Story <b>{sid}</b> · <b>{approved.length}</b> approved cases · <Tag c={platform==="mobile"?"amber":"blue"}>{platform}</Tag></div>
+            <div style={{display:"flex",gap:10}}>
+              <Btn v="primary" onClick={()=>{exportCSV(cases,sid);setPhase("jiraDone");}}>⬇ Export AIO CSV</Btn>
+              <button onClick={()=>setPhase("jiraDone")} style={ghostBtn}>Skip</button>
+            </div>
           </div>
-          <Confirm icon="🧪" title="Add approved cases to Jira AIO Tests?" desc={approved.length+" cases → sub-task linked to "+sid+". AIO CSV also downloaded."} onYes={doJira} onNo={()=>setPhase("jiraDone")} yesLabel="Yes, create sub-task + export" noLabel="Skip"/>
         </div>}
 
         {!loading&&phase==="jiraDone"&&<div>
-          {jKey&&<Banner icon="✅" title="Jira sub-task created" sub={"Sub-task "+jKey+" linked to "+sid+" · CSV downloaded"} color="success"/>}
           <Confirm icon="🤖" title="Generate automation scripts?" desc={fwName(platform)+" for "+autoable.length+" automatable cases."+(manOnly.length>0?" "+manOnly.length+" manual-only cases included as comments.":"")} onYes={doScripts} onNo={reset} yesLabel={"Yes, generate "+fwName(platform)} noLabel="Done"/>
         </div>}
 
