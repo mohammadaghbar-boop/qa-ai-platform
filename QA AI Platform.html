@@ -724,11 +724,14 @@ function Workspace({member}) {
             </label>
             <div style={{display:"flex",gap:8}}><Btn v="primary" onClick={addManualCase}>Add case</Btn><button onClick={()=>setShowAddCase(false)} style={ghostBtn}>Cancel</button></div>
           </div>}
-          {allDone&&<div style={{display:"flex",gap:10,marginBottom:16}}><Btn v="primary" onClick={()=>setPhase("jira")}>Continue →</Btn><button onClick={()=>exportCSV(cases,sid)} style={ghostBtn}>⬇ Export AIO CSV</button></div>}
+          {allDone&&<div style={{display:"flex",gap:10,marginBottom:16}}><Btn v="primary" onClick={()=>setPhase("jira")}>Continue →</Btn></div>}
         </div>}
 
         {!loading&&phase==="jira"&&<div>
-          <div style={{...card,padding:"12px 20px"}}><span style={{fontSize:13,color:"var(--color-text-secondary)"}}>Story <b>{sid}</b> · <b>{approved.length}</b> approved · <Tag c={platform==="mobile"?"amber":"blue"}>{platform}</Tag></span></div>
+          <div style={{...card,padding:"12px 20px",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+            <span style={{fontSize:13,color:"var(--color-text-secondary)"}}>Story <b>{sid}</b> · <b>{approved.length}</b> approved · <Tag c={platform==="mobile"?"amber":"blue"}>{platform}</Tag></span>
+            <button onClick={()=>exportCSV(cases,sid)} style={{...ghostBtn,padding:"5px 14px",fontSize:13}}>⬇ Export AIO CSV</button>
+          </div>
           <Confirm icon="🧪" title="Add approved cases to Jira AIO Tests?" desc={approved.length+" cases → sub-task linked to "+sid+". AIO CSV also downloaded."} onYes={doJira} onNo={()=>setPhase("jiraDone")} yesLabel="Yes, create sub-task + export" noLabel="Skip"/>
         </div>}
 
