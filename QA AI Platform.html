@@ -638,10 +638,10 @@ function Workspace({member}) {
         {!loading&&phase==="ctype"&&<div style={card}>
           <div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:16}}>Story: <b>{sid}</b></div><H2>Which test case types?</H2>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:20}}>
-            {[{k:"happy",l:"Happy flow",d:"Core successful journeys"},{k:"edge",l:"Edge cases",d:"Boundary values"},{k:"negative",l:"Negative cases",d:"Error handling"},{k:"all",l:"All of the above",d:"Full coverage"}].map(o=><label key={o.k} style={{display:"flex",gap:10,padding:14,borderRadius:10,border:"1px solid "+(ctypes.includes(o.k)?"var(--color-text-info)":"var(--color-border-secondary)"),background:ctypes.includes(o.k)?"var(--color-background-info)":"var(--color-background-primary)",cursor:"pointer"}}>
-              <input type="checkbox" checked={ctypes.includes(o.k)} onChange={()=>{if(o.k==="all"){setCtypes(p=>p.includes("all")?[]:["all"]);}else{setCtypes(p=>{const w=p.filter(x=>x!=="all"&&x!==o.k);return p.includes(o.k)?w:[...w,o.k];});}}} style={{marginTop:2}}/>
+            {[{k:"happy",l:"Happy flow",d:"Core successful journeys"},{k:"edge",l:"Edge cases",d:"Boundary values"},{k:"negative",l:"Negative cases",d:"Error handling"},{k:"all",l:"All of the above",d:"Full coverage"}].map(o=>{const isDisabled=ctypes.includes("all")&&o.k!=="all";return <label key={o.k} style={{display:"flex",gap:10,padding:14,borderRadius:10,border:"1px solid "+(ctypes.includes(o.k)?"var(--color-text-info)":"var(--color-border-secondary)"),background:ctypes.includes(o.k)?"var(--color-background-info)":isDisabled?"var(--color-background-tertiary)":"var(--color-background-primary)",cursor:isDisabled?"not-allowed":"pointer",opacity:isDisabled?0.45:1}}>
+              <input type="checkbox" checked={ctypes.includes(o.k)} disabled={isDisabled} onChange={()=>{if(o.k==="all"){setCtypes(p=>p.includes("all")?[]:["all"]);}else{setCtypes(p=>{const w=p.filter(x=>x!=="all"&&x!==o.k);return p.includes(o.k)?w:[...w,o.k];});}}} style={{marginTop:2}}/>
               <div><div style={{fontWeight:500}}>{o.l}</div><div style={{fontSize:12,color:"var(--color-text-secondary)",marginTop:2}}>{o.d}</div></div>
-            </label>)}
+            </label>;})}
           </div>
           <Btn v="primary" onClick={()=>ctypes.length>0&&doGen()} disabled={ctypes.length===0}>Generate test cases →</Btn>
         </div>}
