@@ -467,7 +467,10 @@ function Workspace({member}) {
     try {
       const d=await callJira(proj,"GET","/issue/"+sid+"?fields=summary,description,labels,issuetype,status,assignee,priority");
       const flds=d.fields||{}; let desc="";
-      if(flds.description) desc=adfToText(flds.description).trim();
+      if(flds.description){
+        if(typeof flds.description==="string") desc=flds.description.trim();
+        else desc=adfToText(flds.description).trim();
+      }
       const sd={key:d.key,summary:flds.summary||sid,description:desc,labels:flds.labels||[],type:flds.issuetype?.name||"Story",status:flds.status?.name||"",assignee:flds.assignee?.displayName||"—",priority:flds.priority?.name||"Medium"};
       setSdata(sd); setPlatform(platDetect([...sd.labels,sd.summary,sd.description,proj.platform||""].join(" ")));
     } catch { setSdata({key:sid,summary:"Story "+sid,description:"",labels:[],type:"Story",status:"In Progress",assignee:"—",priority:"Medium",sim:true}); setPlatform(platDetect(proj.platform||"web")); }
