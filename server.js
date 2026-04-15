@@ -4,9 +4,16 @@
 
 const http  = require('http');
 const https = require('https');
+const fs    = require('fs');
+const os    = require('os');
+const path  = require('path');
 const { spawn } = require('child_process');
 
 const PORT = 3456;
+
+// Empty MCP config — prevents claude CLI from using MCP tools (e.g. Atlassian)
+const EMPTY_MCP = path.join(os.tmpdir(), 'qa-platform-no-mcp.json');
+fs.writeFileSync(EMPTY_MCP, JSON.stringify({ mcpServers: {} }));
 
 /* ── Claude AI ──────────────────────────────────────────────────────────── */
 function callClaude(messages, system) {
@@ -19,7 +26,11 @@ function callClaude(messages, system) {
       ? `[System: ${system}]\n\n${conversation}`
       : conversation;
 
-    const proc = spawn('claude', ['-p', '--output-format', 'text'], {
+    const proc = spawn('claude', [
+      '-p', '--output-format', 'text',
+      '--tools', '',
+      '--strict-mcp-config', '--mcp-config', EMPTY_MCP
+    ], {
       shell: true,
       env: process.env
     });

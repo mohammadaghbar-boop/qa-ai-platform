@@ -422,6 +422,19 @@ function BugsPage() {
   </div>;
 }
 
+/* ─── ADF text extractor (recursive) ────────────────────────────────────── */
+function adfToText(node) {
+  if (!node) return '';
+  if (node.type === 'text') {
+    const link = (node.marks||[]).find(m=>m.type==='link');
+    return link ? `${node.text||''} (${link.attrs?.href||''})` : (node.text||'');
+  }
+  if (node.type === 'inlineCard' || node.type === 'blockCard') return node.attrs?.url||'';
+  if (node.type === 'hardBreak') return '\n';
+  const inner = (node.content||[]).map(adfToText).join('');
+  return ['paragraph','heading','listItem','bulletList','orderedList','blockquote','panel','rule'].includes(node.type) ? inner+'\n' : inner;
+}
+
 /* ─── Workspace ───────────────────────────────────────────────────────────── */
 const WS_STEPS = ["Story","Mode","Cases","Review","Jira","Scripts","VS Code","Run"];
 const WS_IDX = {input:0,mode:1,gap:1,ctype:2,ready:2,review:3,jira:4,jiraDone:4,auto:5,autoReady:5,vscode:6,vscodeDone:6,runAsk:7,running:7,result:7};
@@ -454,7 +467,7 @@ function Workspace({member}) {
     try {
       const d=await callJira(proj,"GET","/issue/"+sid+"?fields=summary,description,labels,issuetype,status,assignee,priority");
       const flds=d.fields||{}; let desc="";
-      if(flds.description?.content) desc=flds.description.content.flatMap(b=>b.content||[]).map(n=>{if(n.type==="inlineCard"||n.type==="blockCard")return n.attrs?.url||"";const link=(n.marks||[]).find(m=>m.type==="link");return link?`${n.text||""} (${link.attrs?.href||""})`:n.text||"";}).join(" ");
+      if(flds.description) desc=adfToText(flds.description).trim();
       const sd={key:d.key,summary:flds.summary||sid,description:desc,labels:flds.labels||[],type:flds.issuetype?.name||"Story",status:flds.status?.name||"",assignee:flds.assignee?.displayName||"—",priority:flds.priority?.name||"Medium"};
       setSdata(sd); setPlatform(platDetect([...sd.labels,sd.summary,sd.description,proj.platform||""].join(" ")));
     } catch { setSdata({key:sid,summary:"Story "+sid,description:"",labels:[],type:"Story",status:"In Progress",assignee:"—",priority:"Medium",sim:true}); setPlatform(platDetect(proj.platform||"web")); }
