@@ -737,7 +737,10 @@ function Workspace({member}) {
             </label>
             <div style={{display:"flex",gap:8}}><Btn v="primary" onClick={addManualCase}>Add case</Btn><button onClick={()=>setShowAddCase(false)} style={ghostBtn}>Cancel</button></div>
           </div>}
-          {allDone&&<div style={{display:"flex",gap:10,marginBottom:16}}><Btn v="primary" onClick={()=>setPhase("jira")}>Continue →</Btn></div>}
+          <div style={{display:"flex",gap:10,marginBottom:16}}>
+            <Btn v="primary" onClick={()=>{setCases(cs=>cs.map(c=>c.status==="pending"?{...c,status:"approved"}:c));setPhase("jira");}}>✓ Approve All & Continue</Btn>
+            {allDone&&<button onClick={()=>setPhase("jira")} style={ghostBtn}>Continue →</button>}
+          </div>
         </div>}
 
         {!loading&&phase==="jira"&&<div>
