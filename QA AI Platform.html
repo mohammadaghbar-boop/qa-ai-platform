@@ -426,7 +426,7 @@ function Workspace({member}) {
   const [fixed,setFixed]=useState(false); const [hist,setHist]=useState([]); const [chat,setChat]=useState(false);
   const [showAddCase,setShowAddCase]=useState(false); const [newCase,setNewCase]=useState({title:"",type:"happy",platform:"web",preconditions:"",steps:[""],expected:"",automatable:true});
 
-  const SYS=`Expert QA engineer. Project:"${proj?.name}" Key:${proj?.jiraProjKey} Platform:${proj?.platform||"web"}. Be thorough.`;
+  const SYS=`You are an expert QA engineer. All story data is already provided in the user message — do NOT use any external tools, do NOT access Jira, Atlassian, or any other service. Work only with the text provided. Project:"${proj?.name}" Platform:${proj?.platform||"web"}.`;
   const approved=cases.filter(c=>c.status==="approved");
   const autoable=approved.filter(c=>c.automatable!==false);
   const manOnly=approved.filter(c=>c.automatable===false);
@@ -450,7 +450,7 @@ function Workspace({member}) {
     setLoading(true); setLmsg("Running GAP analysis…");
     const ctx=sdata&&!sdata.sim?`Story:"${sdata.summary}". ${sdata.description?.slice(0,400)||""}.`:"Simulate a realistic feature story.";
     try {
-      const r=await callAI([{role:"user",content:`You are a senior QA engineer. Perform a thorough story review and GAP analysis.\n\nStory: ${sid} | Project: ${proj.jiraProjKey} | Platform: ${platform}\n${ctx}\n\nIMPORTANT: Write in plain text only. No markdown, no --- separators, no ** bold **, no > quotes, no tables, no backticks, no # headings. Use emoji + colon for section titles. Use numbered lists or dashes for items.\n\nStructure your response exactly like this:\n\n📋 Story Summary:\n[2-3 sentence summary]\n\n✅ Acceptance Criteria Review:\n[For each AC: ✓ Clear / ⚠ Needs clarification / ✗ Missing — with explanation]\n\n🔍 GAP Analysis:\n[List missing scenarios, boundary conditions, untested areas]\n\n⚠️ Risk Areas:\n[Each risk with rating: 🔴 High / 🟡 Medium / 🟢 Low]\n\n💡 Recommendations:\n[Actionable steps to improve story quality]\n\n📊 Test Coverage Estimate:\n[Breakdown: Happy flows / Edge cases / Negative cases / Automation %]`}],SYS,4000,"");
+      const r=await callAI([{role:"user",content:`You are a senior QA engineer. All data is provided below — do NOT access Jira or any external service. Perform a thorough story review and GAP analysis using ONLY the text below.\n\nStory ID: ${sid} | Platform: ${platform}\n${ctx}\n\nIMPORTANT: Write in plain text only. No markdown, no --- separators, no ** bold **, no > quotes, no tables, no backticks, no # headings. Use emoji + colon for section titles. Use numbered lists or dashes for items.\n\nStructure your response exactly like this:\n\n📋 Story Summary:\n[2-3 sentence summary]\n\n✅ Acceptance Criteria Review:\n[For each AC: ✓ Clear / ⚠ Needs clarification / ✗ Missing — with explanation]\n\n🔍 GAP Analysis:\n[List missing scenarios, boundary conditions, untested areas]\n\n⚠️ Risk Areas:\n[Each risk with rating: 🔴 High / 🟡 Medium / 🟢 Low]\n\n💡 Recommendations:\n[Actionable steps to improve story quality]\n\n📊 Test Coverage Estimate:\n[Breakdown: Happy flows / Edge cases / Negative cases / Automation %]`}],SYS,4000,"");
       const cleanGap = t => t.replace(/^#{1,6}\s*/gm,"").replace(/\*{1,2}([^*]+)\*{1,2}/g,"$1").replace(/^[-─]{3,}\s*$/gm,"").replace(/^\|.*\|$/gm,"").replace(/^>\s*/gm,"").replace(/`([^`]*)`/g,"$1").trim();
       setGapText(cleanGap(r));
       setPhase("gap");
