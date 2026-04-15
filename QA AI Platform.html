@@ -203,18 +203,24 @@ function Terminal({lines}) {
 function NotifBell({userId}) {
   const [open,setOpen]=useState(false);
   const [,tick]=useState(0);
+  const [pos,setPos]=useState({bottom:0,right:0});
+  const btnRef=useRef(null);
   const unread=DB.notifs.filter(n=>n.to===userId&&!n.read);
   const all=DB.notifs.filter(n=>n.to===userId).slice().reverse();
+  const toggle=()=>{
+    if(btnRef.current){const r=btnRef.current.getBoundingClientRect();setPos({bottom:window.innerHeight-r.top+6,right:window.innerWidth-r.right});}
+    setOpen(o=>!o);tick(x=>x+1);
+  };
   return <div style={{position:"relative"}}>
-    <button onClick={()=>{setOpen(o=>!o);tick(x=>x+1);}} style={{padding:"6px 10px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",position:"relative",color:"var(--color-text-secondary)",fontSize:14}}>
+    <button ref={btnRef} onClick={toggle} style={{padding:"6px 10px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",position:"relative",color:"var(--color-text-secondary)",fontSize:14}}>
       🔔{unread.length>0&&<span style={{position:"absolute",top:-6,right:-6,background:"var(--color-text-danger)",color:"#fff",borderRadius:20,padding:"0 5px",fontSize:10,minWidth:16,textAlign:"center"}}>{unread.length}</span>}
     </button>
-    {open&&<div style={{position:"absolute",right:0,bottom:"calc(100% + 4px)",top:"auto",width:300,background:"var(--color-background-secondary)",border:"1px solid var(--color-border-secondary)",borderRadius:12,zIndex:999,boxShadow:"0 8px 24px rgba(0,0,0,.14)"}}>
+    {open&&<div style={{position:"fixed",right:pos.right,bottom:pos.bottom,width:300,background:"var(--color-background-secondary)",border:"1px solid var(--color-border-secondary)",borderRadius:12,zIndex:9999,boxShadow:"0 8px 24px rgba(0,0,0,.14)"}}>
       <div style={{padding:"12px 16px",borderBottom:"1px solid var(--color-border-tertiary)",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
         <div style={{fontWeight:500,fontSize:14}}>Notifications</div>
         {unread.length>0&&<button onClick={()=>{unread.forEach(n=>n.read=true);tick(x=>x+1);}} style={{padding:"3px 8px",borderRadius:6,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:12,color:"var(--color-text-secondary)"}}>Mark read</button>}
       </div>
-      <div style={{maxHeight:260,overflow:"auto"}}>
+      <div style={{maxHeight:320,overflow:"auto"}}>
         {all.length===0?<div style={{padding:16,fontSize:13,color:"var(--color-text-tertiary)"}}>No notifications.</div>:
         all.map(n=><div key={n.id} onClick={()=>{n.read=true;tick(x=>x+1);}} style={{padding:"10px 16px",borderBottom:"1px solid var(--color-border-tertiary)",cursor:"pointer",background:n.read?"transparent":"var(--color-background-info)"}}>
           <div style={{fontSize:13,fontWeight:n.read?400:500}}>{n.msg}</div>
