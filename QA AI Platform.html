@@ -474,17 +474,25 @@ function Workspace({member}) {
   };
 
   const doGen=async()=>{
-    setLoading(true); setLmsg("Generating test cases…");
-    const tl=ctypes.includes("all")?"happy flow, edge cases, and negative cases":ctypes.join(", ");
+    setLoading(true);
+    const selectedTypes=ctypes.includes("all")?["happy","edge","negative"]:ctypes;
+    const existingTypes=[...new Set(cases.map(c=>c.type))];
+    const keepTypes=selectedTypes.filter(t=>existingTypes.includes(t));
+    const newTypes=selectedTypes.filter(t=>!existingTypes.includes(t));
+    const keptCases=cases.filter(c=>keepTypes.includes(c.type));
+    if(newTypes.length===0){setCases(keptCases);setPhase("ready");setLoading(false);return;}
+    setLmsg("Generating "+newTypes.join(", ")+" cases…");
+    const tl=newTypes.join(", ");
     const ctx=sdata&&!sdata.sim?`Story: "${sdata.summary}"\nFull description and Acceptance Criteria:\n${sdata.description?.slice(0,2500)||"No description provided."}`:"Simulate a realistic feature story with multiple acceptance criteria.";
     try {
-      const r=await callAI([{role:"user",content:`You are a QA engineer generating manual test cases for story "${sid}" (${proj.jiraProjKey}).\n\n${ctx}\n\nTest types to generate: ${tl}\nPlatform: ${platform}\n\nINSTRUCTIONS:\n1. Identify EVERY acceptance criterion (AC) from the description above.\n2. Generate at least 1-3 test cases per AC — do NOT skip, merge, or ignore any AC.\n3. For the selected types (${tl}), generate ALL possible scenarios — there is NO maximum limit on number of cases.\n4. Do not stop at a fixed number — cover everything explicitly stated in the ACs.\n5. If the user selected only one type (e.g. happy flow), still generate ALL possible happy flow cases for every AC.\n6. Mark automatable:false ONLY for offline/camera/biometrics/hardware tests.\n\nReturn ONLY a valid JSON array (no markdown, no explanation):\n[{"id":"TC-001","title":"...","type":"happy|edge|negative","platform":"web|mobile","preconditions":"...","steps":["Step 1","Step 2"],"expected":"...","automatable":true}]`}],SYS,8000,proj.anthropicKey||"");
+      const r=await callAI([{role:"user",content:`You are a QA engineer generating manual test cases for story "${sid}" (${proj.jiraProjKey}).\n\n${ctx}\n\nTest types to generate: ${tl}\nPlatform: ${platform}\n\nINSTRUCTIONS:\n1. Identify EVERY acceptance criterion (AC) from the description above.\n2. Generate at least 1-3 test cases per AC — do NOT skip, merge, or ignore any AC.\n3. For the selected types (${tl}), generate ALL possible scenarios — there is NO maximum limit on number of cases.\n4. Do not stop at a fixed number — cover everything explicitly stated in the ACs.\n5. Mark automatable:false ONLY for offline/camera/biometrics/hardware tests.\n\nReturn ONLY a valid JSON array (no markdown, no explanation):\n[{"id":"TC-001","title":"...","type":"happy|edge|negative","platform":"web|mobile","preconditions":"...","steps":["Step 1","Step 2"],"expected":"...","automatable":true}]`}],SYS,8000,proj.anthropicKey||"");
       const clean=r.replace(/```json|```/g,"").trim();
       const match=clean.match(/\[[\s\S]*\]/);
       if(!match) throw new Error("AI returned text instead of JSON. Make sure server.js is running and the story has a description.");
-      const parsed=JSON.parse(match[0]); setCases(parsed.map(c=>({...c,status:"pending"})));
-    } catch(e) { setLoading(false); alert("Failed to generate test cases:\n\n"+e.message); return; }
-    setPhase("ready"); setLoading(false);
+      const newCases=JSON.parse(match[0]).map(c=>({...c,status:"pending"}));
+      setCases([...keptCases,...newCases]);
+    } catch(e){setLoading(false);alert("Failed to generate test cases:\n\n"+e.message);return;}
+    setPhase("ready");setLoading(false);
   };
 
   const doScripts=async()=>{
@@ -580,7 +588,7 @@ function Workspace({member}) {
     const cur=WS_IDX[phase]??0; if(i>=cur||phase==="running") return;
     if(i===0){setPhase("input");return;}
     if(i===1&&sdata){setPhase("mode");return;}
-    if(i===2&&sdata){setCtypes([]);setPhase("ctype");return;}
+    if(i===2&&sdata){const et=[...new Set(cases.map(c=>c.type))];setCtypes(et.length>0?et:[]);setPhase("ctype");return;}
     if(i===3&&cases.length>0){setPhase("review");return;}
     if(i===4&&approved.length>0){setPhase("jira");return;}
     if(i===5&&(scripts.web||scripts.ios)){setPhase("autoReady");return;}
@@ -656,10 +664,10 @@ function Workspace({member}) {
         {!loading&&phase==="ctype"&&<div style={card}>
           <div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:16}}>Story: <b>{sid}</b></div><H2>Which test case types?</H2>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:20}}>
-            {[{k:"happy",l:"Happy flow",d:"Core successful journeys"},{k:"edge",l:"Edge cases",d:"Boundary values"},{k:"negative",l:"Negative cases",d:"Error handling"},{k:"all",l:"All of the above",d:"Full coverage"}].map(o=>{const isDisabled=ctypes.includes("all")&&o.k!=="all";return <label key={o.k} style={{display:"flex",gap:10,padding:14,borderRadius:10,border:"1px solid "+(ctypes.includes(o.k)?"var(--color-text-info)":"var(--color-border-secondary)"),background:ctypes.includes(o.k)?"var(--color-background-info)":isDisabled?"var(--color-background-tertiary)":"var(--color-background-primary)",cursor:isDisabled?"not-allowed":"pointer",opacity:isDisabled?0.45:1}}>
+            {(()=>{const ect=[...new Set(cases.map(c=>c.type))];return [{k:"happy",l:"Happy flow",d:"Core successful journeys"},{k:"edge",l:"Edge cases",d:"Boundary values"},{k:"negative",l:"Negative cases",d:"Error handling"},{k:"all",l:"All of the above",d:"Full coverage"}].map(o=>{const isDisabled=ctypes.includes("all")&&o.k!=="all";const hasCases=o.k==="all"?false:ect.includes(o.k);const count=hasCases?cases.filter(c=>c.type===o.k).length:0;return <label key={o.k} style={{display:"flex",gap:10,padding:14,borderRadius:10,border:"1px solid "+(ctypes.includes(o.k)?"var(--color-text-info)":"var(--color-border-secondary)"),background:ctypes.includes(o.k)?"var(--color-background-info)":isDisabled?"var(--color-background-tertiary)":"var(--color-background-primary)",cursor:isDisabled?"not-allowed":"pointer",opacity:isDisabled?0.45:1}}>
               <input type="checkbox" checked={ctypes.includes(o.k)} disabled={isDisabled} onChange={()=>{if(o.k==="all"){setCtypes(p=>p.includes("all")?[]:["all"]);}else{setCtypes(p=>{const w=p.filter(x=>x!=="all"&&x!==o.k);return p.includes(o.k)?w:[...w,o.k];});}}} style={{marginTop:2}}/>
-              <div><div style={{fontWeight:500}}>{o.l}</div><div style={{fontSize:12,color:"var(--color-text-secondary)",marginTop:2}}>{o.d}</div></div>
-            </label>;})}
+              <div><div style={{fontWeight:500,display:"flex",alignItems:"center",gap:6}}>{o.l}{hasCases&&<span style={{fontSize:11,color:"var(--color-text-success)",fontWeight:400}}>✓ {count} cases</span>}</div><div style={{fontSize:12,color:"var(--color-text-secondary)",marginTop:2}}>{hasCases?"Will be kept — uncheck to remove":o.d}</div></div>
+            </label>;});})()}
           </div>
           <Btn v="primary" onClick={()=>ctypes.length>0&&doGen()} disabled={ctypes.length===0}>Generate test cases →</Btn>
         </div>}
@@ -677,7 +685,6 @@ function Workspace({member}) {
               <span style={{color:"var(--color-text-success)"}}>✓ {cases.filter(c=>c.status==="approved").length}</span>
               <span style={{color:"var(--color-text-danger)"}}>✗ {cases.filter(c=>c.status==="rejected").length}</span>
               <span style={{color:"var(--color-text-tertiary)"}}>⏳ {cases.filter(c=>c.status==="pending").length}</span>
-              {approved.length>0&&<button onClick={()=>exportCSV(cases,sid)} style={{...ghostBtn,padding:"4px 12px",fontSize:12}}>⬇ Export AIO CSV</button>}
             </div>
           </div>
           {cases.map(c=><div key={c.id} style={{...card,borderLeft:"3px solid "+(c.status==="approved"?"var(--color-text-success)":c.status==="rejected"?"var(--color-text-danger)":"var(--color-border-secondary)")}}>
