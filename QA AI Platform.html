@@ -209,7 +209,7 @@ function NotifBell({userId}) {
     <button onClick={()=>{setOpen(o=>!o);tick(x=>x+1);}} style={{padding:"6px 10px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",position:"relative",color:"var(--color-text-secondary)",fontSize:14}}>
       🔔{unread.length>0&&<span style={{position:"absolute",top:-6,right:-6,background:"var(--color-text-danger)",color:"#fff",borderRadius:20,padding:"0 5px",fontSize:10,minWidth:16,textAlign:"center"}}>{unread.length}</span>}
     </button>
-    {open&&<div style={{position:"absolute",right:0,top:42,width:300,background:"var(--color-background-secondary)",border:"1px solid var(--color-border-secondary)",borderRadius:12,zIndex:999,boxShadow:"0 8px 24px rgba(0,0,0,.14)"}}>
+    {open&&<div style={{position:"absolute",right:0,bottom:"calc(100% + 4px)",top:"auto",width:300,background:"var(--color-background-secondary)",border:"1px solid var(--color-border-secondary)",borderRadius:12,zIndex:999,boxShadow:"0 8px 24px rgba(0,0,0,.14)"}}>
       <div style={{padding:"12px 16px",borderBottom:"1px solid var(--color-border-tertiary)",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
         <div style={{fontWeight:500,fontSize:14}}>Notifications</div>
         {unread.length>0&&<button onClick={()=>{unread.forEach(n=>n.read=true);tick(x=>x+1);}} style={{padding:"3px 8px",borderRadius:6,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:12,color:"var(--color-text-secondary)"}}>Mark read</button>}
@@ -308,7 +308,7 @@ function ProjectsPage() {
         <div><Lbl>Jira email</Lbl><input style={inp} value={f.jiraEmail} onChange={e=>setF(p=>({...p,jiraEmail:e.target.value}))} placeholder="you@co.com"/></div>
         <div><Lbl>API token</Lbl><input type="password" style={inp} value={f.jiraToken} onChange={e=>setF(p=>({...p,jiraToken:e.target.value}))} placeholder="••••••"/></div>
       </div>
-      <div style={{display:"flex",gap:8}}><Btn v="primary" onClick={save}>{editing?"Save":"Add"}</Btn>{editing&&<button onClick={()=>setEditing(null)} style={{padding:"8px 18px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:14,color:"var(--color-text-secondary)"}}>Cancel</button>}</div>
+      <div style={{display:"flex",gap:8}}><Btn v="primary" onClick={save}>{editing?"Save":"Add"}</Btn>{editing&&<button onClick={()=>{setEditing(null);setF({name:"",jiraUrl:"",jiraProjKey:"",jiraToken:"",jiraEmail:"",platform:"web"});}} style={{padding:"8px 18px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:14,color:"var(--color-text-secondary)"}}>Cancel</button>}</div>
     </div>
     <div style={card}>{list.length===0?<div style={{color:"var(--color-text-tertiary)",fontSize:14}}>No projects.</div>:
       <table style={{width:"100%",borderCollapse:"collapse",fontSize:14}}>
@@ -433,7 +433,7 @@ function Workspace({member}) {
     try {
       const d=await callJira(proj,"GET","/issue/"+sid+"?fields=summary,description,labels,issuetype,status,assignee,priority");
       const flds=d.fields||{}; let desc="";
-      if(flds.description?.content) desc=flds.description.content.flatMap(b=>b.content||[]).map(n=>n.text||"").join(" ");
+      if(flds.description?.content) desc=flds.description.content.flatMap(b=>b.content||[]).map(n=>{if(n.type==="inlineCard"||n.type==="blockCard")return n.attrs?.url||"";const link=(n.marks||[]).find(m=>m.type==="link");return link?`${n.text||""} (${link.attrs?.href||""})`:n.text||"";}).join(" ");
       const sd={key:d.key,summary:flds.summary||sid,description:desc,labels:flds.labels||[],type:flds.issuetype?.name||"Story",status:flds.status?.name||"",assignee:flds.assignee?.displayName||"—",priority:flds.priority?.name||"Medium"};
       setSdata(sd); setPlatform(platDetect([...sd.labels,sd.summary,sd.description,proj.platform||""].join(" ")));
     } catch { setSdata({key:sid,summary:"Story "+sid,description:"",labels:[],type:"Story",status:"In Progress",assignee:"—",priority:"Medium",sim:true}); setPlatform(platDetect(proj.platform||"web")); }
@@ -445,10 +445,8 @@ function Workspace({member}) {
     const ctx=sdata&&!sdata.sim?`Story:"${sdata.summary}". ${sdata.description?.slice(0,400)||""}.`:"Simulate a realistic feature story.";
     try {
       const r=await callAI([{role:"user",content:`You are a senior QA engineer. Perform a thorough story review and GAP analysis.\n\nStory: ${sid} | Project: ${proj.jiraProjKey} | Platform: ${platform}\n${ctx}\n\nIMPORTANT: Write in plain text only. No markdown, no --- separators, no ** bold **, no > quotes, no tables, no backticks, no # headings. Use emoji + colon for section titles. Use numbered lists or dashes for items.\n\nStructure your response exactly like this:\n\n📋 Story Summary:\n[2-3 sentence summary]\n\n✅ Acceptance Criteria Review:\n[For each AC: ✓ Clear / ⚠ Needs clarification / ✗ Missing — with explanation]\n\n🔍 GAP Analysis:\n[List missing scenarios, boundary conditions, untested areas]\n\n⚠️ Risk Areas:\n[Each risk with rating: 🔴 High / 🟡 Medium / 🟢 Low]\n\n💡 Recommendations:\n[Actionable steps to improve story quality]\n\n📊 Test Coverage Estimate:\n[Breakdown: Happy flows / Edge cases / Negative cases / Automation %]`}],SYS,4000,"");
-      const isPermErr = /permission|approve the tool|atlassian|fetch.*jira|jira.*fetch/i.test(r);
       const cleanGap = t => t.replace(/^#{1,6}\s*/gm,"").replace(/\*{1,2}([^*]+)\*{1,2}/g,"$1").replace(/^[-─]{3,}\s*$/gm,"").replace(/^\|.*\|$/gm,"").replace(/^>\s*/gm,"").replace(/`([^`]*)`/g,"$1").trim();
-      if(isPermErr){ setGapText("⚠️ Please update your Jira API token to enable full analysis.\n\nGo to Admin → Projects → Edit \""+proj.name+"\" and fill in your Jira URL, email, and API token."); }
-      else { setGapText(cleanGap(r)); }
+      setGapText(cleanGap(r));
       setPhase("gap");
     } catch(e){alert(e.message);}
     setLoading(false);
@@ -457,9 +455,9 @@ function Workspace({member}) {
   const doGen=async()=>{
     setLoading(true); setLmsg("Generating test cases…");
     const tl=ctypes.includes("all")?"happy flow, edge cases, and negative cases":ctypes.join(", ");
-    const ctx=sdata&&!sdata.sim?`Story:"${sdata.summary}". ${sdata.description?.slice(0,300)||""}`:"";
+    const ctx=sdata&&!sdata.sim?`Story:"${sdata.summary}". Acceptance Criteria and Description: ${sdata.description?.slice(0,800)||""}`:"";
     try {
-      const r=await callAI([{role:"user",content:`Generate manual test cases for "${sid}" (${proj.jiraProjKey}). Types:${tl}. Platform:${platform}. ${ctx}\nReturn ONLY a JSON array:\n[{"id":"TC-001","title":"...","type":"happy|edge|negative","platform":"web|mobile","preconditions":"...","steps":["Step 1..."],"expected":"...","automatable":true}]\n8-12 cases. automatable:false for offline/camera/biometrics/hardware only.`}],SYS,5000,"");
+      const r=await callAI([{role:"user",content:`Generate comprehensive manual test cases for "${sid}" (${proj.jiraProjKey}). Types:${tl}. Platform:${platform}. ${ctx}\nIMPORTANT: Read every sentence in the Acceptance Criteria and description. Create at least one test case per acceptance criterion — do not skip or combine any. Cover all happy, edge, and negative scenarios explicitly stated.\nReturn ONLY a JSON array:\n[{"id":"TC-001","title":"...","type":"happy|edge|negative","platform":"web|mobile","preconditions":"...","steps":["Step 1..."],"expected":"...","automatable":true}]\n10-15 cases minimum. automatable:false for offline/camera/biometrics/hardware only.`}],SYS,6000,"");
       const parsed=JSON.parse(r.replace(/```json|```/g,"").trim()); setCases(parsed.map(c=>({...c,status:"pending"})));
     } catch { setCases([{id:"TC-001",title:"Submit with valid data",type:"happy",platform,preconditions:"User is logged in",steps:["Fill all required fields","Click Submit"],expected:"Success shown",status:"pending",automatable:true},{id:"TC-002",title:"Submit empty fields",type:"negative",platform,preconditions:"On form page",steps:["Leave fields empty","Click Submit"],expected:"Validation errors shown",status:"pending",automatable:true},{id:"TC-003",title:"Max character input",type:"edge",platform,preconditions:"On form page",steps:["Enter 255 chars in text field","Click Submit"],expected:"Accepted or clear error shown",status:"pending",automatable:true}]); }
     setPhase("ready"); setLoading(false);
@@ -472,13 +470,13 @@ function Workspace({member}) {
     try {
       if(platform==="mobile"){
         const [iosR,andR]=await Promise.all([
-          callAI([{role:"user",content:`iOS Appium WebdriverIO JS test file for ${sid}.\nCases:\n${cl}\nManual:\n${mc}\nUse describe/it blocks, iOS capabilities, accessibility id selectors, beforeEach/afterEach. CommonJS only.`}],SYS,5000,""),
-          callAI([{role:"user",content:`Android Appium WebdriverIO JS test file for ${sid}.\nCases:\n${cl}\nManual:\n${mc}\nUse describe/it blocks, Android capabilities, android selectors, beforeEach/afterEach. CommonJS only.`}],SYS,5000,"")
+          callAI([{role:"user",content:`Generate a COMPLETE runnable Appium WebdriverIO test file for iOS, story ${sid}. Output ONLY JavaScript code — no markdown fences, no explanations, no prose.\nTest cases:\n${cl}\nManual-only stubs (use it.skip):\n${mc}\nRequirements: describe/it blocks, XCUITest capabilities, accessibility id selectors, full test implementation with actual driver.$$ commands and assertions, beforeEach/afterEach hooks, CommonJS require syntax. Start the file directly with const/require statements.`}],SYS,6000,""),
+          callAI([{role:"user",content:`Generate a COMPLETE runnable Appium WebdriverIO test file for Android, story ${sid}. Output ONLY JavaScript code — no markdown fences, no explanations, no prose.\nTest cases:\n${cl}\nManual-only stubs (use it.skip):\n${mc}\nRequirements: describe/it blocks, UiAutomator2 capabilities, android UiSelector or accessibility id selectors, full test implementation with actual driver.$$ commands and assertions, beforeEach/afterEach hooks, CommonJS require syntax. Start the file directly with const/require statements.`}],SYS,6000,"")
         ]);
         setScripts(s=>({...s,ios:iosR,android:andR})); setTab("ios");
         setProjFiles({"wdio.ios.js":`exports.config={specs:["./tests/ios/*.js"],capabilities:[{platformName:"iOS","appium:automationName":"XCUITest"}],framework:"mocha",reporters:["spec"]};`,"wdio.android.js":`exports.config={specs:["./tests/android/*.js"],capabilities:[{platformName:"Android","appium:automationName":"UiAutomator2"}],framework:"mocha",reporters:["spec"]};`,[`tests/ios/${sid}.spec.js`]:iosR,[`tests/android/${sid}.spec.js`]:andR,"README.md":`# Appium Tests — ${sid}\n\nnpm install && npm run test:ios`});
       } else {
-        const r=await callAI([{role:"user",content:`Web UI automation test file for ${sid}.\nCases:\n${cl}\nManual:\n${mc}\nUse describe/test blocks, Page Object Model, getByRole/getByLabel/getByTestId locators, beforeEach/afterEach. CommonJS only.`}],SYS,5000,"");
+        const r=await callAI([{role:"user",content:`Generate a COMPLETE runnable Playwright test file for ${sid}. Output ONLY JavaScript code — no markdown fences, no explanations, no prose.\nTest cases:\n${cl}\nManual-only stubs (use test.skip):\n${mc}\nRequirements: const {test,expect}=require('@playwright/test'), Page Object Model class defined at the top, every test case must have a FULL implementation with page.goto/click/fill/locator calls and expect assertions, getByRole/getByLabel/getByTestId selectors, beforeEach/afterEach hooks, CommonJS require syntax. Start the file directly with the require statement.`}],SYS,6000,"");
         setScripts(s=>({...s,web:r})); setTab("web");
         setProjFiles({"test.config.js":`module.exports={testDir:"./tests",use:{baseURL:process.env.BASE_URL||"http://localhost:3000"}};`,[`tests/${sid}.spec.js`]:r,"README.md":`# Web Tests — ${sid}\n\nnpm install && npm test`});
       }
@@ -500,11 +498,20 @@ function Workspace({member}) {
   };
 
   const doJira=async()=>{
-    setLoading(true); setLmsg("Creating Jira sub-task…");
+    setLoading(true); setLmsg("Linking test cases to Jira story…");
+    const descContent=approved.map(c=>({type:"paragraph",content:[{type:"text",text:`${c.id}: ${c.title} | Steps: ${(c.steps||[]).join(" → ")} | Expected: ${c.expected||""}`}]}));
     try {
-      const body={fields:{project:{key:proj.jiraProjKey},parent:{key:sid},summary:"QA Test Cases — "+sid,description:{type:"doc",version:1,content:[{type:"paragraph",content:[{type:"text",text:approved.map(c=>c.id+": "+c.title).join("; ")}]}]},issuetype:{name:"Subtask"}}};
-      const res=await callJira(proj,"POST","/issue",body); setJKey(res.key||sid+"-ST");
-    } catch { setJKey(sid+"-ST"); }
+      let issueKey;
+      try {
+        const body={fields:{project:{key:proj.jiraProjKey},parent:{key:sid},summary:"QA Test Cases — "+sid,description:{type:"doc",version:1,content:descContent},issuetype:{name:"Sub-task"}}};
+        const res=await callJira(proj,"POST","/issue",body); issueKey=res.key;
+      } catch {
+        const body={fields:{project:{key:proj.jiraProjKey},summary:"QA Test Cases — "+sid,description:{type:"doc",version:1,content:descContent},issuetype:{name:"Story"}}};
+        const res=await callJira(proj,"POST","/issue",body); issueKey=res.key;
+        await callJira(proj,"POST","/issueLink",{type:{name:"relates to"},inwardIssue:{key:issueKey},outwardIssue:{key:sid}}).catch(()=>{});
+      }
+      setJKey(issueKey||sid+"-ST");
+    } catch(e) { alert("Failed to create Jira issue: "+e.message); setJKey(null); setLoading(false); return; }
     exportCSV(cases,sid); setPhase("jiraDone"); setLoading(false);
   };
 
@@ -549,7 +556,7 @@ function Workspace({member}) {
     const cur=WS_IDX[phase]??0; if(i>=cur) return;
     if(i===0){setPhase("input");return;}
     if(i===1&&sdata){setPhase(cases.length>0?"ready":"mode");return;}
-    if(i===2&&cases.length>0){setPhase("ready");return;}
+    if(i===2&&sdata){setCtypes([]);setPhase("ctype");return;}
     if(i===3&&cases.length>0){setPhase("review");return;}
     if(i===4&&approved.length>0){setPhase("jira");return;}
     if(i===5&&(scripts.web||scripts.ios)){setPhase("autoReady");return;}
@@ -626,7 +633,7 @@ function Workspace({member}) {
           <div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:16}}>Story: <b>{sid}</b></div><H2>Which test case types?</H2>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:20}}>
             {[{k:"happy",l:"Happy flow",d:"Core successful journeys"},{k:"edge",l:"Edge cases",d:"Boundary values"},{k:"negative",l:"Negative cases",d:"Error handling"},{k:"all",l:"All of the above",d:"Full coverage"}].map(o=><label key={o.k} style={{display:"flex",gap:10,padding:14,borderRadius:10,border:"1px solid "+(ctypes.includes(o.k)?"var(--color-text-info)":"var(--color-border-secondary)"),background:ctypes.includes(o.k)?"var(--color-background-info)":"var(--color-background-primary)",cursor:"pointer"}}>
-              <input type="checkbox" checked={ctypes.includes(o.k)} onChange={()=>setCtypes(p=>p.includes(o.k)?p.filter(x=>x!==o.k):[...p,o.k])} style={{marginTop:2}}/>
+              <input type="checkbox" checked={ctypes.includes(o.k)} onChange={()=>{if(o.k==="all"){setCtypes(p=>p.includes("all")?[]:["all"]);}else{setCtypes(p=>{const w=p.filter(x=>x!=="all"&&x!==o.k);return p.includes(o.k)?w:[...w,o.k];});}}} style={{marginTop:2}}/>
               <div><div style={{fontWeight:500}}>{o.l}</div><div style={{fontSize:12,color:"var(--color-text-secondary)",marginTop:2}}>{o.d}</div></div>
             </label>)}
           </div>
