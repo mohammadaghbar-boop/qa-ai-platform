@@ -642,7 +642,12 @@ function Workspace({member}) {
         {!loading&&phase==="review"&&<div>
           <div style={{...card,padding:"12px 20px",display:"flex",alignItems:"center",gap:16}}>
             <div style={{flex:1,fontSize:14}}>Story: <b>{sid}</b> · <Tag c={platform==="mobile"?"amber":"blue"}>{platform}</Tag></div>
-            <div style={{fontSize:13,display:"flex",gap:12}}><span style={{color:"var(--color-text-success)"}}>✓ {cases.filter(c=>c.status==="approved").length}</span><span style={{color:"var(--color-text-danger)"}}>✗ {cases.filter(c=>c.status==="rejected").length}</span><span style={{color:"var(--color-text-tertiary)"}}>⏳ {cases.filter(c=>c.status==="pending").length}</span></div>
+            <div style={{fontSize:13,display:"flex",gap:12,alignItems:"center"}}>
+              <span style={{color:"var(--color-text-success)"}}>✓ {cases.filter(c=>c.status==="approved").length}</span>
+              <span style={{color:"var(--color-text-danger)"}}>✗ {cases.filter(c=>c.status==="rejected").length}</span>
+              <span style={{color:"var(--color-text-tertiary)"}}>⏳ {cases.filter(c=>c.status==="pending").length}</span>
+              {approved.length>0&&<button onClick={()=>exportCSV(cases,sid)} style={{...ghostBtn,padding:"4px 12px",fontSize:12}}>⬇ Export AIO CSV</button>}
+            </div>
           </div>
           {cases.map(c=><div key={c.id} style={{...card,borderLeft:"3px solid "+(c.status==="approved"?"var(--color-text-success)":c.status==="rejected"?"var(--color-text-danger)":"var(--color-border-secondary)")}}>
             <div style={{display:"flex",gap:12}}>
