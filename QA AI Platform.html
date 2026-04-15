@@ -464,7 +464,10 @@ function Workspace({member}) {
     const ctx=sdata&&!sdata.sim?`Story: "${sdata.summary}"\nFull description and Acceptance Criteria:\n${sdata.description?.slice(0,2500)||"No description provided."}`:"Simulate a realistic feature story with multiple acceptance criteria.";
     try {
       const r=await callAI([{role:"user",content:`You are a QA engineer generating manual test cases for story "${sid}" (${proj.jiraProjKey}).\n\n${ctx}\n\nTest types to generate: ${tl}\nPlatform: ${platform}\n\nINSTRUCTIONS:\n1. Identify EVERY acceptance criterion (AC) from the description above.\n2. Generate at least 1-3 test cases per AC — do NOT skip, merge, or ignore any AC.\n3. For the selected types (${tl}), generate ALL possible scenarios — there is NO maximum limit on number of cases.\n4. Do not stop at a fixed number — cover everything explicitly stated in the ACs.\n5. If the user selected only one type (e.g. happy flow), still generate ALL possible happy flow cases for every AC.\n6. Mark automatable:false ONLY for offline/camera/biometrics/hardware tests.\n\nReturn ONLY a valid JSON array (no markdown, no explanation):\n[{"id":"TC-001","title":"...","type":"happy|edge|negative","platform":"web|mobile","preconditions":"...","steps":["Step 1","Step 2"],"expected":"...","automatable":true}]`}],SYS,8000,proj.anthropicKey||"");
-      const parsed=JSON.parse(r.replace(/```json|```/g,"").trim()); setCases(parsed.map(c=>({...c,status:"pending"})));
+      const clean=r.replace(/```json|```/g,"").trim();
+      const match=clean.match(/\[[\s\S]*\]/);
+      if(!match) throw new Error("AI returned text instead of JSON. Make sure server.js is running and the story has a description.");
+      const parsed=JSON.parse(match[0]); setCases(parsed.map(c=>({...c,status:"pending"})));
     } catch(e) { setLoading(false); alert("Failed to generate test cases:\n\n"+e.message); return; }
     setPhase("ready"); setLoading(false);
   };
