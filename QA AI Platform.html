@@ -177,11 +177,26 @@ function Banner({icon,title,sub,color="success",children}) {
   </div>;
 }
 function StepBar({steps,cur,onStepClick}) {
+  const [hov,setHov]=React.useState(null);
   return <div style={{display:"flex",alignItems:"center",marginBottom:22,flexWrap:"wrap",rowGap:6}}>
     {steps.map((s,i)=>{
-      const done=i<cur,active=i===cur;
+      const done=i<cur,active=i===cur,clickable=done&&!!onStepClick;
+      const isHov=hov===i&&clickable;
       return <div key={i} style={{display:"flex",alignItems:"center"}}>
-        <div onClick={done&&onStepClick?()=>onStepClick(i):undefined} style={{padding:"3px 10px",borderRadius:20,fontSize:12,fontWeight:500,display:"flex",alignItems:"center",gap:5,cursor:done&&onStepClick?"pointer":"default",background:done?"var(--color-background-success)":active?"var(--color-background-info)":"var(--color-background-tertiary)",color:done?"var(--color-text-success)":active?"var(--color-text-info)":"var(--color-text-tertiary)"}}>{done?"✓":i+1} {s}</div>
+        <div
+          onClick={clickable?()=>onStepClick(i):undefined}
+          onMouseEnter={()=>setHov(i)}
+          onMouseLeave={()=>setHov(null)}
+          title={clickable?"Go back to "+s:undefined}
+          style={{padding:"3px 10px",borderRadius:20,fontSize:12,fontWeight:500,display:"flex",alignItems:"center",gap:5,
+            cursor:clickable?"pointer":"default",
+            opacity:isHov?0.75:1,
+            textDecoration:isHov?"underline":"none",
+            background:done?"var(--color-background-success)":active?"var(--color-background-info)":"var(--color-background-tertiary)",
+            color:done?"var(--color-text-success)":active?"var(--color-text-info)":"var(--color-text-tertiary)",
+            transition:"opacity 0.15s"
+          }}
+        >{done?"↩":i+1} {s}</div>
         {i<steps.length-1&&<div style={{width:14,height:1,background:"var(--color-border-secondary)"}}/>}
       </div>;
     })}
@@ -562,9 +577,9 @@ function Workspace({member}) {
   const addStep=id=>setCases(cs=>cs.map(c=>c.id===id?{...c,steps:[...(c.steps||[]),"New step"]}:c));
   const reset=()=>{setPhase("input");setSid("");setSdata(null);setPlatform("web");setCtypes([]);setGapText("");setCases([]);setEditOn(false);setScripts({web:"",ios:"",android:""});setProjFiles(null);setExecLines([]);setResult(null);setJKey(null);setBugDone(null);setShowBugForm(false);setFixed(false);setChat(false);setShowAddCase(false);};
   const goToStep=i=>{
-    const cur=WS_IDX[phase]??0; if(i>=cur) return;
+    const cur=WS_IDX[phase]??0; if(i>=cur||phase==="running") return;
     if(i===0){setPhase("input");return;}
-    if(i===1&&sdata){setPhase(cases.length>0?"ready":"mode");return;}
+    if(i===1&&sdata){setPhase("mode");return;}
     if(i===2&&sdata){setCtypes([]);setPhase("ctype");return;}
     if(i===3&&cases.length>0){setPhase("review");return;}
     if(i===4&&approved.length>0){setPhase("jira");return;}
