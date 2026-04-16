@@ -152,7 +152,7 @@ function Loader({msg,sub}) {
     {sub&&<div style={{color:"var(--color-text-secondary)",fontSize:13}}>{sub}</div>}
   </div>;
 }
-function Confirm({icon,title,desc,onYes,onNo,yesLabel="Yes",noLabel="No, skip",danger}) {
+function Confirm({icon,title,desc,onYes,onNo,yesLabel="Yes",noLabel="No, skip",danger,noDanger}) {
   return <div style={{...card,borderLeft:"3px solid var(--color-text-info)"}}>
     <div style={{display:"flex",gap:14}}>
       {icon&&<div style={{fontSize:26,lineHeight:1,paddingTop:2}}>{icon}</div>}
@@ -161,7 +161,7 @@ function Confirm({icon,title,desc,onYes,onNo,yesLabel="Yes",noLabel="No, skip",d
         {desc&&<div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:14,lineHeight:1.6}}>{desc}</div>}
         <div style={{display:"flex",gap:10}}>
           <Btn v={danger?"danger":"primary"} onClick={onYes}>{yesLabel}</Btn>
-          <button onClick={onNo} style={{padding:"8px 18px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:14,fontWeight:500,color:"var(--color-text-secondary)"}}>{noLabel}</button>
+          {noDanger?<Btn v="danger" onClick={onNo}>{noLabel}</Btn>:<button onClick={onNo} style={{padding:"8px 18px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:14,fontWeight:500,color:"var(--color-text-secondary)"}}>{noLabel}</button>}
         </div>
       </div>
     </div>
@@ -436,7 +436,7 @@ function adfToText(node) {
 
 /* ─── Workspace ───────────────────────────────────────────────────────────── */
 const WS_STEPS = ["Story","Analysis","Generate","Review","Export","Automate","Project","Execute"];
-const WS_IDX = {input:0,mode:1,gap:1,ctype:2,ready:2,review:3,jira:4,jiraDone:4,auto:5,autoReady:5,vscode:6,vscodeDone:6,runAsk:7,running:7,result:7};
+const WS_IDX = {input:0,mode:1,gap:1,ctype:2,ready:2,review:3,jira:4,jiraDone:5,auto:5,autoReady:5,vscode:6,vscodeDone:6,runAsk:7,running:7,result:7};
 
 function Workspace({member}) {
   const asgn=DB.assignments.find(x=>x.memberId===member.id);
@@ -755,7 +755,7 @@ function Workspace({member}) {
         </div>}
 
         {!loading&&phase==="jiraDone"&&<div>
-          <Confirm icon="🤖" title="Generate automation scripts?" desc={fwName(platform)+" for "+autoable.length+" automatable cases."+(manOnly.length>0?" "+manOnly.length+" manual-only cases included as comments.":"")} onYes={doScripts} onNo={reset} yesLabel={"Yes, generate "+fwName(platform)} noLabel="Done"/>
+          <Confirm icon="🤖" title="Generate automation scripts?" desc={fwName(platform)+" for "+autoable.length+" automatable cases."+(manOnly.length>0?" "+manOnly.length+" manual-only cases included as comments.":"")} onYes={doScripts} onNo={reset} yesLabel={"Yes, generate "+fwName(platform)} noLabel="Done" noDanger/>
         </div>}
 
         {!loading&&phase==="autoReady"&&<div>
