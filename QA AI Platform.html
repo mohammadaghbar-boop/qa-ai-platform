@@ -700,7 +700,7 @@ function Workspace({member,refreshSaved,restoreTarget,clearRestore}) {
 
         {!loading&&phase==="gap"&&<div>
           <div style={card}><div style={{display:"flex",gap:8,marginBottom:14,alignItems:"center"}}><Tag c="blue">{sid}</Tag><span style={{fontWeight:500}}>GAP Analysis</span></div><div style={{whiteSpace:"pre-wrap",fontSize:14,lineHeight:1.85}}>{gapText}</div></div>
-          <Confirm icon="📝" title="Would you like to write test cases?" onYes={()=>setPhase("ctype")} onNo={reset} yesLabel="Yes, write test cases" noLabel="Done"/>
+          <Confirm icon="📝" title="Would you like to write test cases?" onYes={()=>setPhase("ctype")} onNo={reset} yesLabel="Yes, write test cases" noLabel="↩ Start over"/>
         </div>}
 
         {!loading&&phase==="ctype"&&<div style={card}>
