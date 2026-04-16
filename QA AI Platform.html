@@ -42,7 +42,7 @@
 const { useState, useRef, useEffect } = React;
 
 /* ─── DB ─────────────────────────────────────────────────────────────────── */
-const DB = { members:[], projects:[], assignments:[], sessions:[], bugs:[], notifs:[] };
+const DB = { members:[], projects:[], assignments:[], sessions:[], bugs:[], notifs:[], savedStories:[] };
 const STORAGE_KEY = "qa_platform_db";
 function loadDB() {
   try { const s=localStorage.getItem(STORAGE_KEY); if(s){ const p=JSON.parse(s); Object.keys(p).forEach(k=>{ if(Array.isArray(p[k])) DB[k]=p[k]; }); } } catch(e){}
@@ -453,6 +453,7 @@ function Workspace({member}) {
   const [fixed,setFixed]=useState(false); const [hist,setHist]=useState([]); const [chat,setChat]=useState(false);
   const [showAddCase,setShowAddCase]=useState(false); const [newCase,setNewCase]=useState({title:"",type:"happy",platform:"web",preconditions:"",steps:[""],expected:"",automatable:true});
   const [selectedForScripts,setSelectedForScripts]=useState([]); const [coverageText,setCoverageText]=useState(""); const [sessionBugs,setSessionBugs]=useState([]);
+  const [savedStories,setSavedStories]=useState(()=>[...DB.savedStories]); const [renamingId,setRenamingId]=useState(null); const [renameVal,setRenameVal]=useState("");
 
   const SYS=`You are an expert QA engineer. All story data is already provided in the user message — do NOT use any external tools, do NOT access Jira, Atlassian, or any other service. Work only with the text provided. Project:"${proj?.name}" Platform:${proj?.platform||"web"}.`;
   const approved=cases.filter(c=>c.status==="approved");
@@ -599,6 +600,20 @@ function Workspace({member}) {
   const editS=(id,si,v)=>setCases(cs=>cs.map(c=>{if(c.id!==id)return c;const s=[...c.steps];s[si]=v;return{...c,steps:s};}));
   const addStep=id=>setCases(cs=>cs.map(c=>c.id===id?{...c,steps:[...(c.steps||[]),"New step"]}:c));
   const reset=()=>{setPhase("input");setSid("");setSdata(null);setPlatform("web");setCtypes([]);setGapText("");setCases([]);setEditOn(false);setScripts({web:"",ios:"",android:""});setProjFiles(null);setExecLines([]);setResult(null);setJKey(null);setBugDone(null);setShowBugForm(false);setFixed(false);setChat(false);setShowAddCase(false);setSelectedForScripts([]);setCoverageText("");setSessionBugs([]);};
+  const saveAndReset=()=>{
+    if(sid&&sdata){
+      const snap={id:uid(),name:sid,sid,sdata,cases:[...cases],gapText,platform,ctypes:[...ctypes],scripts:{...scripts},result,sessionBugs:[...sessionBugs],coverageText,savedAt:Date.now()};
+      DB.savedStories.unshift(snap); saveDB(); setSavedStories([...DB.savedStories]);
+    }
+    reset();
+  };
+  const restoreStory=snap=>{
+    setSid(snap.sid);setSdata(snap.sdata);setPlatform(snap.platform);setCtypes(snap.ctypes||[]);setGapText(snap.gapText||"");setCases(snap.cases||[]);setScripts(snap.scripts||{web:"",ios:"",android:""});setResult(snap.result||null);setSessionBugs(snap.sessionBugs||[]);setCoverageText(snap.coverageText||"");setSelectedForScripts([]);setExecLines([]);setJKey(null);setBugDone(null);setShowBugForm(false);setFixed(false);setEditOn(false);setChat(false);setShowAddCase(false);
+    const lastPhase=snap.coverageText?"coverage":snap.result?"result":snap.cases?.some(c=>c.status==="approved")?"review":"ctype";
+    setPhase(lastPhase);
+  };
+  const deleteSnap=id=>{DB.savedStories=DB.savedStories.filter(s=>s.id!==id);saveDB();setSavedStories([...DB.savedStories]);};
+  const renameSnap=(id,name)=>{DB.savedStories=DB.savedStories.map(s=>s.id===id?{...s,name}:s);saveDB();setSavedStories([...DB.savedStories]);setRenamingId(null);};
   const goToStep=i=>{
     const cur=WS_IDX[phase]??0; if(i>=cur||phase==="running") return;
     if(i===0){setPhase("input");return;}
@@ -632,11 +647,39 @@ function Workspace({member}) {
       </div>
       <div style={{display:"flex",gap:8}}>
         {phase!=="input"&&<button onClick={()=>setChat(o=>!o)} style={ghostBtn}>{chat?"Hide chat":"🤖 AI Chat"}</button>}
-        {phase!=="input"&&<button onClick={reset} style={ghostBtn}>↩ New story</button>}
+        {phase!=="input"&&<button onClick={saveAndReset} style={ghostBtn}>↩ New story</button>}
       </div>
     </div>
     <StepBar steps={WS_STEPS} cur={WS_IDX[phase]??0} onStepClick={goToStep}/>
     <div style={{display:"flex",gap:16}}>
+      {savedStories.length>0&&<div style={{width:220,flexShrink:0}}>
+        <div style={{fontSize:12,fontWeight:600,color:"var(--color-text-secondary)",marginBottom:8,letterSpacing:"0.05em",textTransform:"uppercase"}}>Saved Stories</div>
+        <div style={{display:"flex",flexDirection:"column",gap:6}}>
+          {savedStories.map(s=><div key={s.id} style={{background:"var(--color-background-secondary)",border:"1px solid var(--color-border-secondary)",borderRadius:8,padding:"10px 12px",cursor:"pointer",transition:"border-color 0.15s"}}
+            onMouseEnter={e=>e.currentTarget.style.borderColor="var(--color-border-primary)"}
+            onMouseLeave={e=>e.currentTarget.style.borderColor="var(--color-border-secondary)"}>
+            {renamingId===s.id
+              ?<div style={{display:"flex",gap:4}} onClick={e=>e.stopPropagation()}>
+                  <input autoFocus style={{flex:1,fontSize:13,padding:"2px 6px",borderRadius:4,border:"1px solid var(--color-border-primary)",background:"var(--color-background-primary)",color:"var(--color-text-primary)"}} value={renameVal} onChange={e=>setRenameVal(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")renameSnap(s.id,renameVal||s.sid);if(e.key==="Escape")setRenamingId(null);}}/>
+                  <button onClick={()=>renameSnap(s.id,renameVal||s.sid)} style={{background:"var(--color-background-success)",border:"none",borderRadius:4,padding:"2px 6px",cursor:"pointer",color:"var(--color-text-success)",fontSize:12}}>✓</button>
+                </div>
+              :<div onClick={()=>restoreStory(s)}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+                    <span style={{fontSize:13,fontWeight:500,color:"var(--color-text-primary)",flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{s.name}</span>
+                    <div style={{display:"flex",gap:4,marginLeft:6}} onClick={e=>e.stopPropagation()}>
+                      <button title="Rename" onClick={()=>{setRenamingId(s.id);setRenameVal(s.name);}} style={{background:"none",border:"none",cursor:"pointer",color:"var(--color-text-tertiary)",fontSize:12,padding:"0 2px",lineHeight:1}}>✎</button>
+                      <button title="Delete" onClick={()=>deleteSnap(s.id)} style={{background:"none",border:"none",cursor:"pointer",color:"var(--color-text-danger)",fontSize:12,padding:"0 2px",lineHeight:1}}>✕</button>
+                    </div>
+                  </div>
+                  <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
+                    <Tag c="blue">{s.sid}</Tag>
+                    {s.cases?.length>0&&<Tag c={s.cases.filter(c=>c.status==="approved").length>0?"green":"amber"}>{s.cases.filter(c=>c.status==="approved").length} approved</Tag>}
+                    {s.coverageText&&<Tag c="blue">✓ Coverage</Tag>}
+                  </div>
+                </div>}
+          </div>)}
+        </div>
+      </div>}
       <div style={{flex:1,minWidth:0}}>
         {loading&&<Loader msg={lmsg}/>}
 
@@ -841,7 +884,7 @@ function Workspace({member}) {
           </div>}
           <div style={{display:"flex",gap:10,marginTop:4}}>
             <Btn v="primary" onClick={()=>setPhase("coverage")}>Coverage Report →</Btn>
-            <button onClick={reset} style={ghostBtn}>↩ New story</button>
+            <button onClick={saveAndReset} style={ghostBtn}>↩ New story</button>
           </div>
         </div>}
 
@@ -859,7 +902,7 @@ function Workspace({member}) {
           }} onNo={reset} yesLabel="Generate Report" noLabel="Skip — New Story"/>:
           <div>
             <div style={card}><div style={{display:"flex",gap:8,marginBottom:14,alignItems:"center"}}><Tag c="blue">{sid}</Tag><span style={{fontWeight:500}}>Coverage Report</span></div><div style={{whiteSpace:"pre-wrap",fontSize:14,lineHeight:1.85}}>{coverageText}</div></div>
-            <div style={{display:"flex",gap:10}}><button onClick={reset} style={ghostBtn}>↩ New story</button><button onClick={()=>dlFile(coverageText,"coverage-"+sid+".txt")} style={ghostBtn}>⬇ Download report</button></div>
+            <div style={{display:"flex",gap:10}}><button onClick={saveAndReset} style={ghostBtn}>↩ New story</button><button onClick={()=>dlFile(coverageText,"coverage-"+sid+".txt")} style={ghostBtn}>⬇ Download report</button></div>
           </div>}
         </div>}
       </div>
