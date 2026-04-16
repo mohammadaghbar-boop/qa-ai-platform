@@ -438,7 +438,7 @@ function adfToText(node) {
 const WS_STEPS = ["User Story","Analysis","Generate","Review","Export","Scripts","Execute","Bug Report","Coverage"];
 const WS_IDX = {input:0,mode:1,gap:1,ctype:2,ready:2,review:3,jira:4,scriptSelect:5,autoReady:5,runAsk:6,running:6,result:6,bugReport:7,coverage:8};
 
-function Workspace({member}) {
+function Workspace({member,refreshSaved,restoreTarget,clearRestore}) {
   const asgn=DB.assignments.find(x=>x.memberId===member.id);
   const proj=asgn?DB.projects.find(x=>x.id===asgn.projectId):null;
   const [phase,setPhase]=useState("input"); const [sid,setSid]=useState(""); const [sdata,setSdata]=useState(null);
@@ -454,7 +454,6 @@ function Workspace({member}) {
   const [showAddCase,setShowAddCase]=useState(false); const [newCase,setNewCase]=useState({title:"",type:"happy",platform:"web",preconditions:"",steps:[""],expected:"",automatable:true});
   const [selectedForScripts,setSelectedForScripts]=useState([]); const [coverageText,setCoverageText]=useState(""); const [sessionBugs,setSessionBugs]=useState([]);
   const [scriptCache,setScriptCache]=useState({});
-  const [savedStories,setSavedStories]=useState(()=>[...DB.savedStories]); const [renamingId,setRenamingId]=useState(null); const [renameVal,setRenameVal]=useState("");
 
   const SYS=`You are an expert QA engineer. All story data is already provided in the user message — do NOT use any external tools, do NOT access Jira, Atlassian, or any other service. Work only with the text provided. Project:"${proj?.name}" Platform:${proj?.platform||"web"}.`;
   const approved=cases.filter(c=>c.status==="approved");
@@ -613,8 +612,8 @@ function Workspace({member}) {
   const reset=()=>{setPhase("input");setSid("");setSdata(null);setPlatform("web");setCtypes([]);setGapText("");setCases([]);setEditOn(false);setScripts({web:"",ios:"",android:""});setProjFiles(null);setExecLines([]);setResult(null);setJKey(null);setBugDone(null);setShowBugForm(false);setFixed(false);setChat(false);setShowAddCase(false);setSelectedForScripts([]);setCoverageText("");setSessionBugs([]);};
   const saveAndReset=()=>{
     if(sid&&sdata){
-      const snap={id:uid(),name:sid,sid,sdata,cases:[...cases],gapText,platform,ctypes:[...ctypes],scripts:{...scripts},result,sessionBugs:[...sessionBugs],coverageText,savedAt:Date.now()};
-      DB.savedStories.unshift(snap); saveDB(); setSavedStories([...DB.savedStories]);
+      const snap={id:uid(),name:sdata?.summary||sid,sid,sdata,cases:[...cases],gapText,platform,ctypes:[...ctypes],scripts:{...scripts},result,sessionBugs:[...sessionBugs],coverageText,savedAt:Date.now()};
+      DB.savedStories.unshift(snap); saveDB(); if(refreshSaved)refreshSaved();
     }
     reset();
   };
@@ -623,8 +622,7 @@ function Workspace({member}) {
     const lastPhase=snap.coverageText?"coverage":snap.result?"result":snap.cases?.some(c=>c.status==="approved")?"review":"ctype";
     setPhase(lastPhase);
   };
-  const deleteSnap=id=>{DB.savedStories=DB.savedStories.filter(s=>s.id!==id);saveDB();setSavedStories([...DB.savedStories]);};
-  const renameSnap=(id,name)=>{DB.savedStories=DB.savedStories.map(s=>s.id===id?{...s,name}:s);saveDB();setSavedStories([...DB.savedStories]);setRenamingId(null);};
+  React.useEffect(()=>{if(restoreTarget){restoreStory(restoreTarget);if(clearRestore)clearRestore();}}, [restoreTarget]);
   const goToStep=i=>{
     const cur=WS_IDX[phase]??0; if(i>=cur||phase==="running") return;
     if(i===0){setPhase("input");return;}
@@ -658,39 +656,11 @@ function Workspace({member}) {
       </div>
       <div style={{display:"flex",gap:8}}>
         {phase!=="input"&&<button onClick={()=>setChat(o=>!o)} style={ghostBtn}>{chat?"Hide chat":"🤖 AI Chat"}</button>}
-        {phase!=="input"&&<button onClick={saveAndReset} style={ghostBtn}>↩ New story</button>}
+        {["scriptSelect","autoReady","runAsk","running","result","bugReport","coverage"].includes(phase)&&<button onClick={saveAndReset} style={ghostBtn}>↩ New story</button>}
       </div>
     </div>
     <StepBar steps={WS_STEPS} cur={WS_IDX[phase]??0} onStepClick={goToStep}/>
     <div style={{display:"flex",gap:16}}>
-      {savedStories.length>0&&<div style={{width:220,flexShrink:0}}>
-        <div style={{fontSize:12,fontWeight:600,color:"var(--color-text-secondary)",marginBottom:8,letterSpacing:"0.05em",textTransform:"uppercase"}}>Saved Stories</div>
-        <div style={{display:"flex",flexDirection:"column",gap:6}}>
-          {savedStories.map(s=><div key={s.id} style={{background:"var(--color-background-secondary)",border:"1px solid var(--color-border-secondary)",borderRadius:8,padding:"10px 12px",cursor:"pointer",transition:"border-color 0.15s"}}
-            onMouseEnter={e=>e.currentTarget.style.borderColor="var(--color-border-primary)"}
-            onMouseLeave={e=>e.currentTarget.style.borderColor="var(--color-border-secondary)"}>
-            {renamingId===s.id
-              ?<div style={{display:"flex",gap:4}} onClick={e=>e.stopPropagation()}>
-                  <input autoFocus style={{flex:1,fontSize:13,padding:"2px 6px",borderRadius:4,border:"1px solid var(--color-border-primary)",background:"var(--color-background-primary)",color:"var(--color-text-primary)"}} value={renameVal} onChange={e=>setRenameVal(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")renameSnap(s.id,renameVal||s.sid);if(e.key==="Escape")setRenamingId(null);}}/>
-                  <button onClick={()=>renameSnap(s.id,renameVal||s.sid)} style={{background:"var(--color-background-success)",border:"none",borderRadius:4,padding:"2px 6px",cursor:"pointer",color:"var(--color-text-success)",fontSize:12}}>✓</button>
-                </div>
-              :<div onClick={()=>restoreStory(s)}>
-                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
-                    <span style={{fontSize:13,fontWeight:500,color:"var(--color-text-primary)",flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{s.name}</span>
-                    <div style={{display:"flex",gap:4,marginLeft:6}} onClick={e=>e.stopPropagation()}>
-                      <button title="Rename" onClick={()=>{setRenamingId(s.id);setRenameVal(s.name);}} style={{background:"none",border:"none",cursor:"pointer",color:"var(--color-text-tertiary)",fontSize:12,padding:"0 2px",lineHeight:1}}>✎</button>
-                      <button title="Delete" onClick={()=>deleteSnap(s.id)} style={{background:"none",border:"none",cursor:"pointer",color:"var(--color-text-danger)",fontSize:12,padding:"0 2px",lineHeight:1}}>✕</button>
-                    </div>
-                  </div>
-                  <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
-                    <Tag c="blue">{s.sid}</Tag>
-                    {s.cases?.length>0&&<Tag c={s.cases.filter(c=>c.status==="approved").length>0?"green":"amber"}>{s.cases.filter(c=>c.status==="approved").length} approved</Tag>}
-                    {s.coverageText&&<Tag c="blue">✓ Coverage</Tag>}
-                  </div>
-                </div>}
-          </div>)}
-        </div>
-      </div>}
       <div style={{flex:1,minWidth:0}}>
         {loading&&<Loader msg={lmsg}/>}
 
@@ -963,6 +933,12 @@ const SESSION_KEY="qa_session";
 function loadSession(){try{const s=JSON.parse(localStorage.getItem(SESSION_KEY)||sessionStorage.getItem(SESSION_KEY));if(!s)return null;if(s.role==="admin")return s;if(s.role==="member"){const m=DB.members.find(x=>x.id===s.id);return m?{role:"member",member:m,id:m.id}:null;}return null;}catch{return null;}}
 function App() {
   const [user,setUser]=useState(loadSession); const [page,setPage]=useState(()=>{const u=loadSession();return u?.role==="admin"?"dashboard":"workspace";}); const [,tick]=useState(0);
+  const [savedStories,setSavedStories]=useState(()=>[...DB.savedStories]);
+  const [restoreTarget,setRestoreTarget]=useState(null);
+  const [renamingId,setRenamingId]=useState(null); const [renameVal,setRenameVal]=useState("");
+  const refreshSaved=()=>setSavedStories([...DB.savedStories]);
+  const deleteSnap=id=>{DB.savedStories=DB.savedStories.filter(s=>s.id!==id);saveDB();refreshSaved();};
+  const renameSnap=(id,name)=>{DB.savedStories=DB.savedStories.map(s=>s.id===id?{...s,name}:s);saveDB();refreshSaved();setRenamingId(null);};
   const handleLogin=(u,remember)=>{
     const data=u.role==="admin"?{role:"admin",id:"admin"}:{role:"member",id:u.id};
     if(remember){localStorage.setItem(SESSION_KEY,JSON.stringify(data));sessionStorage.removeItem(SESSION_KEY);}
@@ -988,6 +964,35 @@ function App() {
               <span>{n.icon}</span>{n.label}{ob>0&&<span style={{marginLeft:"auto",background:"var(--color-text-danger)",color:"#fff",borderRadius:20,padding:"0 6px",fontSize:11}}>{ob}</span>}
             </div>;})}
         </div>)}
+        {user.role==="member"&&savedStories.length>0&&<div style={{padding:"6px 12px 12px"}}>
+          <div style={{fontSize:11,fontWeight:500,color:"var(--color-text-tertiary)",textTransform:"uppercase",letterSpacing:"0.07em",padding:"10px 8px 6px"}}>Saved Stories</div>
+          <div style={{display:"flex",flexDirection:"column",gap:5}}>
+            {savedStories.map(s=><div key={s.id} style={{borderRadius:8,padding:"9px 10px",background:"var(--color-background-primary)",border:"1px solid var(--color-border-tertiary)",cursor:renamingId===s.id?"default":"pointer",transition:"border-color 0.15s,box-shadow 0.15s"}}
+              onMouseEnter={e=>{if(renamingId!==s.id){e.currentTarget.style.borderColor="var(--color-border-primary)";e.currentTarget.style.boxShadow="0 1px 4px rgba(0,0,0,0.08)";}}}
+              onMouseLeave={e=>{e.currentTarget.style.borderColor="var(--color-border-tertiary)";e.currentTarget.style.boxShadow="none";}}
+              onClick={()=>{if(renamingId!==s.id)setRestoreTarget(s);}}>
+              {renamingId===s.id
+                ?<div style={{display:"flex",gap:4}} onClick={e=>e.stopPropagation()}>
+                    <input autoFocus style={{flex:1,fontSize:12,padding:"3px 7px",borderRadius:5,border:"1px solid var(--color-border-primary)",background:"var(--color-background-secondary)",color:"var(--color-text-primary)",outline:"none"}} value={renameVal} onChange={e=>setRenameVal(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")renameSnap(s.id,renameVal||s.sid);if(e.key==="Escape")setRenamingId(null);}}/>
+                    <button onClick={()=>renameSnap(s.id,renameVal||s.sid)} style={{background:"none",border:"none",cursor:"pointer",color:"var(--color-text-success)",fontSize:14,padding:"0 2px"}}>✓</button>
+                  </div>
+                :<div>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:5}}>
+                      <span style={{fontSize:12,fontWeight:500,color:"var(--color-text-primary)",flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",lineHeight:1.35}}>{s.name}</span>
+                      <div style={{display:"flex",gap:1,marginLeft:5,flexShrink:0,opacity:0.7}} onClick={e=>e.stopPropagation()}>
+                        <button title="Rename" onClick={()=>{setRenamingId(s.id);setRenameVal(s.name);}} style={{background:"none",border:"none",cursor:"pointer",color:"var(--color-text-tertiary)",fontSize:11,padding:"2px 4px",borderRadius:4,lineHeight:1}}>✎</button>
+                        <button title="Delete" onClick={()=>deleteSnap(s.id)} style={{background:"none",border:"none",cursor:"pointer",color:"var(--color-text-danger)",fontSize:11,padding:"2px 4px",borderRadius:4,lineHeight:1}}>✕</button>
+                      </div>
+                    </div>
+                    <div style={{display:"flex",gap:3,flexWrap:"wrap"}}>
+                      <Tag c="blue">{s.sid}</Tag>
+                      {(s.cases?.filter(c=>c.status==="approved").length||0)>0&&<Tag c="green">{s.cases.filter(c=>c.status==="approved").length} TC</Tag>}
+                      {s.coverageText&&<Tag c="blue">✓</Tag>}
+                    </div>
+                  </div>}
+            </div>)}
+          </div>
+        </div>}
       </div>
       <div style={{padding:"12px 20px",borderTop:"1px solid var(--color-border-tertiary)"}}>
         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
@@ -1003,7 +1008,7 @@ function App() {
       {user.role==="admin"&&page==="projects"&&<ProjectsPage/>}
       {user.role==="admin"&&page==="assign"&&<AssignmentsPage/>}
       {user.role==="admin"&&page==="bugs"&&<BugsPage/>}
-      {user.role==="member"&&page==="workspace"&&<Workspace member={user.member}/>}
+      {user.role==="member"&&page==="workspace"&&<Workspace member={user.member} refreshSaved={refreshSaved} restoreTarget={restoreTarget} clearRestore={()=>setRestoreTarget(null)}/>}
     </div>
   </div>;
 }
