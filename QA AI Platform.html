@@ -837,7 +837,7 @@ function LoginPage({onLogin}) {
       <div style={{fontSize:22,fontWeight:500,marginBottom:2}}>QA AI Platform</div>
       <div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:24}}>AI-powered QA workflow management</div>
       <div style={{display:"flex",gap:8,marginBottom:20}}>
-        {["admin","member"].map(r=><button key={r} onClick={()=>{setMode(r);setErr("");}} style={{flex:1,padding:"8px 0",borderRadius:8,border:r===mode?"none":"1px solid var(--color-border-secondary)",background:r===mode?"var(--color-text-info)":"transparent",color:r===mode?"#fff":"var(--color-text-secondary)",cursor:"pointer",fontSize:14,fontWeight:500}}>{r==="admin"?"QA Lead":"Team Member"}</button>)}
+        {["admin","member"].map(r=><button key={r} onClick={()=>{setMode(r);setErr("");setEmail("");setPass("");}} style={{flex:1,padding:"8px 0",borderRadius:8,border:r===mode?"none":"1px solid var(--color-border-secondary)",background:r===mode?"var(--color-text-info)":"transparent",color:r===mode?"#fff":"var(--color-text-secondary)",cursor:"pointer",fontSize:14,fontWeight:500}}>{r==="admin"?"QA Lead":"Team Member"}</button>)}
       </div>
       <Lbl>{mode==="admin"?"Username":"Email"}</Lbl>
       <input style={{...inp,marginBottom:12}} value={email} onChange={e=>setEmail(e.target.value)} placeholder={mode==="admin"?"admin":"jane@company.com"}/>
