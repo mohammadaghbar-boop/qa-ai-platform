@@ -453,6 +453,7 @@ function Workspace({member}) {
   const [fixed,setFixed]=useState(false); const [hist,setHist]=useState([]); const [chat,setChat]=useState(false);
   const [showAddCase,setShowAddCase]=useState(false); const [newCase,setNewCase]=useState({title:"",type:"happy",platform:"web",preconditions:"",steps:[""],expected:"",automatable:true});
   const [selectedForScripts,setSelectedForScripts]=useState([]); const [coverageText,setCoverageText]=useState(""); const [sessionBugs,setSessionBugs]=useState([]);
+  const [scriptCache,setScriptCache]=useState({});
   const [savedStories,setSavedStories]=useState(()=>[...DB.savedStories]); const [renamingId,setRenamingId]=useState(null); const [renameVal,setRenameVal]=useState("");
 
   const SYS=`You are an expert QA engineer. All story data is already provided in the user message — do NOT use any external tools, do NOT access Jira, Atlassian, or any other service. Work only with the text provided. Project:"${proj?.name}" Platform:${proj?.platform||"web"}.`;
@@ -511,23 +512,33 @@ function Workspace({member}) {
   };
 
   const doScripts=async()=>{
+    const selKey=[...selectedForScripts].sort().join(",");
+    // Cache hit — same selection already generated, skip AI entirely
+    if(scriptCache[selKey]){
+      const hit=scriptCache[selKey];
+      setScripts(hit.scripts); setTab(hit.tab); setProjFiles(hit.projFiles); setFixed(false); setPhase("autoReady");
+      return;
+    }
     setLoading(true); setLmsg("Generating "+fwName(platform)+" scripts…");
     const selCases=cases.filter(c=>selectedForScripts.includes(c.id));
     const cl=selCases.map(c=>`${c.id}: ${c.title}\n  Steps: ${(c.steps||[]).join(" → ")}\n  Expected: ${c.expected}`).join("\n\n");
     const mc="";
     try {
+      let newScripts,newTab,newFiles;
       if(platform==="mobile"){
         const [iosR,andR]=await Promise.all([
           callAI([{role:"user",content:`Generate a COMPLETE runnable Appium WebdriverIO test file for iOS, story ${sid}. Output ONLY JavaScript code — no markdown fences, no explanations, no prose.\nTest cases:\n${cl}\nManual-only stubs (use it.skip):\n${mc}\nRequirements: describe/it blocks, XCUITest capabilities, accessibility id selectors, full test implementation with actual driver.$$ commands and assertions, beforeEach/afterEach hooks, CommonJS require syntax. Start the file directly with const/require statements.`}],SYS,6000,""),
           callAI([{role:"user",content:`Generate a COMPLETE runnable Appium WebdriverIO test file for Android, story ${sid}. Output ONLY JavaScript code — no markdown fences, no explanations, no prose.\nTest cases:\n${cl}\nManual-only stubs (use it.skip):\n${mc}\nRequirements: describe/it blocks, UiAutomator2 capabilities, android UiSelector or accessibility id selectors, full test implementation with actual driver.$$ commands and assertions, beforeEach/afterEach hooks, CommonJS require syntax. Start the file directly with const/require statements.`}],SYS,6000,"")
         ]);
-        setScripts(s=>({...s,ios:iosR,android:andR})); setTab("ios");
-        setProjFiles({"wdio.ios.js":`exports.config={specs:["./tests/ios/*.js"],capabilities:[{platformName:"iOS","appium:automationName":"XCUITest"}],framework:"mocha",reporters:["spec"]};`,"wdio.android.js":`exports.config={specs:["./tests/android/*.js"],capabilities:[{platformName:"Android","appium:automationName":"UiAutomator2"}],framework:"mocha",reporters:["spec"]};`,[`tests/ios/${sid}.spec.js`]:iosR,[`tests/android/${sid}.spec.js`]:andR,"README.md":`# Appium Tests — ${sid}\n\nnpm install && npm run test:ios`});
+        newScripts={ios:iosR,android:andR,web:""}; newTab="ios";
+        newFiles={"wdio.ios.js":`exports.config={specs:["./tests/ios/*.js"],capabilities:[{platformName:"iOS","appium:automationName":"XCUITest"}],framework:"mocha",reporters:["spec"]};`,"wdio.android.js":`exports.config={specs:["./tests/android/*.js"],capabilities:[{platformName:"Android","appium:automationName":"UiAutomator2"}],framework:"mocha",reporters:["spec"]};`,[`tests/ios/${sid}.spec.js`]:iosR,[`tests/android/${sid}.spec.js`]:andR,"README.md":`# Appium Tests — ${sid}\n\nnpm install && npm run test:ios`};
       } else {
         const r=await callAI([{role:"user",content:`Generate a COMPLETE runnable Playwright test file for ${sid}. Output ONLY JavaScript code — no markdown fences, no explanations, no prose.\nTest cases:\n${cl}\nManual-only stubs (use test.skip):\n${mc}\nRequirements: const {test,expect}=require('@playwright/test'), Page Object Model class defined at the top, every test case must have a FULL implementation with page.goto/click/fill/locator calls and expect assertions, getByRole/getByLabel/getByTestId selectors, beforeEach/afterEach hooks, CommonJS require syntax. Start the file directly with the require statement.`}],SYS,6000,"");
-        setScripts(s=>({...s,web:r})); setTab("web");
-        setProjFiles({"test.config.js":`module.exports={testDir:"./tests",use:{baseURL:process.env.BASE_URL||"http://localhost:3000"}};`,[`tests/${sid}.spec.js`]:r,"README.md":`# Web Tests — ${sid}\n\nnpm install && npm test`});
+        newScripts={web:r,ios:"",android:""}; newTab="web";
+        newFiles={"test.config.js":`module.exports={testDir:"./tests",use:{baseURL:process.env.BASE_URL||"http://localhost:3000"}};`,[`tests/${sid}.spec.js`]:r,"README.md":`# Web Tests — ${sid}\n\nnpm install && npm test`};
       }
+      setScripts(newScripts); setTab(newTab); setProjFiles(newFiles);
+      setScriptCache(prev=>({...prev,[selKey]:{scripts:newScripts,tab:newTab,projFiles:newFiles}}));
       setFixed(false); setPhase("autoReady");
     } catch(e){alert(e.message);}
     setLoading(false);
@@ -785,7 +796,9 @@ function Workspace({member}) {
             <div style={{display:"flex",gap:8}}><Btn v="primary" onClick={addManualCase}>Add case</Btn><button onClick={()=>setShowAddCase(false)} style={ghostBtn}>Cancel</button></div>
           </div>}
           <div style={{display:"flex",gap:10,marginBottom:16}}>
-            <Btn v="primary" onClick={()=>{setCases(cs=>cs.map(c=>c.status==="pending"?{...c,status:"approved"}:c));setPhase("jira");}}>✓ Approve All & Continue</Btn>
+            {cases.filter(c=>c.status==="pending").length>0
+              ?<Btn v="primary" onClick={()=>{setCases(cs=>cs.map(c=>c.status==="pending"?{...c,status:"approved"}:c));setPhase("jira");}}>✓ Approve {cases.filter(c=>c.status==="pending").length} Remaining & Continue</Btn>
+              :<Btn v="primary" onClick={()=>setPhase("jira")}>Continue →</Btn>}
           </div>
         </div>}
 
