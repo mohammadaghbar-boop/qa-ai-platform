@@ -828,17 +828,19 @@ function Workspace({member}) {
               try{const res=await callJira(proj,"POST","/issue",{fields:{project:{key:proj.jiraProjKey},summary:bf.summary,description:{type:"doc",version:1,content:[{type:"paragraph",content:[{type:"text",text:bf.desc||"See execution log."}]}]},issuetype:{name:"Bug"},priority:{name:bf.sev}}});jRef=res.key;}catch{}
               const bug={bid:"BUG-"+uid().toUpperCase(),sid,summary:bf.summary,sev:bf.sev,who:member.name,jKey:jRef,status:"Open"};
               DB.bugs.push(bug);saveDB();pushNotif("admin","🐛 "+bug.bid+(jRef?" ("+jRef+")":"")+" filed for "+sid);
+              const bugCase={id:bug.bid,title:bf.summary,type:"negative",platform,preconditions:"",steps:bf.desc?bf.desc.split("\n").filter(Boolean):["Reproduce the bug"],expected:"Bug is fixed and feature works as expected",automatable:false,status:"approved",fromBug:true,sev:bf.sev};
+              setCases(cs=>[...cs,bugCase]);
               setSessionBugs(p=>[...p,bug]);setBf({summary:"",sev:"High",desc:""});setLoading(false);
             }}>Submit Bug</Btn>
           </div>
           {sessionBugs.length>0&&<div style={card}>
             <H2>Bugs filed this session</H2>
             {sessionBugs.map(b=><div key={b.bid} style={{display:"flex",gap:10,alignItems:"center",padding:"6px 0",borderBottom:"1px solid var(--color-border-tertiary)"}}>
-              <Tag c="red">{b.bid}</Tag><span style={{flex:1,fontSize:13}}>{b.summary}</span><Tag c={b.sev==="Critical"||b.sev==="High"?"red":"amber"}>{b.sev}</Tag>{b.jKey&&<Tag c="green">{b.jKey}</Tag>}
+              <Tag c="red">{b.bid}</Tag><span style={{flex:1,fontSize:13}}>{b.summary}</span><Tag c={b.sev==="Critical"||b.sev==="High"?"red":"amber"}>{b.sev}</Tag>{b.jKey&&<Tag c="green">{b.jKey}</Tag>}<Tag c="blue">→ Added as TC</Tag>
             </div>)}
           </div>}
           <div style={{display:"flex",gap:10,marginTop:4}}>
-            <Btn v="primary" onClick={()=>setPhase("coverage")}>Next: Coverage Report →</Btn>
+            <Btn v="primary" onClick={()=>setPhase("coverage")}>Coverage Report →</Btn>
             <button onClick={reset} style={ghostBtn}>↩ New story</button>
           </div>
         </div>}
