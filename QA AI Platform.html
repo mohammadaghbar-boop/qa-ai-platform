@@ -249,12 +249,12 @@ function NotifBell({userId}) {
 /* ─── AI Chat ─────────────────────────────────────────────────────────────── */
 function AIChat({proj,sid,sdata}) {
   const [msgs,setMsgs]=useState([{role:"assistant",text:"Hi! Ask me anything about QA, this story, or best practices."}]);
-  const [inp,setInp]=useState(""); const [busy,setBusy]=useState(false);
+  const [msg,setMsg]=useState(""); const [busy,setBusy]=useState(false);
   const bot=useRef(null);
   useEffect(()=>{bot.current?.scrollIntoView({behavior:"smooth"});},[msgs]);
   const send=async()=>{
-    if(!inp.trim()||busy) return;
-    const u=inp.trim(); setInp(""); setMsgs(m=>[...m,{role:"user",text:u}]); setBusy(true);
+    if(!msg.trim()||busy) return;
+    const u=msg.trim(); setMsg(""); setMsgs(m=>[...m,{role:"user",text:u}]); setBusy(true);
     const hist=msgs.map(m=>({role:m.role==="assistant"?"assistant":"user",content:m.text}));
     try {
       const sys=`QA expert. Project:${proj?.name}, Key:${proj?.jiraProjKey}${sid?", Story:"+sid:""}. Be concise and helpful.`;
@@ -272,7 +272,7 @@ function AIChat({proj,sid,sdata}) {
       <div ref={bot}/>
     </div>
     <div style={{display:"flex",gap:8,paddingTop:10,borderTop:"1px solid var(--color-border-tertiary)"}}>
-      <input style={{...inp,flex:1,fontSize:13}} value={inp} onChange={e=>setInp(e.target.value)} onKeyDown={e=>e.key==="Enter"&&!e.shiftKey&&send()} placeholder="Ask anything…"/>
+      <input style={{...inp,flex:1,fontSize:13}} value={msg} onChange={e=>setMsg(e.target.value)} onKeyDown={e=>e.key==="Enter"&&!e.shiftKey&&send()} placeholder="Ask anything…"/>
       <Btn v="primary" onClick={send} disabled={busy}>Send</Btn>
     </div>
   </div>;
