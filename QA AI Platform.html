@@ -493,15 +493,16 @@ function Workspace({member}) {
     const newTypes=selectedTypes.filter(t=>!existingTypes.includes(t));
     const keptCases=cases.filter(c=>keepTypes.includes(c.type));
     if(newTypes.length===0){setCases(keptCases);setPhase("ready");setLoading(false);return;}
-    setLmsg("Generating "+newTypes.join(", ")+" cases…");
-    const tl=newTypes.join(", ");
-    const ctx=sdata&&!sdata.sim?`Story: "${sdata.summary}"\nFull description and Acceptance Criteria:\n${sdata.description?.slice(0,2500)||"No description provided."}`:"Simulate a realistic feature story with multiple acceptance criteria.";
+    setLmsg("Generating "+newTypes.map(t=>t+" flow").join(", ")+" in parallel…");
+    const ctx=sdata&&!sdata.sim?`Story: "${sdata.summary}"\nAcceptance Criteria:\n${sdata.description?.slice(0,2500)||"No description provided."}`:"Simulate a realistic feature story with clear acceptance criteria.";
     try {
-      const r=await callAI([{role:"user",content:`You are a QA engineer generating manual test cases for story "${sid}" (${proj.jiraProjKey}).\n\n${ctx}\n\nTest types to generate: ${tl}\nPlatform: ${platform}\n\nINSTRUCTIONS:\n1. Identify EVERY acceptance criterion (AC) from the description above.\n2. Generate at least 1-3 test cases per AC — do NOT skip, merge, or ignore any AC.\n3. For the selected types (${tl}), generate ALL possible scenarios — there is NO maximum limit on number of cases.\n4. Do not stop at a fixed number — cover everything explicitly stated in the ACs.\n5. Mark automatable:false ONLY for offline/camera/biometrics/hardware tests.\n\nReturn ONLY a valid JSON array (no markdown, no explanation):\n[{"id":"TC-001","title":"...","type":"happy|edge|negative","platform":"web|mobile","preconditions":"...","steps":["Step 1","Step 2"],"expected":"...","automatable":true}]`}],SYS,8000,proj.anthropicKey||"");
-      const clean=r.replace(/```json|```/g,"").trim();
-      const match=clean.match(/\[[\s\S]*\]/);
-      if(!match) throw new Error("AI returned text instead of JSON. Make sure server.js is running and the story has a description.");
-      const newCases=JSON.parse(match[0]).map(c=>({...c,status:"pending"}));
+      const requests=newTypes.map(type=>callAI([{role:"user",content:`You are a QA engineer. Generate up to 6 ${type} test cases for story "${sid}" (${proj.jiraProjKey}). Platform: ${platform}.\n\n${ctx}\n\nINSTRUCTIONS:\n1. Cover the most important ${type} scenarios from the ACs above.\n2. Maximum 6 cases — focus on quality over quantity.\n3. Mark automatable:false ONLY for offline/camera/biometrics/hardware tests.\n\nReturn ONLY a valid JSON array (no markdown, no explanation):\n[{"id":"TC-001","title":"...","type":"${type}","platform":"${platform}","preconditions":"...","steps":["Step 1","Step 2"],"expected":"...","automatable":true}]`}],SYS,3000,proj.anthropicKey||""));
+      const results=await Promise.all(requests);
+      const newCases=results.flatMap((r,i)=>{
+        const match=r.replace(/```json|```/g,"").trim().match(/\[[\s\S]*\]/);
+        if(!match) throw new Error("Invalid response for "+newTypes[i]+" cases. Make sure server.js is running.");
+        return JSON.parse(match[0]).map(c=>({...c,type:newTypes[i],status:"pending"}));
+      });
       setCases([...keptCases,...newCases]);
     } catch(e){setLoading(false);alert("Failed to generate test cases:\n\n"+e.message);return;}
     setPhase("ready");setLoading(false);
