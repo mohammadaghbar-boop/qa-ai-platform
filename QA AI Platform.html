@@ -250,8 +250,8 @@ function NotifBell({userId}) {
 function AIChat({proj,sid,sdata}) {
   const [msgs,setMsgs]=useState([{role:"assistant",text:"Hi! Ask me anything about QA, this story, or best practices."}]);
   const [msg,setMsg]=useState(""); const [busy,setBusy]=useState(false);
-  const bot=useRef(null);
-  useEffect(()=>{bot.current?.scrollIntoView({behavior:"smooth"});},[msgs]);
+  const msgsRef=useRef(null);
+  useEffect(()=>{if(msgsRef.current) msgsRef.current.scrollTop=msgsRef.current.scrollHeight;},[msgs]);
   const send=async()=>{
     if(!msg.trim()||busy) return;
     const u=msg.trim(); setMsg(""); setMsgs(m=>[...m,{role:"user",text:u}]); setBusy(true);
@@ -264,12 +264,11 @@ function AIChat({proj,sid,sdata}) {
     setBusy(false);
   };
   return <div style={{display:"flex",flexDirection:"column",height:"100%"}}>
-    <div style={{flex:1,overflow:"auto",display:"flex",flexDirection:"column",gap:10,paddingBottom:8}}>
+    <div ref={msgsRef} style={{flex:1,overflow:"auto",display:"flex",flexDirection:"column",gap:10,paddingBottom:8}}>
       {msgs.map((m,i)=><div key={i} style={{display:"flex",justifyContent:m.role==="user"?"flex-end":"flex-start"}}>
         <div style={{maxWidth:"85%",padding:"10px 14px",borderRadius:12,fontSize:13,lineHeight:1.65,whiteSpace:"pre-wrap",background:m.role==="user"?"var(--color-text-info)":"var(--color-background-primary)",color:m.role==="user"?"#fff":"var(--color-text-primary)",border:m.role==="assistant"?"1px solid var(--color-border-tertiary)":"none"}}>{m.text}</div>
       </div>)}
       {busy&&<div style={{alignSelf:"flex-start",padding:"10px 14px",borderRadius:12,background:"var(--color-background-primary)",border:"1px solid var(--color-border-tertiary)",fontSize:13,color:"var(--color-text-tertiary)"}}>Thinking…</div>}
-      <div ref={bot}/>
     </div>
     <div style={{display:"flex",gap:8,paddingTop:10,borderTop:"1px solid var(--color-border-tertiary)"}}>
       <input style={{...inp,flex:1,fontSize:13}} value={msg} onChange={e=>setMsg(e.target.value)} onKeyDown={e=>e.key==="Enter"&&!e.shiftKey&&send()} placeholder="Ask anything…"/>
