@@ -469,8 +469,8 @@ function Workspace({member}) {
       const flds=d.fields||{}; let desc="";
       if(flds.description) desc=adfToText(flds.description).trim();
       const sd={key:d.key,summary:flds.summary||sid,description:desc,labels:flds.labels||[],type:flds.issuetype?.name||"Story",status:flds.status?.name||"",assignee:flds.assignee?.displayName||"—",priority:flds.priority?.name||"Medium"};
-      setSdata(sd); setPlatform(platDetect([...sd.labels,sd.summary,sd.description,proj.platform||""].join(" ")));
-    } catch { setSdata({key:sid,summary:"Story "+sid,description:"",labels:[],type:"Story",status:"In Progress",assignee:"—",priority:"Medium",sim:true}); setPlatform(platDetect(proj.platform||"web")); }
+      setSdata(sd); const pp=proj.platform||"web"; setPlatform(pp==="both"?"web":pp);
+    } catch { setSdata({key:sid,summary:"Story "+sid,description:"",labels:[],type:"Story",status:"In Progress",assignee:"—",priority:"Medium",sim:true}); const pp=proj.platform||"web"; setPlatform(pp==="both"?"web":pp); }
     setPhase("mode"); setLoading(false);
   };
 
@@ -660,6 +660,7 @@ function Workspace({member}) {
             </div>
             {sdata.description&&<div style={{fontSize:13,marginTop:6,lineHeight:1.5}}>{sdata.description.slice(0,200)}</div>}
           </div>}
+          {proj.platform==="both"&&<div style={{...card,marginBottom:12}}><H2>Select platform for this story</H2><div style={{display:"flex",gap:12,marginTop:12}}>{[{v:"web",icon:"🌐",label:"Web",sub:"Playwright"},{v:"mobile",icon:"📱",label:"Mobile",sub:"Appium"}].map(o=><button key={o.v} onClick={()=>setPlatform(o.v)} style={{flex:1,padding:16,borderRadius:12,border:"2px solid "+(platform===o.v?"var(--color-text-info)":"var(--color-border-secondary)"),background:platform===o.v?"var(--color-background-info)":"var(--color-background-primary)",cursor:"pointer",textAlign:"left"}}><div style={{fontSize:22,marginBottom:4}}>{o.icon}</div><div style={{fontWeight:500,fontSize:14}}>{o.label}</div><div style={{fontSize:12,color:"var(--color-text-secondary)",marginTop:2}}>{o.sub}</div></button>)}</div></div>}
           <div style={card}><div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:16}}>Story: <b>{sid}</b></div><H2>What would you like to do?</H2>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
               {[{icon:"🔍",title:"Story review + GAP analysis",desc:"Analyze ACs for gaps and missing scenarios.",fn:doGap},{icon:"📝",title:"Write test cases",desc:"Generate structured manual test cases.",fn:()=>setPhase("ctype")}].map(o=><button key={o.title} onClick={o.fn} style={{padding:20,borderRadius:12,border:"1px solid var(--color-border-secondary)",background:"var(--color-background-primary)",cursor:"pointer",textAlign:"left"}}>
