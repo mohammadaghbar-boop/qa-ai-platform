@@ -763,7 +763,7 @@ function Workspace({member}) {
             <div style={{display:"flex",justifyContent:"space-between",marginBottom:12,alignItems:"center"}}><div style={{fontWeight:500}}>Automation scripts</div><Tag c={platform==="mobile"?"amber":"blue"}>{fwName(platform)}</Tag></div>
             {platform==="mobile"?<Tabs tabs={[{id:"ios",label:"iOS (Appium)"},{id:"android",label:"Android (Appium)"}]} active={tab} onChange={setTab}/>:<Tabs tabs={[{id:"web",label:"Web automation script"}]} active={tab} onChange={setTab}/>}
             <pre style={{background:"var(--color-background-tertiary)",borderRadius:8,padding:16,fontSize:12,fontFamily:"monospace",lineHeight:1.6,overflow:"auto",maxHeight:360,whiteSpace:"pre-wrap",wordBreak:"break-all",margin:0,marginBottom:12}}>{curScript||"No script yet."}</pre>
-            <div style={{display:"flex",gap:8,flexWrap:"wrap"}}><button onClick={()=>navigator.clipboard?.writeText(curScript)} style={ghostBtn}>📋 Copy</button><button onClick={()=>dlFile(curScript,sid+"_"+tab+".js")} style={ghostBtn}>⬇ Download</button></div>
+            <div style={{display:"flex",gap:8,flexWrap:"wrap"}}><button onClick={()=>navigator.clipboard?.writeText(curScript)} style={ghostBtn}>📋 Copy</button><button onClick={()=>dlFile(curScript,tab==="web"?sid+".spec.js":sid+"_"+tab+".test.js","text/javascript")} style={ghostBtn}>⬇ Download</button></div>
           </div>
           <Confirm icon="💻" title="Export VS Code project scaffold?" desc={"Complete project — config, test files, README — ready to open in VS Code."} onYes={()=>setPhase("vscode")} onNo={()=>setPhase("runAsk")} yesLabel="Yes, export project" noLabel="Skip to execution"/>
         </div>}
