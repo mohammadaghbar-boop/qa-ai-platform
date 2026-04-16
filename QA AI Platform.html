@@ -435,8 +435,8 @@ function adfToText(node) {
 }
 
 /* ─── Workspace ───────────────────────────────────────────────────────────── */
-const WS_STEPS = ["Story","Analysis","Generate","Review","Export","Automate","Project","Execute"];
-const WS_IDX = {input:0,mode:1,gap:1,ctype:2,ready:2,review:3,jira:4,jiraDone:5,auto:5,autoReady:5,vscode:6,vscodeDone:6,runAsk:7,running:7,result:7};
+const WS_STEPS = ["User Story","Analysis","Generate","Review","Export","Scripts","Execute","Bug Report","Coverage"];
+const WS_IDX = {input:0,mode:1,gap:1,ctype:2,ready:2,review:3,jira:4,scriptSelect:5,autoReady:5,runAsk:6,running:6,result:6,bugReport:7,coverage:8};
 
 function Workspace({member}) {
   const asgn=DB.assignments.find(x=>x.memberId===member.id);
@@ -452,6 +452,7 @@ function Workspace({member}) {
   const [showBugForm,setShowBugForm]=useState(false); const [bf,setBf]=useState({summary:"",sev:"High",desc:""});
   const [fixed,setFixed]=useState(false); const [hist,setHist]=useState([]); const [chat,setChat]=useState(false);
   const [showAddCase,setShowAddCase]=useState(false); const [newCase,setNewCase]=useState({title:"",type:"happy",platform:"web",preconditions:"",steps:[""],expected:"",automatable:true});
+  const [selectedForScripts,setSelectedForScripts]=useState([]); const [coverageText,setCoverageText]=useState(""); const [sessionBugs,setSessionBugs]=useState([]);
 
   const SYS=`You are an expert QA engineer. All story data is already provided in the user message — do NOT use any external tools, do NOT access Jira, Atlassian, or any other service. Work only with the text provided. Project:"${proj?.name}" Platform:${proj?.platform||"web"}.`;
   const approved=cases.filter(c=>c.status==="approved");
@@ -596,7 +597,7 @@ function Workspace({member}) {
   const editC=(id,k,v)=>setCases(cs=>cs.map(c=>c.id===id?{...c,[k]:v}:c));
   const editS=(id,si,v)=>setCases(cs=>cs.map(c=>{if(c.id!==id)return c;const s=[...c.steps];s[si]=v;return{...c,steps:s};}));
   const addStep=id=>setCases(cs=>cs.map(c=>c.id===id?{...c,steps:[...(c.steps||[]),"New step"]}:c));
-  const reset=()=>{setPhase("input");setSid("");setSdata(null);setPlatform("web");setCtypes([]);setGapText("");setCases([]);setEditOn(false);setScripts({web:"",ios:"",android:""});setProjFiles(null);setExecLines([]);setResult(null);setJKey(null);setBugDone(null);setShowBugForm(false);setFixed(false);setChat(false);setShowAddCase(false);};
+  const reset=()=>{setPhase("input");setSid("");setSdata(null);setPlatform("web");setCtypes([]);setGapText("");setCases([]);setEditOn(false);setScripts({web:"",ios:"",android:""});setProjFiles(null);setExecLines([]);setResult(null);setJKey(null);setBugDone(null);setShowBugForm(false);setFixed(false);setChat(false);setShowAddCase(false);setSelectedForScripts([]);setCoverageText("");setSessionBugs([]);};
   const goToStep=i=>{
     const cur=WS_IDX[phase]??0; if(i>=cur||phase==="running") return;
     if(i===0){setPhase("input");return;}
@@ -604,9 +605,10 @@ function Workspace({member}) {
     if(i===2&&sdata){const et=[...new Set(cases.map(c=>c.type))];setCtypes(et.length>0?et:[]);setPhase("ctype");return;}
     if(i===3&&cases.length>0){setPhase("review");return;}
     if(i===4&&approved.length>0){setPhase("jira");return;}
-    if(i===5&&(scripts.web||scripts.ios)){setPhase("autoReady");return;}
-    if(i===6&&projFiles){setPhase("vscode");return;}
-    if(i===7){setPhase("runAsk");return;}
+    if(i===5){setPhase("scriptSelect");return;}
+    if(i===6&&result){setPhase("result");return;}
+    if(i===7){setPhase("bugReport");return;}
+    if(i===8){setPhase("coverage");return;}
   };
   const addManualCase=()=>{
     if(!newCase.title.trim()) return;
@@ -740,7 +742,6 @@ function Workspace({member}) {
           </div>}
           <div style={{display:"flex",gap:10,marginBottom:16}}>
             <Btn v="primary" onClick={()=>{setCases(cs=>cs.map(c=>c.status==="pending"?{...c,status:"approved"}:c));setPhase("jira");}}>✓ Approve All & Continue</Btn>
-            {allDone&&<button onClick={()=>setPhase("jira")} style={ghostBtn}>Continue →</button>}
           </div>
         </div>}
 
@@ -748,14 +749,32 @@ function Workspace({member}) {
           <div style={{...card,padding:"16px 20px"}}>
             <div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:14}}>Story <b>{sid}</b> · <b>{approved.length}</b> approved cases · <Tag c={platform==="mobile"?"amber":"blue"}>{platform}</Tag></div>
             <div style={{display:"flex",gap:10}}>
-              <Btn v="primary" onClick={()=>{exportCSV(cases,sid);setPhase("jiraDone");}}>⬇ Export AIO CSV</Btn>
-              <button onClick={()=>setPhase("jiraDone")} style={ghostBtn}>Skip</button>
+              <Btn v="primary" onClick={()=>{exportCSV(cases,sid);setPhase("scriptSelect");}}>⬇ Export AIO CSV</Btn>
+              <button onClick={()=>setPhase("scriptSelect")} style={ghostBtn}>Skip</button>
             </div>
           </div>
         </div>}
 
-        {!loading&&phase==="jiraDone"&&<div>
-          <Confirm icon="🤖" title="Generate automation scripts?" desc={fwName(platform)+" for "+autoable.length+" automatable cases."+(manOnly.length>0?" "+manOnly.length+" manual-only cases included as comments.":"")} onYes={doScripts} onNo={reset} yesLabel={"Yes, generate "+fwName(platform)} noLabel="Done" noDanger/>
+        {!loading&&phase==="scriptSelect"&&<div>
+          <Banner icon="🤖" title="Select cases to automate" sub={autoable.length+" automatable cases available · "+manOnly.length+" manual-only (excluded)"} color="info"/>
+          <div style={card}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+              <H2>Choose cases for script generation</H2>
+              <div style={{display:"flex",gap:8}}>
+                <button onClick={()=>setSelectedForScripts(autoable.map(c=>c.id))} style={{...ghostBtn,padding:"4px 10px",fontSize:12}}>Select all</button>
+                <button onClick={()=>setSelectedForScripts([])} style={{...ghostBtn,padding:"4px 10px",fontSize:12}}>Clear</button>
+              </div>
+            </div>
+            {autoable.map(c=><label key={c.id} style={{display:"flex",gap:10,padding:"9px 0",borderBottom:"1px solid var(--color-border-tertiary)",cursor:"pointer",alignItems:"center"}}>
+              <input type="checkbox" checked={selectedForScripts.includes(c.id)} onChange={()=>setSelectedForScripts(p=>p.includes(c.id)?p.filter(x=>x!==c.id):[...p,c.id])}/>
+              <Tag c="blue">{c.id}</Tag><Tag c={tcol(c.type)}>{c.type}</Tag><span style={{fontSize:14,flex:1}}>{c.title}</span>
+            </label>)}
+            {autoable.length===0&&<div style={{color:"var(--color-text-tertiary)",fontSize:14}}>No automatable cases.</div>}
+          </div>
+          <div style={{display:"flex",gap:10}}>
+            <Btn v="primary" onClick={()=>selectedForScripts.length>0&&doScripts()} disabled={selectedForScripts.length===0}>Generate Scripts ({selectedForScripts.length} cases)</Btn>
+            <Btn v="danger" onClick={()=>setPhase("runAsk")}>Skip → Execute</Btn>
+          </div>
         </div>}
 
         {!loading&&phase==="autoReady"&&<div>
@@ -766,30 +785,13 @@ function Workspace({member}) {
             <pre style={{background:"var(--color-background-tertiary)",borderRadius:8,padding:16,fontSize:12,fontFamily:"monospace",lineHeight:1.6,overflow:"auto",maxHeight:360,whiteSpace:"pre-wrap",wordBreak:"break-all",margin:0,marginBottom:12}}>{curScript||"No script yet."}</pre>
             <div style={{display:"flex",gap:8,flexWrap:"wrap"}}><button onClick={()=>navigator.clipboard?.writeText(curScript)} style={ghostBtn}>📋 Copy</button><button onClick={()=>dlFile(curScript,tab==="web"?sid+".spec.js":sid+"_"+tab+".test.js","text/javascript")} style={ghostBtn}>⬇ Download</button></div>
           </div>
-          <Confirm icon="💻" title="Export VS Code project scaffold?" desc={"Complete project — config, test files, README — ready to open in VS Code."} onYes={()=>setPhase("vscode")} onNo={()=>setPhase("runAsk")} yesLabel="Yes, export project" noLabel="Skip to execution"/>
-        </div>}
-
-        {!loading&&phase==="vscode"&&<div>
-          <div style={card}><H2>VS Code project files</H2>
-            <div style={{background:"var(--color-background-tertiary)",borderRadius:8,padding:12,marginBottom:16}}>
-              {projFiles&&Object.keys(projFiles).map(f=><div key={f} style={{display:"flex",alignItems:"center",padding:"6px 0",borderBottom:"1px solid var(--color-border-tertiary)"}}>
-                <span style={{fontSize:13,fontFamily:"monospace",color:"var(--color-text-secondary)",flex:1}}>{f}</span>
-                <button onClick={()=>dlFile(projFiles[f],f.split("/").pop())} style={{...ghostBtn,padding:"2px 8px",fontSize:11}}>↓</button>
-              </div>)}
-            </div>
-            <div style={{display:"flex",gap:10}}>
-              <Btn v="primary" onClick={()=>{ const all=Object.entries(projFiles||{}).map(([p,c])=>"=".repeat(60)+"\nFILE: "+p+"\n"+"=".repeat(60)+"\n"+c).join("\n\n"); dlFile(all,(platform==="mobile"?"appium":"web-tests")+"-"+sid+"-project.txt"); setPhase("vscodeDone"); }}>⬇ Download all files</Btn>
-              <button onClick={()=>setPhase("runAsk")} style={ghostBtn}>Skip →</button>
-            </div>
+          <div style={{display:"flex",gap:10}}>
+            <Btn v="primary" onClick={()=>setPhase("runAsk")}>▶ Run Tests</Btn>
+            <Btn v="danger" onClick={()=>setPhase("bugReport")}>Skip → Bug Report</Btn>
           </div>
         </div>}
 
-        {!loading&&phase==="vscodeDone"&&<div>
-          <Banner icon="💻" title="Project downloaded" sub={"Open the .txt file, copy each section into VS Code, then run npm install and npm test."} color="info"/>
-          <Confirm icon="▶️" title="Run scripts in simulated execution?" desc={"Live terminal for "+autoable.length+" automatable tests."} onYes={doRun} onNo={reset} yesLabel="Yes, run" noLabel="Done"/>
-        </div>}
-
-        {!loading&&phase==="runAsk"&&<Confirm icon="▶️" title="Start test execution?" desc={"Live terminal output for "+autoable.length+" automatable scripts."} onYes={doRun} onNo={reset} yesLabel="Yes, run scripts" noLabel="Done"/>}
+        {!loading&&phase==="runAsk"&&<Confirm icon="▶️" title="Start test execution?" desc={"Live terminal output for "+selectedForScripts.length+" selected scripts."} onYes={doRun} onNo={()=>setPhase("bugReport")} yesLabel="Yes, run scripts" noLabel="Skip → Bug Report"/>}
         {phase==="running"&&<div style={card}><div style={{fontWeight:500,marginBottom:12}}>▶ Running tests…</div><Terminal lines={execLines}/></div>}
 
         {phase==="result"&&result&&<div>
@@ -797,22 +799,66 @@ function Workspace({member}) {
             {[{l:"Total",v:result.total,c:"info"},{l:"Passed",v:result.pass.length,c:"success"},{l:"Failed",v:result.fail.length,c:result.fail.length>0?"danger":"success"}].map(x=><div key={x.l} style={{...card,marginBottom:0,textAlign:"center",padding:20}}><div style={{fontSize:30,fontWeight:500,color:`var(--color-text-${x.c})`}}>{x.v}</div><div style={{fontSize:13,color:"var(--color-text-secondary)",marginTop:2}}>{x.l}</div></div>)}
           </div>
           <div style={card}><div style={{fontWeight:500,marginBottom:10}}>Execution log</div><Terminal lines={execLines}/></div>
-          {result.fail.length>0&&<div style={card}>
-            <div style={{fontWeight:500,marginBottom:10}}>Handle failures</div>
-            <div style={{display:"flex",gap:10,flexWrap:"wrap",alignItems:"center"}}>
-              <Btn v="primary" onClick={doFix}>🔧 Fix scripts</Btn>
-              {!bugDone&&!showBugForm&&<Btn v="danger" onClick={()=>setShowBugForm(true)}>🐛 File Jira bug</Btn>}
-              {bugDone&&<Tag c="green">✓ {bugDone.bid}{bugDone.jKey?" → "+bugDone.jKey:""} filed</Tag>}
-            </div>
-            {showBugForm&&<div style={{marginTop:16,padding:16,borderRadius:10,border:"1px solid var(--color-border-secondary)",background:"var(--color-background-primary)"}}>
-              <H2>File bug report</H2>
-              <Lbl>Summary</Lbl><input style={{...inp,marginBottom:10}} value={bf.summary} onChange={e=>setBf(p=>({...p,summary:e.target.value}))} placeholder={"Failure in "+sid}/>
-              <Lbl>Severity</Lbl><select style={{...sel,marginBottom:10}} value={bf.sev} onChange={e=>setBf(p=>({...p,sev:e.target.value}))}>{["Critical","High","Medium","Low"].map(s=><option key={s}>{s}</option>)}</select>
-              <Lbl>Description</Lbl><textarea style={{...ta,marginBottom:12}} rows={3} value={bf.desc} onChange={e=>setBf(p=>({...p,desc:e.target.value}))} placeholder="Steps to reproduce…"/>
-              <div style={{display:"flex",gap:8}}><Btn v="danger" onClick={doFileBug}>Submit → Jira</Btn><button onClick={()=>setShowBugForm(false)} style={ghostBtn}>Cancel</button></div>
-            </div>}
+          {result.fail.length>0&&<Btn v="primary" onClick={doFix}>🔧 Fix scripts</Btn>}
+          <div style={{display:"flex",gap:10,marginTop:12}}>
+            <Btn v="primary" onClick={()=>setPhase("bugReport")}>Next: Bug Report →</Btn>
+            <button onClick={()=>exportCSV(cases,sid)} style={ghostBtn}>⬇ Re-export CSV</button>
+          </div>
+        </div>}
+
+        {!loading&&phase==="bugReport"&&<div>
+          <div style={{...card,padding:"12px 20px",display:"flex",alignItems:"center",gap:16,marginBottom:4}}>
+            <div style={{flex:1,fontSize:14}}>Story: <b>{sid}</b> · {result?<><Tag c={result.fail.length>0?"red":"green"}>{result.pass.length} passed</Tag> <Tag c={result.fail.length>0?"red":"green"}>{result.fail.length} failed</Tag></>:<Tag>No execution</Tag>}</div>
+          </div>
+          {result?.fail?.length>0&&<div style={card}>
+            <H2>Failed cases</H2>
+            {result.fail.map(c=><div key={c.id} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 0",borderBottom:"1px solid var(--color-border-tertiary)"}}>
+              <Tag c="red">{c.id}</Tag><span style={{flex:1,fontSize:13}}>{c.title}</span>
+              <button onClick={()=>{setBf({summary:"["+c.id+"] "+c.title,sev:"High",desc:"Failed during execution of story "+sid});setShowBugForm(true);}} style={{...ghostBtn,padding:"4px 10px",fontSize:12}}>🐛 File Bug</button>
+            </div>)}
           </div>}
-          <div style={{display:"flex",gap:10,marginTop:4}}><button onClick={reset} style={ghostBtn}>↩ New story</button><button onClick={()=>exportCSV(cases,sid)} style={ghostBtn}>⬇ Re-export CSV</button></div>
+          <div style={card}>
+            <H2>File a bug report</H2>
+            <Lbl>Summary</Lbl><input style={{...inp,marginBottom:10}} value={bf.summary} onChange={e=>setBf(p=>({...p,summary:e.target.value}))} placeholder={"Bug found in "+sid}/>
+            <Lbl>Severity</Lbl><select style={{...sel,marginBottom:10}} value={bf.sev} onChange={e=>setBf(p=>({...p,sev:e.target.value}))}>{["Critical","High","Medium","Low"].map(s=><option key={s}>{s}</option>)}</select>
+            <Lbl>Description</Lbl><textarea style={{...ta,marginBottom:12}} rows={3} value={bf.desc} onChange={e=>setBf(p=>({...p,desc:e.target.value}))} placeholder="Steps to reproduce…"/>
+            <Btn v="danger" onClick={async()=>{
+              setLoading(true);setLmsg("Filing bug…");
+              let jRef=null;
+              try{const res=await callJira(proj,"POST","/issue",{fields:{project:{key:proj.jiraProjKey},summary:bf.summary,description:{type:"doc",version:1,content:[{type:"paragraph",content:[{type:"text",text:bf.desc||"See execution log."}]}]},issuetype:{name:"Bug"},priority:{name:bf.sev}}});jRef=res.key;}catch{}
+              const bug={bid:"BUG-"+uid().toUpperCase(),sid,summary:bf.summary,sev:bf.sev,who:member.name,jKey:jRef,status:"Open"};
+              DB.bugs.push(bug);saveDB();pushNotif("admin","🐛 "+bug.bid+(jRef?" ("+jRef+")":"")+" filed for "+sid);
+              setSessionBugs(p=>[...p,bug]);setBf({summary:"",sev:"High",desc:""});setLoading(false);
+            }}>Submit Bug</Btn>
+          </div>
+          {sessionBugs.length>0&&<div style={card}>
+            <H2>Bugs filed this session</H2>
+            {sessionBugs.map(b=><div key={b.bid} style={{display:"flex",gap:10,alignItems:"center",padding:"6px 0",borderBottom:"1px solid var(--color-border-tertiary)"}}>
+              <Tag c="red">{b.bid}</Tag><span style={{flex:1,fontSize:13}}>{b.summary}</span><Tag c={b.sev==="Critical"||b.sev==="High"?"red":"amber"}>{b.sev}</Tag>{b.jKey&&<Tag c="green">{b.jKey}</Tag>}
+            </div>)}
+          </div>}
+          <div style={{display:"flex",gap:10,marginTop:4}}>
+            <Btn v="primary" onClick={()=>setPhase("coverage")}>Next: Coverage Report →</Btn>
+            <button onClick={reset} style={ghostBtn}>↩ New story</button>
+          </div>
+        </div>}
+
+        {!loading&&phase==="coverage"&&<div>
+          {!coverageText?<Confirm icon="📊" title="Generate coverage report?" desc={"AI analysis of test coverage and STLC completeness for "+sid+"."} onYes={async()=>{
+            setLoading(true);setLmsg("Generating coverage report…");
+            const summary=approved.map(c=>`[${c.type}] ${c.id}: ${c.title}`).join("\n");
+            const execSummary=result?`Executed: ${result.total} | Passed: ${result.pass.length} | Failed: ${result.fail.length}`:"No execution performed.";
+            const bugSummary=sessionBugs.length>0?sessionBugs.map(b=>`${b.bid} [${b.sev}]: ${b.summary}`).join("\n"):"No bugs filed.";
+            try{
+              const r=await callAI([{role:"user",content:`Generate a QA coverage report for story "${sid}" (${proj.jiraProjKey}). Platform: ${platform}.\n\nApproved test cases (${approved.length} total):\n${summary}\n\nExecution results:\n${execSummary}\n\nBugs filed:\n${bugSummary}\n\nProvide a structured plain-text report covering:\n1. Test Coverage Summary (total, by type breakdown)\n2. STLC Phases Coverage (Requirements/Design/Implementation/Testing/Deployment)\n3. Automation Coverage % (automatable vs manual)\n4. Risk Assessment based on failed tests and bugs\n5. Coverage Gaps (what's missing or not tested)\n6. Overall Quality Score (0-100) with justification\n\nBe concise and use emoji section headers. No markdown.`}],SYS,3000,proj.anthropicKey||"");
+              setCoverageText(r);
+            }catch(e){alert(e.message);}
+            setLoading(false);
+          }} onNo={reset} yesLabel="Generate Report" noLabel="Skip — New Story"/>:
+          <div>
+            <div style={card}><div style={{display:"flex",gap:8,marginBottom:14,alignItems:"center"}}><Tag c="blue">{sid}</Tag><span style={{fontWeight:500}}>Coverage Report</span></div><div style={{whiteSpace:"pre-wrap",fontSize:14,lineHeight:1.85}}>{coverageText}</div></div>
+            <div style={{display:"flex",gap:10}}><button onClick={reset} style={ghostBtn}>↩ New story</button><button onClick={()=>dlFile(coverageText,"coverage-"+sid+".txt")} style={ghostBtn}>⬇ Download report</button></div>
+          </div>}
         </div>}
       </div>
 
