@@ -511,8 +511,9 @@ function Workspace({member}) {
 
   const doScripts=async()=>{
     setLoading(true); setLmsg("Generating "+fwName(platform)+" scripts…");
-    const cl=autoable.map(c=>`${c.id}: ${c.title}\n  Steps: ${(c.steps||[]).join(" → ")}\n  Expected: ${c.expected}`).join("\n\n");
-    const mc=manOnly.map(c=>`// MANUAL ONLY — ${c.id}: ${c.title}`).join("\n");
+    const selCases=cases.filter(c=>selectedForScripts.includes(c.id));
+    const cl=selCases.map(c=>`${c.id}: ${c.title}\n  Steps: ${(c.steps||[]).join(" → ")}\n  Expected: ${c.expected}`).join("\n\n");
+    const mc="";
     try {
       if(platform==="mobile"){
         const [iosR,andR]=await Promise.all([
@@ -572,7 +573,7 @@ function Workspace({member}) {
 
   const doRun=async()=>{
     setPhase("running"); setExecLines([]);
-    const pool=autoable; const pass=pool.filter((_,i)=>i%4!==2); const fail=pool.filter((_,i)=>i%4===2);
+    const pool=cases.filter(c=>selectedForScripts.includes(c.id)); const pass=pool.filter((_,i)=>i%4!==2); const fail=pool.filter((_,i)=>i%4===2);
     const emit=(l,d=0)=>new Promise(r=>setTimeout(()=>{setExecLines(ls=>[...ls,l]);r();},d));
     await emit("▶ Starting "+fwName(platform)+" runner…");
     await emit("→ Loading configuration…",400); await emit("→ Found "+pool.length+" test(s)",600); await emit("→ Launching browser…",900); await emit("",200);
@@ -801,8 +802,7 @@ function Workspace({member}) {
           <div style={card}><div style={{fontWeight:500,marginBottom:10}}>Execution log</div><Terminal lines={execLines}/></div>
           {result.fail.length>0&&<Btn v="primary" onClick={doFix}>🔧 Fix scripts</Btn>}
           <div style={{display:"flex",gap:10,marginTop:12}}>
-            <Btn v="primary" onClick={()=>setPhase("bugReport")}>Next: Bug Report →</Btn>
-            <button onClick={()=>exportCSV(cases,sid)} style={ghostBtn}>⬇ Re-export CSV</button>
+            <Btn v="primary" onClick={()=>setPhase("bugReport")}>Bug Report →</Btn>
           </div>
         </div>}
 
