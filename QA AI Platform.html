@@ -454,6 +454,7 @@ function Workspace({member,refreshSaved,restoreTarget,clearRestore}) {
   const [showAddCase,setShowAddCase]=useState(false); const [newCase,setNewCase]=useState({title:"",type:"happy",platform:"web",preconditions:"",steps:[""],expected:"",automatable:true});
   const [selectedForScripts,setSelectedForScripts]=useState([]); const [coverageText,setCoverageText]=useState(""); const [sessionBugs,setSessionBugs]=useState([]);
   const [scriptCache,setScriptCache]=useState({});
+  const [editingBugId,setEditingBugId]=useState(null); const [editBugForm,setEditBugForm]=useState({});
 
   const SYS=`You are an expert QA engineer. All story data is already provided in the user message — do NOT use any external tools, do NOT access Jira, Atlassian, or any other service. Work only with the text provided. Project:"${proj?.name}" Platform:${proj?.platform||"web"}.`;
   const approved=cases.filter(c=>c.status==="approved");
@@ -656,7 +657,7 @@ function Workspace({member,refreshSaved,restoreTarget,clearRestore}) {
       </div>
       <div style={{display:"flex",gap:8}}>
         {phase!=="input"&&<button onClick={()=>setChat(o=>!o)} style={ghostBtn}>{chat?"Hide chat":"🤖 AI Chat"}</button>}
-        {["scriptSelect","autoReady","runAsk","running","result","bugReport","coverage"].includes(phase)&&<button onClick={saveAndReset} style={ghostBtn}>↩ New story</button>}
+        {phase==="coverage"&&<button onClick={saveAndReset} style={ghostBtn}>↩ New story</button>}
       </div>
     </div>
     <StepBar steps={WS_STEPS} cur={WS_IDX[phase]??0} onStepClick={goToStep}/>
@@ -861,13 +862,48 @@ function Workspace({member,refreshSaved,restoreTarget,clearRestore}) {
           </div>
           {sessionBugs.length>0&&<div style={card}>
             <H2>Bugs filed this session</H2>
-            {sessionBugs.map(b=><div key={b.bid} style={{display:"flex",gap:10,alignItems:"center",padding:"6px 0",borderBottom:"1px solid var(--color-border-tertiary)"}}>
-              <Tag c="red">{b.bid}</Tag><span style={{flex:1,fontSize:13}}>{b.summary}</span><Tag c={b.sev==="Critical"||b.sev==="High"?"red":"amber"}>{b.sev}</Tag>{b.jKey&&<Tag c="green">{b.jKey}</Tag>}<Tag c="blue">→ Added as TC</Tag>
+            {sessionBugs.map(b=><div key={b.bid} style={{borderBottom:"1px solid var(--color-border-tertiary)",padding:"8px 0"}}>
+              {editingBugId===b.bid
+                ?<div style={{display:"flex",flexDirection:"column",gap:8,paddingTop:4}}>
+                    <input style={{...inp,marginBottom:0}} value={editBugForm.summary} onChange={e=>setEditBugForm(p=>({...p,summary:e.target.value}))} placeholder="Summary"/>
+                    <select style={{...sel,marginBottom:0}} value={editBugForm.sev} onChange={e=>setEditBugForm(p=>({...p,sev:e.target.value}))}>{["Critical","High","Medium","Low"].map(s=><option key={s}>{s}</option>)}</select>
+                    <textarea style={{...ta,marginBottom:0}} rows={2} value={editBugForm.desc||""} onChange={e=>setEditBugForm(p=>({...p,desc:e.target.value}))} placeholder="Description"/>
+                    <div style={{display:"flex",gap:8}}>
+                      <Btn v="primary" onClick={()=>{
+                        const updated={...b,...editBugForm};
+                        setSessionBugs(p=>p.map(x=>x.bid===b.bid?updated:x));
+                        DB.bugs=DB.bugs.map(x=>x.bid===b.bid?{...x,...editBugForm}:x); saveDB();
+                        setCases(cs=>cs.map(c=>c.id===b.bid?{...c,title:editBugForm.summary,sev:editBugForm.sev,steps:editBugForm.desc?editBugForm.desc.split("\n").filter(Boolean):c.steps}:c));
+                        setEditingBugId(null);
+                      }}>Save</Btn>
+                      <button onClick={()=>setEditingBugId(null)} style={ghostBtn}>Cancel</button>
+                    </div>
+                  </div>
+                :<div style={{display:"flex",gap:10,alignItems:"center"}}>
+                    <Tag c="red">{b.bid}</Tag>
+                    <span style={{flex:1,fontSize:13}}>{b.summary}</span>
+                    <Tag c={b.sev==="Critical"||b.sev==="High"?"red":"amber"}>{b.sev}</Tag>
+                    {b.jKey&&<Tag c="green">{b.jKey}</Tag>}
+                    <Tag c="blue">TC</Tag>
+                    <button title="Edit" onClick={()=>{setEditingBugId(b.bid);setEditBugForm({summary:b.summary,sev:b.sev,desc:b.desc||""});}} style={{background:"none",border:"none",cursor:"pointer",color:"var(--color-text-tertiary)",fontSize:14,padding:"2px 5px"}}>✎</button>
+                    <button title="Delete" onClick={()=>{
+                      setSessionBugs(p=>p.filter(x=>x.bid!==b.bid));
+                      DB.bugs=DB.bugs.filter(x=>x.bid!==b.bid); saveDB();
+                      setCases(cs=>cs.filter(c=>c.id!==b.bid));
+                    }} style={{background:"none",border:"none",cursor:"pointer",color:"var(--color-text-danger)",fontSize:14,padding:"2px 5px"}}>✕</button>
+                  </div>}
             </div>)}
           </div>}
-          <div style={{display:"flex",gap:10,marginTop:4}}>
+          <div style={{display:"flex",gap:10,marginTop:12,flexWrap:"wrap",alignItems:"center"}}>
             <Btn v="primary" onClick={()=>setPhase("coverage")}>Coverage Report →</Btn>
-            <button onClick={saveAndReset} style={ghostBtn}>↩ New story</button>
+            {sessionBugs.filter(b=>!b.jKey).length>0&&<button onClick={async()=>{
+              setLoading(true);setLmsg("Linking bugs to Jira…");
+              const updated=[...sessionBugs];
+              for(const b of updated.filter(x=>!x.jKey)){
+                try{const res=await callJira(proj,"POST","/issue",{fields:{project:{key:proj.jiraProjKey},summary:b.summary,description:{type:"doc",version:1,content:[{type:"paragraph",content:[{type:"text",text:b.desc||"See execution log."}]}]},issuetype:{name:"Bug"},priority:{name:b.sev}}});b.jKey=res.key;DB.bugs=DB.bugs.map(x=>x.bid===b.bid?{...x,jKey:b.jKey}:x);}catch{}
+              }
+              saveDB();setSessionBugs([...updated]);setLoading(false);
+            }} style={{padding:"9px 18px",borderRadius:8,border:"none",cursor:"pointer",fontWeight:500,fontSize:14,background:"#0052CC",color:"#fff",display:"flex",alignItems:"center",gap:6}}>🔗 Link {sessionBugs.filter(b=>!b.jKey).length} bugs to Jira</button>}
           </div>
         </div>}
 
