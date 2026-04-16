@@ -121,7 +121,7 @@ function exportCSV(cases, sid) {
     c.id,c.title,c.type,c.preconditions||"",(c.steps||[]).join(" | "),c.expected||"",c.platform||"web",c.automatable===false?"No":"Yes"
   ]);
   const csv = [h,...rows].map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(",")).join("\n");
-  dlFile(csv,"AIO_"+sid+".csv","text/csv");
+  dlFile("\uFEFF"+csv,"AIO_"+sid+".csv","text/csv;charset=utf-8");
 }
 
 /* ─── Styles ─────────────────────────────────────────────────────────────── */
