@@ -161,7 +161,7 @@ function Confirm({icon,title,desc,onYes,onNo,yesLabel="Yes",noLabel="No, skip",d
         {desc&&<div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:14,lineHeight:1.6}}>{desc}</div>}
         <div style={{display:"flex",gap:10}}>
           <Btn v={danger?"danger":"primary"} onClick={onYes}>{yesLabel}</Btn>
-          {noDanger?<Btn v="danger" onClick={onNo}>{noLabel}</Btn>:<button onClick={onNo} style={{padding:"8px 18px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:14,fontWeight:500,color:"var(--color-text-secondary)"}}>{noLabel}</button>}
+          {onNo&&(noDanger?<Btn v="danger" onClick={onNo}>{noLabel}</Btn>:<button onClick={onNo} style={{padding:"8px 18px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:14,fontWeight:500,color:"var(--color-text-secondary)"}}>{noLabel}</button>)}
         </div>
       </div>
     </div>
@@ -829,7 +829,6 @@ function Workspace({member,refreshSaved,restoreTarget,clearRestore}) {
           </div>
           <div style={{display:"flex",gap:10}}>
             <Btn v="primary" onClick={()=>selectedForScripts.length>0&&doScripts()} disabled={selectedForScripts.length===0}>Generate Scripts ({selectedForScripts.length} cases)</Btn>
-            <Btn v="danger" onClick={()=>setPhase("runAsk")}>Skip → Execute</Btn>
           </div>
         </div>}
 
@@ -843,11 +842,10 @@ function Workspace({member,refreshSaved,restoreTarget,clearRestore}) {
           </div>
           <div style={{display:"flex",gap:10}}>
             <Btn v="primary" onClick={()=>setPhase("runAsk")}>▶ Run Tests</Btn>
-            <Btn v="danger" onClick={()=>setPhase("bugReport")}>Skip → Bug Report</Btn>
           </div>
         </div>}
 
-        {!loading&&phase==="runAsk"&&<Confirm icon="▶️" title="Start test execution?" desc={"Live terminal output for "+selectedForScripts.length+" selected scripts."} onYes={doRun} onNo={()=>setPhase("bugReport")} yesLabel="Yes, run scripts" noLabel="Skip → Bug Report"/>}
+        {!loading&&phase==="runAsk"&&<Confirm icon="▶️" title="Start test execution?" desc={"Live terminal output for "+selectedForScripts.length+" selected scripts."} onYes={doRun} yesLabel="Yes, run scripts"/>}
         {phase==="running"&&<div style={card}><div style={{fontWeight:500,marginBottom:12}}>▶ Running tests…</div><Terminal lines={execLines}/></div>}
 
         {phase==="result"&&result&&<div>
