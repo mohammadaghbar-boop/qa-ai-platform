@@ -644,7 +644,7 @@ const [phase,setPhase]=useState("input"); const [sid,setSid]=useState(""); const
   const [execLines,setExecLines]=useState([]); const [result,setResult]=useState(null);
   const [loading,setLoading]=useState(false); const [lmsg,setLmsg]=useState(""); const [fetchError,setFetchError]=useState("");
   const [jKey,setJKey]=useState(null); const [bugDone,setBugDone]=useState(null);
-  const [showBugForm,setShowBugForm]=useState(false); const [bf,setBf]=useState({summary:"",sev:"High",steps:"",expected:"",actual:""});
+  const [showBugForm,setShowBugForm]=useState(false); const [bf,setBf]=useState({summary:"",sev:"High",steps:"",expected:"",actual:"",screenshot:null});
   const [fixed,setFixed]=useState(false); const [hist,setHist]=useState([]); const [chat,setChat]=useState(false); const [hasSaved,setHasSaved]=useState(false);
   const [showAddCase,setShowAddCase]=useState(false); const [newCase,setNewCase]=useState({title:"",type:"happy",platform:"web",preconditions:"",steps:[""],expected:"",automatable:true});
   const [selectedForScripts,setSelectedForScripts]=useState([]); const [coverageText,setCoverageText]=useState(""); const [sessionBugs,setSessionBugs]=useState([]); const [appUrl,setAppUrl]=useState("");
@@ -1176,16 +1176,39 @@ const [phase,setPhase]=useState("input"); const [sid,setSid]=useState(""); const
             <H2>Failed cases</H2>
             {result.fail.map(c=><div key={c.id} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 0",borderBottom:"1px solid var(--color-border-tertiary)"}}>
               <Tag c="red">{c.id}</Tag><span style={{flex:1,fontSize:13}}>{c.title}</span>
-              <button onClick={()=>{setBf({summary:"["+c.id+"] "+c.title,sev:"High",steps:"1. Run test case "+c.id+"\n2. Execute steps: "+(c.steps||[]).join(" → ")+"\n3. Observe the failure",expected:c.expected||"Test case passes successfully",actual:"Test case failed during execution of story "+sid});setShowBugForm(true);}} style={{...ghostBtn,padding:"4px 10px",fontSize:12}}>🐛 File Bug</button>
+              <button onClick={()=>{setBf({summary:"",sev:"High",steps:(c.steps||[]).map((s,i)=>`${i+1}. ${s}`).join("\n")||"1. Reproduce the issue",expected:c.expected||"The feature works as designed",actual:"",screenshot:null,_err:false});setShowBugForm(true);}} style={{...ghostBtn,padding:"4px 10px",fontSize:12}}>🐛 File Bug</button>
             </div>)}
           </div>}
           <div style={card}>
             <H2>File a bug report</H2>
-            <Lbl>Summary <span style={{color:"var(--color-text-danger)"}}>*</span></Lbl><input style={{...inp,marginBottom:10,borderColor:bf._err&&!bf.summary.trim()?"var(--color-text-danger)":undefined}} value={bf.summary} onChange={e=>setBf(p=>({...p,summary:e.target.value,_err:false}))} placeholder={"Bug found in "+sid}/>
-            <Lbl>Severity</Lbl><select style={{...sel,marginBottom:10}} value={bf.sev} onChange={e=>setBf(p=>({...p,sev:e.target.value}))}>{["Critical","High","Medium","Low"].map(s=><option key={s}>{s}</option>)}</select>
-            <Lbl>Steps to Reproduce <span style={{color:"var(--color-text-danger)"}}>*</span></Lbl><textarea style={{...ta,marginBottom:10,borderColor:bf._err&&!bf.steps.trim()?"var(--color-text-danger)":undefined}} rows={4} value={bf.steps} onChange={e=>setBf(p=>({...p,steps:e.target.value,_err:false}))} placeholder={"1. Navigate to the feature\n2. Perform the action\n3. Observe the result"}/>
-            <Lbl>Expected Result <span style={{color:"var(--color-text-danger)"}}>*</span></Lbl><input style={{...inp,marginBottom:10,borderColor:bf._err&&!bf.expected.trim()?"var(--color-text-danger)":undefined}} value={bf.expected} onChange={e=>setBf(p=>({...p,expected:e.target.value,_err:false}))} placeholder="What should happen"/>
-            <Lbl>Actual Result <span style={{color:"var(--color-text-danger)"}}>*</span></Lbl><input style={{...inp,marginBottom:bf._err?4:12,borderColor:bf._err&&!bf.actual.trim()?"var(--color-text-danger)":undefined}} value={bf.actual} onChange={e=>setBf(p=>({...p,actual:e.target.value,_err:false}))} placeholder="What actually happened"/>
+            <Lbl>Summary <span style={{color:"var(--color-text-danger)"}}>*</span></Lbl>
+            <input style={{...inp,marginBottom:10,borderColor:bf._err&&!bf.summary.trim()?"var(--color-text-danger)":undefined}} value={bf.summary} onChange={e=>setBf(p=>({...p,summary:e.target.value,_err:false}))} placeholder="e.g. Login button unresponsive after entering valid credentials"/>
+            <Lbl>Severity</Lbl>
+            <select style={{...sel,marginBottom:10}} value={bf.sev} onChange={e=>setBf(p=>({...p,sev:e.target.value}))}>{["Critical","High","Medium","Low"].map(s=><option key={s}>{s}</option>)}</select>
+            <Lbl>Steps to Reproduce <span style={{color:"var(--color-text-danger)"}}>*</span></Lbl>
+            <textarea style={{...ta,marginBottom:10,borderColor:bf._err&&!bf.steps.trim()?"var(--color-text-danger)":undefined}} rows={4} value={bf.steps} onChange={e=>setBf(p=>({...p,steps:e.target.value,_err:false}))} placeholder={"1. Navigate to the feature\n2. Perform the action\n3. Observe the result"}/>
+            <Lbl>Expected Result <span style={{color:"var(--color-text-danger)"}}>*</span></Lbl>
+            <input style={{...inp,marginBottom:10,borderColor:bf._err&&!bf.expected.trim()?"var(--color-text-danger)":undefined}} value={bf.expected} onChange={e=>setBf(p=>({...p,expected:e.target.value,_err:false}))} placeholder="e.g. User is redirected to the dashboard"/>
+            <Lbl>Actual Result <span style={{color:"var(--color-text-danger)"}}>*</span></Lbl>
+            <input style={{...inp,marginBottom:10,borderColor:bf._err&&!bf.actual.trim()?"var(--color-text-danger)":undefined}} value={bf.actual} onChange={e=>setBf(p=>({...p,actual:e.target.value,_err:false}))} placeholder="e.g. Page shows a 500 error / Spinner never stops / Element not clickable"/>
+            <Lbl>Screenshot (optional)</Lbl>
+            <div style={{marginBottom:bf._err?4:12}}>
+              {bf.screenshot
+                ?<div style={{position:"relative",display:"inline-block"}}>
+                    <img src={bf.screenshot} alt="Screenshot" style={{maxWidth:"100%",maxHeight:200,borderRadius:8,border:"1px solid var(--color-border-secondary)",display:"block"}}/>
+                    <button onClick={()=>setBf(p=>({...p,screenshot:null}))} style={{position:"absolute",top:6,right:6,background:"rgba(0,0,0,0.55)",color:"#fff",border:"none",borderRadius:"50%",width:24,height:24,cursor:"pointer",fontSize:14,display:"flex",alignItems:"center",justifyContent:"center",lineHeight:1}}>✕</button>
+                  </div>
+                :<label style={{display:"flex",alignItems:"center",gap:10,cursor:"pointer",padding:"14px 16px",borderRadius:8,border:"2px dashed var(--color-border-secondary)",background:"var(--color-background-secondary)"}}>
+                    <span style={{fontSize:22}}>📷</span>
+                    <div><div style={{fontSize:13,fontWeight:500,color:"var(--color-text-secondary)"}}>Click to upload screenshot</div><div style={{fontSize:12,color:"var(--color-text-tertiary)",marginTop:2}}>PNG, JPG, GIF supported</div></div>
+                    <input type="file" accept="image/*" style={{display:"none"}} onChange={e=>{
+                      const file=e.target.files?.[0]; if(!file) return;
+                      const reader=new FileReader();
+                      reader.onload=ev=>setBf(p=>({...p,screenshot:ev.target.result}));
+                      reader.readAsDataURL(file);
+                    }}/>
+                  </label>}
+            </div>
             {bf._err&&<div style={{color:"var(--color-text-danger)",fontSize:12,marginBottom:10}}>Please fill in all required fields (*) before submitting.</div>}
             <Btn v="danger" onClick={async()=>{
               if(!bf.summary.trim()||!bf.steps.trim()||!bf.expected.trim()||!bf.actual.trim()){setBf(p=>({...p,_err:true}));return;}
@@ -1199,15 +1222,16 @@ const [phase,setPhase]=useState("input"); const [sid,setSid]=useState(""); const
                 {type:"paragraph",content:[{type:"text",text:bf.expected||"—"}]},
                 {type:"heading",attrs:{level:3},content:[{type:"text",text:"Actual Result"}]},
                 {type:"paragraph",content:[{type:"text",text:bf.actual||"—"}]},
+                ...(bf.screenshot?[{type:"heading",attrs:{level:3},content:[{type:"text",text:"Screenshot"}]},{type:"paragraph",content:[{type:"text",text:"A screenshot was captured and saved in the QA Platform."}]}]:[]),
                 {type:"heading",attrs:{level:3},content:[{type:"text",text:"Story"}]},
                 {type:"paragraph",content:[{type:"text",text:sid+" · Filed by "+member.name}]},
               ]};
               try{const res=await callJira(proj,"POST","/issue",{fields:{project:{key:proj.jiraProjKey},summary:bf.summary||"Bug in "+sid,description:adfDesc,issuetype:{name:"Bug"},priority:{name:bf.sev}}});jRef=res.key;}catch{}
-              const bug={bid:"BUG-"+uid().toUpperCase(),sid,summary:bf.summary||"Bug in "+sid,sev:bf.sev,who:member.name,jKey:jRef,status:"Open",steps:stepLines,expected:bf.expected,actual:bf.actual};
+              const bug={bid:"BUG-"+uid().toUpperCase(),sid,summary:bf.summary||"Bug in "+sid,sev:bf.sev,who:member.name,jKey:jRef,status:"Open",steps:stepLines,expected:bf.expected,actual:bf.actual,screenshot:bf.screenshot||null};
               DB.bugs.push(bug);saveDB();pushNotif("admin","🐛 "+bug.bid+(jRef?" ("+jRef+")":"")+" filed for "+sid);
               const bugCase={id:bug.bid,title:bf.summary||"Bug in "+sid,type:"negative",platform,preconditions:"",steps:stepLines.length>0?stepLines:["Reproduce the bug"],expected:bf.expected||"Bug is fixed",automatable:false,status:"approved",fromBug:true,sev:bf.sev};
               setCases(cs=>[...cs,bugCase]);
-              setSessionBugs(p=>[...p,bug]);setBf({summary:"",sev:"High",steps:"",expected:"",actual:"",_err:false});setLoading(false);
+              setSessionBugs(p=>[...p,bug]);setBf({summary:"",sev:"High",steps:"",expected:"",actual:"",screenshot:null,_err:false});setLoading(false);
             }}>Submit Bug</Btn>
           </div>
           {sessionBugs.length>0&&<div style={card}>
@@ -1229,18 +1253,22 @@ const [phase,setPhase]=useState("input"); const [sid,setSid]=useState(""); const
                       <button onClick={()=>setEditingBugId(null)} style={ghostBtn}>Cancel</button>
                     </div>
                   </div>
-                :<div style={{display:"flex",gap:10,alignItems:"center"}}>
-                    <Tag c="red">{b.bid}</Tag>
-                    <span style={{flex:1,fontSize:13}}>{b.summary}</span>
-                    <Tag c={b.sev==="Critical"||b.sev==="High"?"red":"amber"}>{b.sev}</Tag>
-                    {b.jKey&&<Tag c="green">{b.jKey}</Tag>}
-                    <Tag c="blue">TC</Tag>
-                    <button title="Edit" onClick={()=>{setEditingBugId(b.bid);setEditBugForm({summary:b.summary,sev:b.sev,desc:b.desc||""});}} style={{background:"none",border:"none",cursor:"pointer",color:"var(--color-text-tertiary)",fontSize:14,padding:"2px 5px"}}>✎</button>
-                    <button title="Delete" onClick={()=>{
-                      setSessionBugs(p=>p.filter(x=>x.bid!==b.bid));
-                      DB.bugs=DB.bugs.filter(x=>x.bid!==b.bid); saveDB();
-                      setCases(cs=>cs.filter(c=>c.id!==b.bid));
-                    }} style={{background:"none",border:"none",cursor:"pointer",color:"var(--color-text-danger)",fontSize:14,padding:"2px 5px"}}>✕</button>
+                :<div style={{display:"flex",flexDirection:"column",gap:6}}>
+                    <div style={{display:"flex",gap:10,alignItems:"center"}}>
+                      <Tag c="red">{b.bid}</Tag>
+                      <span style={{flex:1,fontSize:13,fontWeight:500}}>{b.summary}</span>
+                      <Tag c={b.sev==="Critical"||b.sev==="High"?"red":"amber"}>{b.sev}</Tag>
+                      {b.jKey&&<Tag c="green">{b.jKey}</Tag>}
+                      <Tag c="blue">TC</Tag>
+                      <button title="Edit" onClick={()=>{setEditingBugId(b.bid);setEditBugForm({summary:b.summary,sev:b.sev,desc:b.desc||""});}} style={{background:"none",border:"none",cursor:"pointer",color:"var(--color-text-tertiary)",fontSize:14,padding:"2px 5px"}}>✎</button>
+                      <button title="Delete" onClick={()=>{
+                        setSessionBugs(p=>p.filter(x=>x.bid!==b.bid));
+                        DB.bugs=DB.bugs.filter(x=>x.bid!==b.bid); saveDB();
+                        setCases(cs=>cs.filter(c=>c.id!==b.bid));
+                      }} style={{background:"none",border:"none",cursor:"pointer",color:"var(--color-text-danger)",fontSize:14,padding:"2px 5px"}}>✕</button>
+                    </div>
+                    {b.actual&&<div style={{fontSize:12,color:"var(--color-text-secondary)",paddingLeft:4}}>Actual: {b.actual}</div>}
+                    {b.screenshot&&<img src={b.screenshot} alt="Screenshot" title="Click to view full size" onClick={()=>window.open(b.screenshot)} style={{maxWidth:200,maxHeight:100,borderRadius:6,border:"1px solid var(--color-border-secondary)",cursor:"pointer",marginTop:2}}/>}
                   </div>}
             </div>)}
           </div>}
