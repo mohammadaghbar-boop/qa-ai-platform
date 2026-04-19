@@ -247,8 +247,8 @@ function NotifBell({userId}) {
 }
 
 /* ─── AI Chat ─────────────────────────────────────────────────────────────── */
-function AIChat({proj,sid,sdata}) {
-  const [msgs,setMsgs]=useState([{role:"assistant",text:"Hi! I'm connected to your Jira project. Ask me anything about QA, this story, open issues, bugs, or best practices."}]);
+function AIChat({proj,sid,sdata,cases=[],gapText="",result=null,sessionBugs=[],coverageText="",platform=""}) {
+  const [msgs,setMsgs]=useState([{role:"assistant",text:"Hi! I can see your full story, test cases, execution results and bugs. Ask me anything!"}]);
   const [msg,setMsg]=useState(""); const [busy,setBusy]=useState(false);
   const [jiraCtx,setJiraCtx]=useState("");
   const msgsRef=useRef(null);
@@ -313,7 +313,17 @@ function AIChat({proj,sid,sdata}) {
       let liveCtx="";
       if(isJiraQuery(u))liveCtx=await fetchJiraData(u);
       const jiraSection=[jiraCtx,liveCtx].filter(Boolean).join("\n\n");
-      const sys=`You are a QA expert assistant. You do NOT have any tools or external access — all Jira data you need has already been fetched by the application and is provided below. Never ask the user to approve tool access or permissions. Answer only from the context provided and your QA knowledge.\nProject: ${proj?.name||"—"}, Jira key: ${proj?.jiraProjKey||"—"}${sid?`, Active story: ${sid}`:""}.\n${jiraSection?`\nJira data (already fetched for you):\n${jiraSection}\n`:"(No Jira data was fetched for this query — answer from general QA knowledge.)"}\nBe concise. When referencing Jira issues use their key (e.g. ${proj?.jiraProjKey||"PROJ"}-123).`;
+
+      // Build workspace context from current session data
+      const storySection=sdata?`USER STORY:\n  ID: ${sid}\n  Summary: ${sdata.summary||""}\n  Description: ${sdata.description||sdata.rawText||""}\n  Platform: ${platform}`:sid?`Story ID: ${sid}`:"No story loaded yet.";
+      const gapSection=gapText?`GAP ANALYSIS:\n${gapText}`:"";
+      const casesSection=cases.length>0?`TEST CASES (${cases.length} total):\n${cases.map(c=>`  [${c.status?.toUpperCase()||"PENDING"}] ${c.id} (${c.type}): ${c.title}${c.steps?.length?"\n    Steps: "+c.steps.join(" → "):""}`).join("\n")}`:"No test cases yet.";
+      const resultSection=result?`EXECUTION RESULTS:\n  Total: ${result.total} | Passed: ${result.pass?.length||0} | Failed: ${result.fail?.length||0}\n  Passed: ${(result.pass||[]).join(", ")||"none"}\n  Failed: ${(result.fail||[]).join(", ")||"none"}`:"No execution results yet.";
+      const bugsSection=sessionBugs.length>0?`BUGS FILED (${sessionBugs.length}):\n${sessionBugs.map(b=>`  ${b.bid} [${b.sev}]: ${b.summary}${b.jKey?" → "+b.jKey:""}`).join("\n")}`:"No bugs filed yet.";
+      const coverageSection=coverageText?`COVERAGE REPORT:\n${coverageText}`:"";
+
+      const workspaceCtx=[storySection,gapSection,casesSection,resultSection,bugsSection,coverageSection].filter(Boolean).join("\n\n");
+      const sys=`You are a QA expert assistant embedded in the QA AI Platform. You have full visibility into the current session data below. You do NOT have any tools — all Jira data is pre-fetched and provided. Never ask for tool access or permissions.\n\nProject: ${proj?.name||"—"} (Jira: ${proj?.jiraProjKey||"—"})\n\n=== CURRENT SESSION ===\n${workspaceCtx}\n${jiraSection?`\n=== JIRA DATA (fetched) ===\n${jiraSection}`:""}\n\nBe concise and specific. Reference test case IDs, bug IDs, and Jira keys by name when relevant.`;
       const r=await callAI([...hist,{role:"user",content:u}],sys,2000,proj?.anthropicKey||"");
       setMsgs(m=>[...m,{role:"assistant",text:r}]);
     }catch(e){setMsgs(m=>[...m,{role:"assistant",text:"Error: "+e.message}]);}
@@ -1055,7 +1065,7 @@ function Workspace({member,refreshSaved,restoreTarget,clearRestore}) {
       {chat&&phase!=="input"&&<div style={{width:290,flexShrink:0,display:"flex",flexDirection:"column",height:"calc(100vh - 120px)",position:"sticky",top:0}}>
         <div style={{...card,flex:1,display:"flex",flexDirection:"column",overflow:"hidden",padding:16}}>
           <div style={{fontWeight:500,fontSize:14,marginBottom:12,display:"flex",alignItems:"center",gap:8}}>🤖 QA Assistant <Tag c="blue">{sid}</Tag></div>
-          <div style={{flex:1,overflow:"auto"}}><AIChat proj={proj} sid={sid} sdata={sdata}/></div>
+          <div style={{flex:1,overflow:"auto"}}><AIChat proj={proj} sid={sid} sdata={sdata} cases={cases} gapText={gapText} result={result} sessionBugs={sessionBugs} coverageText={coverageText} platform={platform}/></div>
         </div>
       </div>}
     </div>
