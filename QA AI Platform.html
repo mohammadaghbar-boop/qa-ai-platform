@@ -267,12 +267,22 @@ function AIChat({proj,sid,sdata}) {
     })();
   },[sid]);
 
-  const isJiraQuery=t=>/bug|issue|ticket|jira|open|status|assign|sprint|backlog|comment|story|task|priority|close|resolve|report|list|show|fetch|get/i.test(t);
+  const isJiraQuery=t=>/bug|issue|ticket|jira|open|status|assign|sprint|backlog|comment|story|task|priority|close|resolve|report|list|show|fetch|get|[A-Z]+-\d+/i.test(t);
 
   const fetchJiraData=async(q)=>{
     if(!proj?.jiraProjKey)return"";
     const parts=[];
     try{
+      // fetch specific issue keys mentioned in query e.g. JF-10, PROJ-5
+      const keyMatches=[...new Set((q.match(/[A-Za-z]+-\d+/g)||[]).map(k=>k.toUpperCase()))];
+      for(const key of keyMatches){
+        try{
+          const issue=await callJira(proj,"GET",`/issue/${key}?fields=summary,status,assignee,priority,description,issuetype,comment`);
+          const descText=issue.fields?.description?.content?.[0]?.content?.[0]?.text||"";
+          const comments=(issue.fields?.comment?.comments||[]).slice(-3).map(c=>`    [${c.author?.displayName}]: ${c.body?.content?.[0]?.content?.[0]?.text||""}`).join("\n");
+          parts.push(`Issue ${issue.key}:\n  Summary: ${issue.fields?.summary}\n  Type: ${issue.fields?.issuetype?.name}\n  Status: ${issue.fields?.status?.name}\n  Priority: ${issue.fields?.priority?.name}\n  Assignee: ${issue.fields?.assignee?.displayName||"Unassigned"}${descText?"\n  Description: "+descText:""}${comments?"\n  Recent comments:\n"+comments:""}`);
+        }catch{}
+      }
       // fetch open bugs for project
       if(/bug/i.test(q)){
         const r=await callJira(proj,"GET",`/search?jql=project=${proj.jiraProjKey}+AND+issuetype=Bug+AND+status!=Done+ORDER+BY+created+DESC&maxResults=10&fields=summary,status,priority,assignee`);
@@ -280,13 +290,13 @@ function AIChat({proj,sid,sdata}) {
         if(bugs)parts.push(`Open bugs in ${proj.jiraProjKey}:\n${bugs}`);
       }
       // fetch recent issues
-      if(/issue|ticket|task|list|show|fetch|open/i.test(q)&&!/bug/i.test(q)){
+      if(/issue|ticket|task|list|show|fetch|open/i.test(q)&&!/bug/i.test(q)&&keyMatches.length===0){
         const r=await callJira(proj,"GET",`/search?jql=project=${proj.jiraProjKey}+AND+status!=Done+ORDER+BY+updated+DESC&maxResults=8&fields=summary,status,issuetype,assignee,priority`);
         const issues=(r.issues||[]).map(i=>`  ${i.key}: [${i.fields?.issuetype?.name}/${i.fields?.priority?.name}] ${i.fields?.summary} — ${i.fields?.status?.name}`).join("\n");
         if(issues)parts.push(`Recent open issues in ${proj.jiraProjKey}:\n${issues}`);
       }
       // fetch comments on current story
-      if(sid&&/comment/i.test(q)){
+      if(sid&&/comment/i.test(q)&&keyMatches.length===0){
         const r=await callJira(proj,"GET","/issue/"+sid+"/comment?maxResults=5");
         const comments=(r.comments||[]).map(c=>`  [${c.author?.displayName}]: ${c.body?.content?.[0]?.content?.[0]?.text||""}`).join("\n");
         if(comments)parts.push(`Comments on ${sid}:\n${comments}`);
