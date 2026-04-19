@@ -1172,11 +1172,11 @@ const [phase,setPhase]=useState("input"); const [sid,setSid]=useState(""); const
           <div style={{...card,padding:"12px 20px",display:"flex",alignItems:"center",gap:16,marginBottom:4}}>
             <div style={{flex:1,fontSize:14}}>Story: <b>{sid}</b> · {result?<><Tag c={result.fail.length>0?"red":"green"}>{result.pass.length} passed</Tag> <Tag c={result.fail.length>0?"red":"green"}>{result.fail.length} failed</Tag></>:<Tag>No execution</Tag>}</div>
           </div>
-          {result?.fail?.length>0&&<div style={card}>
+          {result?.fail?.filter(c=>!sessionBugs.some(b=>b.tcId===c.id)).length>0&&<div style={card}>
             <H2>Failed cases</H2>
-            {result.fail.map(c=><div key={c.id} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 0",borderBottom:"1px solid var(--color-border-tertiary)"}}>
+            {result.fail.filter(c=>!sessionBugs.some(b=>b.tcId===c.id)).map(c=><div key={c.id} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 0",borderBottom:"1px solid var(--color-border-tertiary)"}}>
               <Tag c="red">{c.id}</Tag><span style={{flex:1,fontSize:13}}>{c.title}</span>
-              <button onClick={()=>{setBf({summary:c.title+" is not working as expected",sev:"High",steps:(c.steps||[]).map((s,i)=>`${i+1}. ${s}`).join("\n")||"1. Reproduce the issue",expected:c.expected||"The feature works as designed",actual:"Timeout error — element not found after 30s during test execution",screenshot:null,_err:false});setShowBugForm(true);}} style={{...ghostBtn,padding:"4px 10px",fontSize:12}}>🐛 File Bug</button>
+              <button onClick={()=>{setBf({tcId:c.id,summary:c.title+" is not working as expected",sev:"High",steps:(c.steps||[]).map((s,i)=>`${i+1}. ${s}`).join("\n")||"1. Reproduce the issue",expected:c.expected||"The feature works as designed",actual:"Timeout error — element not found after 30s during test execution",screenshot:null,_err:false});setShowBugForm(true);}} style={{...ghostBtn,padding:"4px 10px",fontSize:12}}>🐛 File Bug</button>
             </div>)}
           </div>}
           <div style={card}>
@@ -1227,7 +1227,7 @@ const [phase,setPhase]=useState("input"); const [sid,setSid]=useState(""); const
                 {type:"paragraph",content:[{type:"text",text:sid+" · Filed by "+member.name}]},
               ]};
               try{const res=await callJira(proj,"POST","/issue",{fields:{project:{key:proj.jiraProjKey},summary:bf.summary||"Bug in "+sid,description:adfDesc,issuetype:{name:"Bug"},priority:{name:bf.sev}}});jRef=res.key;}catch{}
-              const bug={bid:"BUG-"+uid().toUpperCase(),sid,summary:bf.summary||"Bug in "+sid,sev:bf.sev,who:member.name,jKey:jRef,status:"Open",steps:stepLines,expected:bf.expected,actual:bf.actual,screenshot:bf.screenshot||null};
+              const bug={bid:"BUG-"+uid().toUpperCase(),sid,summary:bf.summary||"Bug in "+sid,sev:bf.sev,who:member.name,jKey:jRef,status:"Open",steps:stepLines,expected:bf.expected,actual:bf.actual,screenshot:bf.screenshot||null,tcId:bf.tcId||null};
               DB.bugs.push(bug);saveDB();pushNotif("admin","🐛 "+bug.bid+(jRef?" ("+jRef+")":"")+" filed for "+sid);
               const bugCase={id:bug.bid,title:bf.summary||"Bug in "+sid,type:"negative",platform,preconditions:"",steps:stepLines.length>0?stepLines:["Reproduce the bug"],expected:bf.expected||"Bug is fixed",automatable:false,status:"approved",fromBug:true,sev:bf.sev};
               setCases(cs=>[...cs,bugCase]);
