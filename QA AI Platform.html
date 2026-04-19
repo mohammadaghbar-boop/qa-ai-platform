@@ -42,7 +42,7 @@
 const { useState, useRef, useEffect } = React;
 
 /* ─── DB ─────────────────────────────────────────────────────────────────── */
-const DB = { members:[], projects:[], assignments:[], sessions:[], bugs:[], notifs:[], savedStories:[] };
+const DB = { members:[], projects:[], assignments:[], sessions:[], bugs:[], notifs:[], savedStories:[], categories:[] };
 const STORAGE_KEY = "qa_platform_db";
 function loadDB() {
   try { const s=localStorage.getItem(STORAGE_KEY); if(s){ const p=JSON.parse(s); Object.keys(p).forEach(k=>{ if(Array.isArray(p[k])) DB[k]=p[k]; }); } } catch(e){}
@@ -773,13 +773,19 @@ const [phase,setPhase]=useState("input"); const [sid,setSid]=useState(""); const
   const editS=(id,si,v)=>setCases(cs=>cs.map(c=>{if(c.id!==id)return c;const s=[...c.steps];s[si]=v;return{...c,steps:s};}));
   const addStep=id=>setCases(cs=>cs.map(c=>c.id===id?{...c,steps:[...(c.steps||[]),"New step"]}:c));
   const reset=()=>{localStorage.removeItem(WS_SNAP);setPhase("input");setSid("");setSdata(null);setPlatform("web");setCtypes([]);setGapText("");setCases([]);setEditOn(false);setScripts({web:"",ios:"",android:""});setProjFiles(null);setExecLines([]);setResult(null);setJKey(null);setBugDone(null);setShowBugForm(false);setFixed(false);setChat(false);setShowAddCase(false);setSelectedForScripts([]);setCoverageText("");setSessionBugs([]);setHasSaved(false);};
-  const saveSnapshot=()=>{
+  const [saveModal,setSaveModal]=useState(null);
+  // saveModal: null | {step:1,name:""} | {step:2,name:"",newCat:""}
+  const openSaveModal=()=>{
     if(!sid||!sdata)return;
     const existing=DB.savedStories.find(s=>s.sid===sid);
-    const snap={id:existing?.id||uid(),name:existing?.name||(sdata?.summary||sid),sid,sdata,cases:[...cases],gapText,platform,ctypes:[...ctypes],scripts:{...scripts},result,sessionBugs:[...sessionBugs],coverageText,savedAt:Date.now()};
+    setSaveModal({step:1,name:existing?.name||sid});
+  };
+  const commitSave=(name,categoryId)=>{
+    const existing=DB.savedStories.find(s=>s.sid===sid);
+    const snap={id:existing?.id||uid(),name,categoryId:categoryId||null,sid,sdata,cases:[...cases],gapText,platform,ctypes:[...ctypes],scripts:{...scripts},result,sessionBugs:[...sessionBugs],coverageText,savedAt:Date.now()};
     if(existing){DB.savedStories=DB.savedStories.map(s=>s.sid===sid?snap:s);}
     else{DB.savedStories.unshift(snap);}
-    saveDB(); if(refreshSaved)refreshSaved(); setHasSaved(true);
+    saveDB(); if(refreshSaved)refreshSaved(); setHasSaved(true); setSaveModal(null);
   };
   const saveAndReset=()=>{
     if(sid&&sdata){
@@ -827,8 +833,57 @@ const [phase,setPhase]=useState("input"); const [sid,setSid]=useState(""); const
   const curScript=platform==="mobile"?(tab==="ios"?scripts.ios:scripts.android):scripts.web;
   const ghostBtn={padding:"8px 18px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:14,fontWeight:500,color:"var(--color-text-secondary)"};
 
-  return <div>
+  /* ── Save modal ── */
+  const SaveModal=saveModal&&(()=>{
+    const overlayStyle={position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",zIndex:2000,display:"flex",alignItems:"center",justifyContent:"center"};
+    const boxStyle={background:"var(--color-background-primary)",borderRadius:14,padding:28,width:420,maxWidth:"90vw",boxShadow:"0 8px 32px rgba(0,0,0,0.18)"};
+    if(saveModal.step===1) return(
+      <div style={overlayStyle} onClick={()=>setSaveModal(null)}>
+        <div style={boxStyle} onClick={e=>e.stopPropagation()}>
+          <div style={{fontWeight:600,fontSize:16,marginBottom:6}}>Name this session</div>
+          <div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:16}}>Give this session a name to identify it in your history.</div>
+          <input autoFocus style={{...inp,marginBottom:16,fontSize:14}} value={saveModal.name} onChange={e=>setSaveModal(m=>({...m,name:e.target.value}))} placeholder={sid} onKeyDown={e=>e.key==="Enter"&&setSaveModal(m=>({...m,step:2,newCat:""}))}/>
+          <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
+            <button onClick={()=>setSaveModal(null)} style={ghostBtn}>Cancel</button>
+            <Btn v="primary" onClick={()=>setSaveModal(m=>({...m,step:2,newCat:""}))}>Next →</Btn>
+          </div>
+        </div>
+      </div>);
+    const cats=DB.categories;
+    return(
+      <div style={overlayStyle} onClick={()=>setSaveModal(null)}>
+        <div style={boxStyle} onClick={e=>e.stopPropagation()}>
+          <div style={{fontWeight:600,fontSize:16,marginBottom:4}}>Choose a sprint</div>
+          <div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:14}}>Select which sprint this session belongs to.</div>
+          <div style={{display:"flex",flexDirection:"column",gap:6,maxHeight:220,overflow:"auto",marginBottom:14}}>
+            {cats.length===0&&<div style={{fontSize:13,color:"var(--color-text-tertiary)",padding:"8px 0"}}>No sprints yet. Create one below.</div>}
+            {cats.map(c=>{
+              const stories=DB.savedStories.filter(s=>s.categoryId===c.id);
+              return <div key={c.id} onClick={()=>commitSave(saveModal.name||sid,c.id)} style={{borderRadius:8,border:"1px solid var(--color-border-secondary)",padding:"10px 14px",cursor:"pointer",background:"var(--color-background-secondary)"}}
+                onMouseEnter={e=>e.currentTarget.style.borderColor="var(--color-text-info)"}
+                onMouseLeave={e=>e.currentTarget.style.borderColor="var(--color-border-secondary)"}>
+                <div style={{fontWeight:500,fontSize:14}}>{c.name}</div>
+                <div style={{fontSize:12,color:"var(--color-text-tertiary)",marginTop:2}}>{stories.length} session{stories.length!==1?"s":""}{stories.length>0?" · "+stories.map(s=>s.sid).join(", "):""}</div>
+              </div>;
+            })}
+          </div>
+          <div style={{borderTop:"1px solid var(--color-border-tertiary)",paddingTop:12,marginBottom:12}}>
+            <div style={{fontSize:12,fontWeight:500,color:"var(--color-text-secondary)",marginBottom:6}}>Create new sprint</div>
+            <div style={{display:"flex",gap:8}}>
+              <input style={{...inp,flex:1,fontSize:13}} value={saveModal.newCat||""} onChange={e=>setSaveModal(m=>({...m,newCat:e.target.value}))} placeholder="e.g. Sprint 3" onKeyDown={e=>{if(e.key==="Enter"&&saveModal.newCat?.trim()){const c={id:uid(),name:saveModal.newCat.trim(),createdAt:Date.now()};DB.categories.push(c);saveDB();commitSave(saveModal.name||sid,c.id);}}}/>
+              <Btn v="primary" onClick={()=>{if(!saveModal.newCat?.trim())return;const c={id:uid(),name:saveModal.newCat.trim(),createdAt:Date.now()};DB.categories.push(c);saveDB();commitSave(saveModal.name||sid,c.id);}}>Create & Save</Btn>
+            </div>
+          </div>
+          <div style={{display:"flex",gap:8,justifyContent:"space-between"}}>
+            <button onClick={()=>setSaveModal(m=>({...m,step:1}))} style={ghostBtn}>← Back</button>
+            <button onClick={()=>commitSave(saveModal.name||sid,null)} style={{...ghostBtn,fontSize:12,color:"var(--color-text-tertiary)"}}>Save without sprint</button>
+          </div>
+        </div>
+      </div>);
+  })();
 
+  return <div>
+    {SaveModal}
     <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",marginBottom:16}}>
       <div><div style={{fontSize:20,fontWeight:500,marginBottom:4}}>QA Workspace</div>
         <div style={{fontSize:13,color:"var(--color-text-secondary)",display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
@@ -838,7 +893,7 @@ const [phase,setPhase]=useState("input"); const [sid,setSid]=useState(""); const
         </div>
       </div>
       <div style={{display:"flex",gap:8}}>
-        {phase!=="input"&&sid&&<button onClick={saveSnapshot} style={ghostBtn} title="Save current session to history">💾 Save</button>}
+        {phase!=="input"&&sid&&<button onClick={openSaveModal} style={ghostBtn} title="Save current session to history">💾 Save</button>}
         {phase!=="input"&&sid&&<button onClick={reset} disabled={!hasSaved} title={hasSaved?"Start a new story":"Save first to enable"} style={{...ghostBtn,opacity:hasSaved?1:0.4,cursor:hasSaved?"pointer":"not-allowed"}}>↩ New story</button>}
         {phase!=="input"&&<button onClick={()=>setChat(o=>!o)} style={ghostBtn}>{chat?"Hide chat":"🤖 AI Chat"}</button>}
         {phase==="coverage"&&<button onClick={saveAndReset} style={ghostBtn}>↩ New story</button>}
@@ -1223,7 +1278,8 @@ function App() {
   const [savedStories,setSavedStories]=useState(()=>[...DB.savedStories]);
   const [restoreTarget,setRestoreTarget]=useState(null);
   const [renamingId,setRenamingId]=useState(null); const [renameVal,setRenameVal]=useState("");
-  const refreshSaved=()=>setSavedStories([...DB.savedStories]);
+  const [,forceUpdate]=useState(0);
+  const refreshSaved=()=>{setSavedStories([...DB.savedStories]);forceUpdate(x=>x+1);};
   const deleteSnap=id=>{DB.savedStories=DB.savedStories.filter(s=>s.id!==id);saveDB();refreshSaved();};
   const renameSnap=(id,name)=>{DB.savedStories=DB.savedStories.map(s=>s.id===id?{...s,name}:s);saveDB();refreshSaved();setRenamingId(null);};
   const handleLogin=(u,remember)=>{
@@ -1252,35 +1308,55 @@ function App() {
               <span>{n.icon}</span>{n.label}{ob>0&&<span style={{marginLeft:"auto",background:"var(--color-text-danger)",color:"#fff",borderRadius:20,padding:"0 6px",fontSize:11}}>{ob}</span>}
             </div>;})}
         </div>)}
-        {user.role==="member"&&savedStories.length>0&&<div style={{padding:"6px 12px 12px"}}>
-          <div style={{fontSize:11,fontWeight:500,color:"var(--color-text-tertiary)",textTransform:"uppercase",letterSpacing:"0.07em",padding:"10px 8px 6px"}}>Saved Stories</div>
-          <div style={{display:"flex",flexDirection:"column",gap:5}}>
-            {savedStories.map(s=><div key={s.id} style={{borderRadius:8,padding:"9px 10px",background:"var(--color-background-primary)",border:"1px solid var(--color-border-tertiary)",cursor:renamingId===s.id?"default":"pointer",transition:"border-color 0.15s,box-shadow 0.15s"}}
-              onMouseEnter={e=>{if(renamingId!==s.id){e.currentTarget.style.borderColor="var(--color-border-primary)";e.currentTarget.style.boxShadow="0 1px 4px rgba(0,0,0,0.08)";}}}
-              onMouseLeave={e=>{e.currentTarget.style.borderColor="var(--color-border-tertiary)";e.currentTarget.style.boxShadow="none";}}
-              onClick={()=>{if(renamingId!==s.id)setRestoreTarget(s);}}>
+        {user.role==="member"&&savedStories.length>0&&(()=>{
+          const StoryCard=({s})=>(
+            <div key={s.id} style={{borderRadius:7,padding:"8px 9px",background:"var(--color-background-primary)",border:"1px solid var(--color-border-tertiary)",cursor:renamingId===s.id?"default":"pointer",transition:"border-color 0.15s"}}
+              onMouseEnter={e=>{if(renamingId!==s.id)e.currentTarget.style.borderColor="var(--color-border-primary)";}}
+              onMouseLeave={e=>{e.currentTarget.style.borderColor="var(--color-border-tertiary)";}}
+              onClick={()=>{if(renamingId!==s.id){setRestoreTarget(s);setPage("workspace");}}}>
               {renamingId===s.id
                 ?<div style={{display:"flex",gap:4}} onClick={e=>e.stopPropagation()}>
                     <input autoFocus style={{flex:1,fontSize:12,padding:"3px 7px",borderRadius:5,border:"1px solid var(--color-border-primary)",background:"var(--color-background-secondary)",color:"var(--color-text-primary)",outline:"none"}} value={renameVal} onChange={e=>setRenameVal(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")renameSnap(s.id,renameVal||s.sid);if(e.key==="Escape")setRenamingId(null);}}/>
                     <button onClick={()=>renameSnap(s.id,renameVal||s.sid)} style={{background:"none",border:"none",cursor:"pointer",color:"var(--color-text-success)",fontSize:14,padding:"0 2px"}}>✓</button>
                   </div>
                 :<div>
-                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:5}}>
-                      <span style={{fontSize:12,fontWeight:500,color:"var(--color-text-primary)",flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",lineHeight:1.35}}>{s.name}</span>
-                      <div style={{display:"flex",gap:1,marginLeft:5,flexShrink:0,opacity:0.7}} onClick={e=>e.stopPropagation()}>
-                        <button title="Rename" onClick={()=>{setRenamingId(s.id);setRenameVal(s.name);}} style={{background:"none",border:"none",cursor:"pointer",color:"var(--color-text-tertiary)",fontSize:11,padding:"2px 4px",borderRadius:4,lineHeight:1}}>✎</button>
-                        <button title="Delete" onClick={()=>deleteSnap(s.id)} style={{background:"none",border:"none",cursor:"pointer",color:"var(--color-text-danger)",fontSize:11,padding:"2px 4px",borderRadius:4,lineHeight:1}}>✕</button>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+                      <span style={{fontSize:12,fontWeight:500,color:"var(--color-text-primary)",flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{s.name}</span>
+                      <div style={{display:"flex",gap:1,marginLeft:4,flexShrink:0,opacity:0.7}} onClick={e=>e.stopPropagation()}>
+                        <button title="Rename" onClick={()=>{setRenamingId(s.id);setRenameVal(s.name);}} style={{background:"none",border:"none",cursor:"pointer",color:"var(--color-text-tertiary)",fontSize:11,padding:"2px 3px",borderRadius:3}}>✎</button>
+                        <button title="Delete" onClick={()=>deleteSnap(s.id)} style={{background:"none",border:"none",cursor:"pointer",color:"var(--color-text-danger)",fontSize:11,padding:"2px 3px",borderRadius:3}}>✕</button>
                       </div>
                     </div>
                     <div style={{display:"flex",gap:3,flexWrap:"wrap"}}>
                       <Tag c="blue">{s.sid}</Tag>
                       {(s.cases?.filter(c=>c.status==="approved").length||0)>0&&<Tag c="green">{s.cases.filter(c=>c.status==="approved").length} TC</Tag>}
-                      {s.coverageText&&<Tag c="blue">✓</Tag>}
+                      {s.coverageText&&<Tag c="green">✓</Tag>}
                     </div>
                   </div>}
-            </div>)}
-          </div>
-        </div>}
+            </div>);
+          const cats=DB.categories;
+          const grouped=cats.map(c=>({cat:c,stories:savedStories.filter(s=>s.categoryId===c.id)})).filter(g=>g.stories.length>0);
+          const uncategorized=savedStories.filter(s=>!s.categoryId);
+          return <div style={{padding:"6px 12px 12px"}}>
+            <div style={{fontSize:11,fontWeight:500,color:"var(--color-text-tertiary)",textTransform:"uppercase",letterSpacing:"0.07em",padding:"10px 8px 6px"}}>Saved Stories</div>
+            {grouped.map(({cat,stories})=>(
+              <div key={cat.id} style={{marginBottom:10}}>
+                <div style={{fontSize:11,fontWeight:600,color:"var(--color-text-secondary)",padding:"4px 4px 5px",display:"flex",alignItems:"center",gap:5}}>
+                  <span style={{fontSize:10}}>📁</span>{cat.name}
+                  <span style={{marginLeft:"auto",fontSize:10,color:"var(--color-text-tertiary)",fontWeight:400}}>{stories.length}</span>
+                </div>
+                <div style={{display:"flex",flexDirection:"column",gap:4,paddingLeft:8,borderLeft:"2px solid var(--color-border-tertiary)"}}>
+                  {stories.map(s=><StoryCard key={s.id} s={s}/>)}
+                </div>
+              </div>))}
+            {uncategorized.length>0&&<div style={{marginBottom:6}}>
+              {grouped.length>0&&<div style={{fontSize:11,fontWeight:600,color:"var(--color-text-tertiary)",padding:"4px 4px 5px"}}>No sprint</div>}
+              <div style={{display:"flex",flexDirection:"column",gap:4}}>
+                {uncategorized.map(s=><StoryCard key={s.id} s={s}/>)}
+              </div>
+            </div>}
+          </div>;
+        })()}
       </div>
       <div style={{padding:"12px 20px",borderTop:"1px solid var(--color-border-tertiary)"}}>
         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
