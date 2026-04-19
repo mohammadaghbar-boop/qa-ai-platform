@@ -976,11 +976,30 @@ function Workspace({member,refreshSaved,restoreTarget,clearRestore}) {
 }
 
 /* ─── Login ───────────────────────────────────────────────────────────────── */
+const CREDS_KEY="qa_remember_creds";
 function LoginPage({onLogin}) {
-  const [mode,setMode]=useState("admin"); const [email,setEmail]=useState(""); const [pass,setPass]=useState(""); const [err,setErr]=useState(""); const [remember,setRemember]=useState(false);
+  const saved=React.useMemo(()=>{try{return JSON.parse(localStorage.getItem(CREDS_KEY))||null;}catch{return null;}},[]);
+  const [mode,setMode]=useState(saved?.mode||"admin");
+  const [email,setEmail]=useState(saved?.email||"");
+  const [pass,setPass]=useState(saved?.pass||"");
+  const [err,setErr]=useState("");
+  const [remember,setRemember]=useState(!!saved);
   const login=()=>{
-    if(mode==="admin"){if(email==="admin"&&pass==="admin"){onLogin({role:"admin",id:"admin"},remember);return;}setErr("Use admin / admin");return;}
-    const m=DB.members.find(x=>x.email===email&&x.password===pass); if(m){onLogin({role:"member",member:m,id:m.id},remember);return;} setErr("Invalid credentials");
+    if(mode==="admin"){
+      if(email==="admin"&&pass==="admin"){
+        if(remember){localStorage.setItem(CREDS_KEY,JSON.stringify({mode,email,pass}));}
+        else{localStorage.removeItem(CREDS_KEY);}
+        onLogin({role:"admin",id:"admin"},remember);return;
+      }
+      setErr("Use admin / admin");return;
+    }
+    const m=DB.members.find(x=>x.email===email&&x.password===pass);
+    if(m){
+      if(remember){localStorage.setItem(CREDS_KEY,JSON.stringify({mode,email,pass}));}
+      else{localStorage.removeItem(CREDS_KEY);}
+      onLogin({role:"member",member:m,id:m.id},remember);return;
+    }
+    setErr("Invalid credentials");
   };
   return <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"var(--color-background-tertiary)"}}>
     <div style={{...card,width:380,padding:36}}>
