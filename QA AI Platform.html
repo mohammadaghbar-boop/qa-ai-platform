@@ -1278,6 +1278,8 @@ function App() {
   const [savedStories,setSavedStories]=useState(()=>[...DB.savedStories]);
   const [restoreTarget,setRestoreTarget]=useState(null);
   const [renamingId,setRenamingId]=useState(null); const [renameVal,setRenameVal]=useState("");
+  const [renamingCatId,setRenamingCatId]=useState(null); const [renameCatVal,setRenameCatVal]=useState("");
+  const renameCat=(id,name)=>{if(!name.trim())return;DB.categories=DB.categories.map(c=>c.id===id?{...c,name:name.trim()}:c);saveDB();refreshSaved();setRenamingCatId(null);};
   const [,forceUpdate]=useState(0);
   const refreshSaved=()=>{
     DB.categories=DB.categories.filter(c=>DB.savedStories.some(s=>s.categoryId===c.id));
@@ -1348,9 +1350,13 @@ function App() {
             <div style={{fontSize:11,fontWeight:500,color:"var(--color-text-tertiary)",textTransform:"uppercase",letterSpacing:"0.07em",padding:"10px 8px 6px"}}>Saved Stories</div>
             {grouped.map(({cat,stories})=>(
               <div key={cat.id} style={{marginBottom:10}}>
-                <div style={{fontSize:11,fontWeight:600,color:"var(--color-text-secondary)",padding:"4px 4px 5px",display:"flex",alignItems:"center",gap:5}}>
-                  <span style={{fontSize:10}}>📁</span>{cat.name}
-                  <span style={{marginLeft:"auto",fontSize:10,color:"var(--color-text-tertiary)",fontWeight:400}}>{stories.length}</span>
+                <div style={{fontSize:11,fontWeight:600,color:"var(--color-text-secondary)",padding:"2px 4px 5px",display:"flex",alignItems:"center",gap:4}}>
+                  <span style={{fontSize:10}}>📁</span>
+                  {renamingCatId===cat.id
+                    ?<input autoFocus style={{flex:1,fontSize:11,padding:"1px 5px",borderRadius:4,border:"1px solid var(--color-border-primary)",background:"var(--color-background-secondary)",color:"var(--color-text-primary)",outline:"none",fontWeight:600}} value={renameCatVal} onChange={e=>setRenameCatVal(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")renameCat(cat.id,renameCatVal);if(e.key==="Escape")setRenamingCatId(null);}} onBlur={()=>renameCat(cat.id,renameCatVal||cat.name)}/>
+                    :<span style={{flex:1}}>{cat.name}</span>}
+                  <span style={{fontSize:10,color:"var(--color-text-tertiary)",fontWeight:400}}>{stories.length}</span>
+                  {renamingCatId!==cat.id&&<button title="Rename sprint" onClick={()=>{setRenamingCatId(cat.id);setRenameCatVal(cat.name);}} style={{background:"none",border:"none",cursor:"pointer",color:"var(--color-text-tertiary)",fontSize:10,padding:"1px 3px",borderRadius:3,lineHeight:1}}>✎</button>}
                 </div>
                 <div style={{display:"flex",flexDirection:"column",gap:4,paddingLeft:8,borderLeft:"2px solid var(--color-border-tertiary)"}}>
                   {stories.map(s=><StoryCard key={s.id} s={s}/>)}
