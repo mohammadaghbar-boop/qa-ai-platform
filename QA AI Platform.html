@@ -589,6 +589,8 @@ const [phase,setPhase]=useState("input"); const [sid,setSid]=useState(""); const
   const [selectedForScripts,setSelectedForScripts]=useState([]); const [coverageText,setCoverageText]=useState(""); const [sessionBugs,setSessionBugs]=useState([]); const [appUrl,setAppUrl]=useState("");
   const [scriptCache,setScriptCache]=useState({});
   const [editingBugId,setEditingBugId]=useState(null); const [editBugForm,setEditBugForm]=useState({});
+  const [toast,setToast]=useState(null);
+  const showToast=(msg)=>{setToast(msg);setTimeout(()=>setToast(null),3000);};
 
   const WS_SNAP=`qa_ws_${member.id}`;
   // Restore workspace state on mount (survives logout/login and page refresh)
@@ -795,7 +797,7 @@ const [phase,setPhase]=useState("input"); const [sid,setSid]=useState(""); const
     const snap={id:existing?.id||uid(),name,categoryId:categoryId||null,sid,sdata,cases:[...cases],gapText,platform,ctypes:[...ctypes],scripts:{...scripts},result,sessionBugs:[...sessionBugs],coverageText,savedAt:Date.now()};
     if(existing){DB.savedStories=DB.savedStories.map(s=>s.sid===sid?snap:s);}
     else{DB.savedStories.unshift(snap);}
-    saveDB(); if(refreshSaved)refreshSaved(); setHasSaved(true); setSaveModal(null);
+    saveDB(); if(refreshSaved)refreshSaved(); setHasSaved(true); setSaveModal(null); showToast("Session saved successfully");
   };
   const saveAndReset=()=>{
     if(sid&&sdata){
@@ -894,6 +896,9 @@ const [phase,setPhase]=useState("input"); const [sid,setSid]=useState(""); const
 
   return <div>
     {SaveModal}
+    {toast&&<div style={{position:"fixed",bottom:32,left:"50%",transform:"translateX(-50%)",background:"#1a1a18",color:"#fff",padding:"12px 22px",borderRadius:10,fontSize:14,fontWeight:500,zIndex:9999,boxShadow:"0 4px 16px rgba(0,0,0,0.22)",display:"flex",alignItems:"center",gap:10,pointerEvents:"none"}}>
+      <span style={{color:"#6fcf6f",fontSize:18}}>✓</span>{toast}
+    </div>}
     <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",marginBottom:16}}>
       <div><div style={{fontSize:20,fontWeight:500,marginBottom:4}}>QA Workspace</div>
         <div style={{fontSize:13,color:"var(--color-text-secondary)",display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
