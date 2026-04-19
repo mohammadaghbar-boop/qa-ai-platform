@@ -599,7 +599,7 @@ function Workspace({member,refreshSaved,restoreTarget,clearRestore}) {
   const [loading,setLoading]=useState(false); const [lmsg,setLmsg]=useState("");
   const [jKey,setJKey]=useState(null); const [bugDone,setBugDone]=useState(null);
   const [showBugForm,setShowBugForm]=useState(false); const [bf,setBf]=useState({summary:"",sev:"High",steps:"",expected:"",actual:""});
-  const [fixed,setFixed]=useState(false); const [hist,setHist]=useState([]); const [chat,setChat]=useState(false);
+  const [fixed,setFixed]=useState(false); const [hist,setHist]=useState([]); const [chat,setChat]=useState(false); const [hasSaved,setHasSaved]=useState(false);
   const [showAddCase,setShowAddCase]=useState(false); const [newCase,setNewCase]=useState({title:"",type:"happy",platform:"web",preconditions:"",steps:[""],expected:"",automatable:true});
   const [selectedForScripts,setSelectedForScripts]=useState([]); const [coverageText,setCoverageText]=useState(""); const [sessionBugs,setSessionBugs]=useState([]);
   const [scriptCache,setScriptCache]=useState({});
@@ -791,14 +791,14 @@ function Workspace({member,refreshSaved,restoreTarget,clearRestore}) {
   const editC=(id,k,v)=>setCases(cs=>cs.map(c=>c.id===id?{...c,[k]:v}:c));
   const editS=(id,si,v)=>setCases(cs=>cs.map(c=>{if(c.id!==id)return c;const s=[...c.steps];s[si]=v;return{...c,steps:s};}));
   const addStep=id=>setCases(cs=>cs.map(c=>c.id===id?{...c,steps:[...(c.steps||[]),"New step"]}:c));
-  const reset=()=>{localStorage.removeItem(WS_SNAP);setPhase("input");setSid("");setSdata(null);setPlatform("web");setCtypes([]);setGapText("");setCases([]);setEditOn(false);setScripts({web:"",ios:"",android:""});setProjFiles(null);setExecLines([]);setResult(null);setJKey(null);setBugDone(null);setShowBugForm(false);setFixed(false);setChat(false);setShowAddCase(false);setSelectedForScripts([]);setCoverageText("");setSessionBugs([]);};
+  const reset=()=>{localStorage.removeItem(WS_SNAP);setPhase("input");setSid("");setSdata(null);setPlatform("web");setCtypes([]);setGapText("");setCases([]);setEditOn(false);setScripts({web:"",ios:"",android:""});setProjFiles(null);setExecLines([]);setResult(null);setJKey(null);setBugDone(null);setShowBugForm(false);setFixed(false);setChat(false);setShowAddCase(false);setSelectedForScripts([]);setCoverageText("");setSessionBugs([]);setHasSaved(false);};
   const saveSnapshot=()=>{
     if(!sid||!sdata)return;
     const existing=DB.savedStories.find(s=>s.sid===sid);
     const snap={id:existing?.id||uid(),name:existing?.name||(sdata?.summary||sid),sid,sdata,cases:[...cases],gapText,platform,ctypes:[...ctypes],scripts:{...scripts},result,sessionBugs:[...sessionBugs],coverageText,savedAt:Date.now()};
     if(existing){DB.savedStories=DB.savedStories.map(s=>s.sid===sid?snap:s);}
     else{DB.savedStories.unshift(snap);}
-    saveDB(); if(refreshSaved)refreshSaved();
+    saveDB(); if(refreshSaved)refreshSaved(); setHasSaved(true);
   };
   const saveAndReset=()=>{
     if(sid&&sdata){
@@ -858,6 +858,7 @@ function Workspace({member,refreshSaved,restoreTarget,clearRestore}) {
       </div>
       <div style={{display:"flex",gap:8}}>
         {phase!=="input"&&sid&&<button onClick={saveSnapshot} style={ghostBtn} title="Save current session to history">💾 Save</button>}
+        {phase!=="input"&&sid&&<button onClick={reset} disabled={!hasSaved} title={hasSaved?"Start a new story":"Save first to enable"} style={{...ghostBtn,opacity:hasSaved?1:0.4,cursor:hasSaved?"pointer":"not-allowed"}}>↩ New story</button>}
         {phase!=="input"&&<button onClick={()=>setChat(o=>!o)} style={ghostBtn}>{chat?"Hide chat":"🤖 AI Chat"}</button>}
         {phase==="coverage"&&<button onClick={saveAndReset} style={ghostBtn}>↩ New story</button>}
       </div>
