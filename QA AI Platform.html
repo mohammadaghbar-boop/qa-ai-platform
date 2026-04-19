@@ -428,7 +428,7 @@ function adfToText(node) {
     const link = (node.marks||[]).find(m=>m.type==='link');
     return link ? `${node.text||''} (${link.attrs?.href||''})` : (node.text||'');
   }
-  if (node.type === 'inlineCard' || node.type === 'blockCard') return node.attrs?.url||'';
+  if (node.type === 'inlineCard' || node.type === 'blockCard' || node.type === 'embedCard') return node.attrs?.url||'';
   if (node.type === 'hardBreak') return '\n';
   const inner = (node.content||[]).map(adfToText).join('');
   return ['paragraph','heading','listItem','bulletList','orderedList','blockquote','panel','rule'].includes(node.type) ? inner+'\n' : inner;
@@ -469,7 +469,13 @@ function Workspace({member,refreshSaved,restoreTarget,clearRestore}) {
     try {
       const d=await callJira(proj,"GET","/issue/"+sid+"?fields=summary,description,labels,issuetype,status,assignee,priority");
       const flds=d.fields||{}; let desc="";
-      if(flds.description) desc=adfToText(flds.description).trim();
+      if(flds.description){
+        if(typeof flds.description==="string"){
+          desc=flds.description.replace(/\[([^\]]+)\]\(([^)]+)\)/g,"$1 ($2)").trim();
+        } else {
+          desc=adfToText(flds.description).trim();
+        }
+      }
       const sd={key:d.key,summary:flds.summary||sid,description:desc,labels:flds.labels||[],type:flds.issuetype?.name||"Story",status:flds.status?.name||"",assignee:flds.assignee?.displayName||"—",priority:flds.priority?.name||"Medium"};
       setSdata(sd); const pp=proj.platform||"web"; setPlatform(pp==="both"?"web":pp);
     } catch { setSdata({key:sid,summary:"Story "+sid,description:"",labels:[],type:"Story",status:"In Progress",assignee:"—",priority:"Medium",sim:true}); const pp=proj.platform||"web"; setPlatform(pp==="both"?"web":pp); }
