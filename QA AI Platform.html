@@ -1272,30 +1272,53 @@ const [phase,setPhase]=useState("input"); const [sid,setSid]=useState(""); const
                   </div>}
             </div>)}
           </div>}
-          <div style={{display:"flex",gap:10,marginTop:12,flexWrap:"wrap",alignItems:"center"}}>
+          {sessionBugs.length>0&&proj?.jiraToken&&(()=>{
+            const unlinked=sessionBugs.filter(b=>!b.jKey);
+            return <div style={{...card,background:unlinked.length===0?"var(--color-background-success)":"var(--color-background-info)",border:"1px solid "+(unlinked.length===0?"var(--color-text-success)":"var(--color-text-info)")}}>
+              {unlinked.length===0
+                ?<div style={{display:"flex",alignItems:"center",gap:10}}>
+                    <span style={{fontSize:20}}>✅</span>
+                    <div>
+                      <div style={{fontWeight:500,fontSize:14,color:"var(--color-text-success)"}}>All bugs linked to Jira</div>
+                      <div style={{fontSize:12,color:"var(--color-text-secondary)",marginTop:2}}>{sessionBugs.length} bug{sessionBugs.length!==1?"s":""} created and linked to story <b>{sid}</b> in {proj.jiraProjKey}</div>
+                    </div>
+                    <div style={{marginLeft:"auto",display:"flex",gap:6,flexWrap:"wrap"}}>{sessionBugs.map(b=>b.jKey&&<Tag key={b.bid} c="green">{b.jKey}</Tag>)}</div>
+                  </div>
+                :<div style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
+                    <div style={{flex:1}}>
+                      <div style={{fontWeight:500,fontSize:14,color:"var(--color-text-info)"}}>Link bugs to Jira</div>
+                      <div style={{fontSize:12,color:"var(--color-text-secondary)",marginTop:2}}>{unlinked.length} bug{unlinked.length!==1?"s":""} ready to be created in <b>{proj.jiraProjKey}</b> and linked to story <b>{sid}</b></div>
+                    </div>
+                    <button onClick={async()=>{
+                      setLoading(true);setLmsg("Linking "+unlinked.length+" bug"+(unlinked.length!==1?"s":"")+" to Jira…");
+                      const updated=[...sessionBugs];
+                      for(const b of updated.filter(x=>!x.jKey)){
+                        try{
+                          const stepLines=(b.steps||[]);
+                          const adfDesc={type:"doc",version:1,content:[
+                            {type:"heading",attrs:{level:3},content:[{type:"text",text:"Steps to Reproduce"}]},
+                            {type:"orderedList",content:stepLines.length>0?stepLines.map(s=>({type:"listItem",content:[{type:"paragraph",content:[{type:"text",text:s.replace(/^\d+\.\s*/,"")}]}]})):[{type:"listItem",content:[{type:"paragraph",content:[{type:"text",text:"See summary"}]}]}]},
+                            {type:"heading",attrs:{level:3},content:[{type:"text",text:"Expected Result"}]},
+                            {type:"paragraph",content:[{type:"text",text:b.expected||"—"}]},
+                            {type:"heading",attrs:{level:3},content:[{type:"text",text:"Actual Result"}]},
+                            {type:"paragraph",content:[{type:"text",text:b.actual||"—"}]},
+                            ...(b.screenshot?[{type:"heading",attrs:{level:3},content:[{type:"text",text:"Screenshot"}]},{type:"paragraph",content:[{type:"text",text:"A screenshot was captured and saved in the QA Platform."}]}]:[]),
+                            {type:"heading",attrs:{level:3},content:[{type:"text",text:"Story"}]},
+                            {type:"paragraph",content:[{type:"text",text:sid+" · Filed by "+member.name}]},
+                          ]};
+                          const res=await callJira(proj,"POST","/issue",{fields:{project:{key:proj.jiraProjKey},summary:b.summary,description:adfDesc,issuetype:{name:"Bug"},priority:{name:b.sev}}});
+                          b.jKey=res.key;
+                          await callJira(proj,"POST","/issueLink",{type:{name:"relates to"},inwardIssue:{key:res.key},outwardIssue:{key:sid}}).catch(()=>{});
+                          DB.bugs=DB.bugs.map(x=>x.bid===b.bid?{...x,jKey:b.jKey}:x);
+                        }catch{}
+                      }
+                      saveDB();setSessionBugs([...updated]);setLoading(false);showToast("Bugs linked to Jira successfully");
+                    }} style={{padding:"10px 20px",borderRadius:8,border:"none",cursor:"pointer",fontWeight:600,fontSize:14,background:"#0052CC",color:"#fff",display:"flex",alignItems:"center",gap:8,flexShrink:0}}>🔗 Link {unlinked.length} bug{unlinked.length!==1?"s":""} to Jira</button>
+                  </div>}
+            </div>;
+          })()}
+          <div style={{display:"flex",gap:10,marginTop:12}}>
             <Btn v="primary" onClick={()=>{setCoverageText(t=>t||"1");setPhase("coverage");}}>Coverage Report →</Btn>
-            {sessionBugs.filter(b=>!b.jKey).length>0&&<button onClick={async()=>{
-              setLoading(true);setLmsg("Linking bugs to Jira…");
-              const updated=[...sessionBugs];
-              for(const b of updated.filter(x=>!x.jKey)){
-                try{
-                  const stepLines=(b.steps||[]);
-                  const adfDesc={type:"doc",version:1,content:[
-                    {type:"heading",attrs:{level:3},content:[{type:"text",text:"Steps to Reproduce"}]},
-                    {type:"orderedList",content:stepLines.length>0?stepLines.map(s=>({type:"listItem",content:[{type:"paragraph",content:[{type:"text",text:s.replace(/^\d+\.\s*/,"")}]}]})):[{type:"listItem",content:[{type:"paragraph",content:[{type:"text",text:"See summary"}]}]}]},
-                    {type:"heading",attrs:{level:3},content:[{type:"text",text:"Expected Result"}]},
-                    {type:"paragraph",content:[{type:"text",text:b.expected||"—"}]},
-                    {type:"heading",attrs:{level:3},content:[{type:"text",text:"Actual Result"}]},
-                    {type:"paragraph",content:[{type:"text",text:b.actual||"—"}]},
-                    {type:"heading",attrs:{level:3},content:[{type:"text",text:"Story"}]},
-                    {type:"paragraph",content:[{type:"text",text:sid+" · Filed by "+member.name}]},
-                  ]};
-                  const res=await callJira(proj,"POST","/issue",{fields:{project:{key:proj.jiraProjKey},summary:b.summary,description:adfDesc,issuetype:{name:"Bug"},priority:{name:b.sev}}});
-                  b.jKey=res.key;DB.bugs=DB.bugs.map(x=>x.bid===b.bid?{...x,jKey:b.jKey}:x);
-                }catch{}
-              }
-              saveDB();setSessionBugs([...updated]);setLoading(false);
-            }} style={{padding:"9px 18px",borderRadius:8,border:"none",cursor:"pointer",fontWeight:500,fontSize:14,background:"#0052CC",color:"#fff",display:"flex",alignItems:"center",gap:6}}>🔗 Link {sessionBugs.filter(b=>!b.jKey).length} bugs to Jira</button>}
           </div>
         </div>}
 
