@@ -34,6 +34,11 @@
   * { scrollbar-width: thin; scrollbar-color: #ccc transparent; }
   @keyframes qa-spin { to { transform: rotate(360deg); } }
   @keyframes qa-pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.5;transform:scale(1.15)} }
+  @media print {
+    body * { visibility: hidden; }
+    #coverage-print-area, #coverage-print-area * { visibility: visible; }
+    #coverage-print-area { position: fixed; top: 0; left: 0; right: 0; padding: 24px; background: #fff; }
+  }
 </style>
 </head>
 <body>
@@ -566,6 +571,62 @@ function adfToText(node) {
   if (node.type === 'hardBreak') return '\n';
   const inner = (node.content||[]).map(adfToText).join('');
   return ['paragraph','heading','listItem','bulletList','orderedList','blockquote','panel','rule'].includes(node.type) ? inner+'\n' : inner;
+}
+
+/* ─── Coverage charts ────────────────────────────────────────────────────── */
+function DonutChart({data,title,size=160}) {
+  const total=data.reduce((s,d)=>s+d.value,0);
+  if(!total) return <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",minHeight:size,color:"var(--color-text-tertiary)",fontSize:13}}><div style={{fontSize:28,marginBottom:6}}>—</div>No data</div>;
+  const cx=size/2,cy=size/2,r=size*0.38,ir=size*0.22;
+  if(data.length===1) return(
+    <div><div style={{fontWeight:500,fontSize:13,marginBottom:10,textAlign:"center"}}>{title}</div>
+      <div style={{display:"flex",alignItems:"center",gap:16}}>
+        <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{flexShrink:0}}>
+          <circle cx={cx} cy={cy} r={r} fill={data[0].color}/>
+          <circle cx={cx} cy={cy} r={ir} fill="#fff"/>
+          <text x={cx} y={cy-5} textAnchor="middle" dominantBaseline="middle" fontSize={size*0.12} fontWeight="700" fill="#1a1a18">{total}</text>
+          <text x={cx} y={cy+11} textAnchor="middle" dominantBaseline="middle" fontSize={size*0.075} fill="#888">total</text>
+        </svg>
+        <div style={{flex:1}}><div style={{display:"flex",alignItems:"center",gap:6,fontSize:12}}>
+          <div style={{width:10,height:10,borderRadius:2,background:data[0].color,flexShrink:0}}/><span style={{flex:1,color:"var(--color-text-secondary)"}}>{data[0].label}</span><span style={{fontWeight:600}}>{data[0].value} <span style={{fontWeight:400,color:"var(--color-text-tertiary)"}}>(100%)</span></span>
+        </div></div>
+      </div>
+    </div>);
+  let angle=-Math.PI/2;
+  const slices=data.map(d=>{
+    const frac=d.value/total,a1=angle,a2=angle+frac*2*Math.PI-0.005;
+    angle=a2+0.005;
+    const [c1,s1,c2,s2]=[Math.cos(a1),Math.sin(a1),Math.cos(a2),Math.sin(a2)],lg=frac>0.5?1:0;
+    return {d:`M ${cx+r*c1} ${cy+r*s1} A ${r} ${r} 0 ${lg} 1 ${cx+r*c2} ${cy+r*s2} L ${cx+ir*c2} ${cy+ir*s2} A ${ir} ${ir} 0 ${lg} 0 ${cx+ir*c1} ${cy+ir*s1} Z`,color:d.color,label:d.label,value:d.value,pct:Math.round(frac*100)};
+  });
+  return(
+    <div><div style={{fontWeight:500,fontSize:13,marginBottom:10,textAlign:"center"}}>{title}</div>
+      <div style={{display:"flex",alignItems:"center",gap:16}}>
+        <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{flexShrink:0}}>
+          {slices.map((s,i)=><path key={i} d={s.d} fill={s.color} stroke="#fff" strokeWidth={2}/>)}
+          <circle cx={cx} cy={cy} r={ir} fill="#fff"/>
+          <text x={cx} y={cy-5} textAnchor="middle" dominantBaseline="middle" fontSize={size*0.12} fontWeight="700" fill="#1a1a18">{total}</text>
+          <text x={cx} y={cy+11} textAnchor="middle" dominantBaseline="middle" fontSize={size*0.075} fill="#888">total</text>
+        </svg>
+        <div style={{flex:1}}>{slices.map((s,i)=><div key={i} style={{display:"flex",alignItems:"center",gap:6,fontSize:12,marginBottom:6}}>
+          <div style={{width:10,height:10,borderRadius:2,background:s.color,flexShrink:0}}/><span style={{flex:1,color:"var(--color-text-secondary)"}}>{s.label}</span><span style={{fontWeight:600}}>{s.value} <span style={{fontWeight:400,color:"var(--color-text-tertiary)"}}>({s.pct}%)</span></span>
+        </div>)}</div>
+      </div>
+    </div>);
+}
+function BarChart({data,title}) {
+  return(
+    <div><div style={{fontWeight:500,fontSize:13,marginBottom:14,textAlign:"center"}}>{title}</div>
+      {data.map((d,i)=><div key={i} style={{marginBottom:12}}>
+        <div style={{display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:4}}>
+          <span style={{color:"var(--color-text-secondary)"}}>{d.label}</span>
+          <span style={{fontWeight:600,color:d.value===100?"var(--color-text-success)":d.value>=60?"var(--color-text-warning)":"var(--color-text-danger)"}}>{d.value}%</span>
+        </div>
+        <div style={{height:10,background:"var(--color-background-tertiary)",borderRadius:5,overflow:"hidden"}}>
+          <div style={{height:"100%",width:d.value+"%",background:d.color,borderRadius:5}}/>
+        </div>
+      </div>)}
+    </div>);
 }
 
 /* ─── Workspace ───────────────────────────────────────────────────────────── */
@@ -1103,7 +1164,7 @@ const [phase,setPhase]=useState("input"); const [sid,setSid]=useState(""); const
           <div style={{display:"flex",gap:10,marginTop:12}}>
             {result.fail.length>0
               ?<Btn v="primary" onClick={()=>setPhase("bugReport")}>Bug Report →</Btn>
-              :<Btn v="primary" onClick={()=>setPhase("coverage")}>Coverage Report →</Btn>}
+              :<Btn v="primary" onClick={()=>{setCoverageText(t=>t||"1");setPhase("coverage");}}>Coverage Report →</Btn>}
           </div>
         </div>}
 
@@ -1184,7 +1245,7 @@ const [phase,setPhase]=useState("input"); const [sid,setSid]=useState(""); const
             </div>)}
           </div>}
           <div style={{display:"flex",gap:10,marginTop:12,flexWrap:"wrap",alignItems:"center"}}>
-            <Btn v="primary" onClick={()=>setPhase("coverage")}>Coverage Report →</Btn>
+            <Btn v="primary" onClick={()=>{setCoverageText(t=>t||"1");setPhase("coverage");}}>Coverage Report →</Btn>
             {sessionBugs.filter(b=>!b.jKey).length>0&&<button onClick={async()=>{
               setLoading(true);setLmsg("Linking bugs to Jira…");
               const updated=[...sessionBugs];
@@ -1210,23 +1271,68 @@ const [phase,setPhase]=useState("input"); const [sid,setSid]=useState(""); const
           </div>
         </div>}
 
-        {!loading&&phase==="coverage"&&<div>
-          {!coverageText?<Confirm icon="📊" title="Generate coverage report?" desc={"AI analysis of test coverage and STLC completeness for "+sid+"."} onYes={async()=>{
-            setLoading(true);setLmsg("Generating coverage report…");
-            const summary=approved.map(c=>`[${c.type}] ${c.id}: ${c.title}`).join("\n");
-            const execSummary=result?`Executed: ${result.total} | Passed: ${result.pass.length} | Failed: ${result.fail.length}`:"No execution performed.";
-            const bugSummary=sessionBugs.length>0?sessionBugs.map(b=>`${b.bid} [${b.sev}]: ${b.summary}`).join("\n"):"No bugs filed.";
-            try{
-              const r=await callAI([{role:"user",content:`Generate a QA coverage report for story "${sid}" (${proj.jiraProjKey}). Platform: ${platform}.\n\nApproved test cases (${approved.length} total):\n${summary}\n\nExecution results:\n${execSummary}\n\nBugs filed:\n${bugSummary}\n\nProvide a structured plain-text report covering:\n1. Test Coverage Summary (total, by type breakdown)\n2. STLC Phases Coverage (Requirements/Design/Implementation/Testing/Deployment)\n3. Automation Coverage % (automatable vs manual)\n4. Risk Assessment based on failed tests and bugs\n5. Coverage Gaps (what's missing or not tested)\n6. Overall Quality Score (0-100) with justification\n\nBe concise and use emoji section headers. No markdown.`}],SYS,3000,proj.anthropicKey||"");
-              setCoverageText(r);
-            }catch(e){alert(e.message);}
-            setLoading(false);
-          }} onNo={reset} yesLabel="Generate Report" noLabel="Skip — New Story"/>:
-          <div>
-            <div style={card}><div style={{display:"flex",gap:8,marginBottom:14,alignItems:"center"}}><Tag c="blue">{sid}</Tag><span style={{fontWeight:500}}>Coverage Report</span></div><div style={{whiteSpace:"pre-wrap",fontSize:14,lineHeight:1.85}}>{coverageText}</div></div>
-            <div style={{display:"flex",gap:10}}><button onClick={saveAndReset} style={ghostBtn}>↩ New story</button><button onClick={()=>dlFile(coverageText,"coverage-"+sid+".txt")} style={ghostBtn}>⬇ Download report</button></div>
-          </div>}
-        </div>}
+        {!loading&&phase==="coverage"&&(()=>{
+          const byType=[
+            {label:"Happy flow",value:approved.filter(c=>c.type==="happy").length,color:"#4caf50"},
+            {label:"Edge cases",value:approved.filter(c=>c.type==="edge").length,color:"#f59e0b"},
+            {label:"Negative",value:approved.filter(c=>c.type==="negative").length,color:"#3b82f6"},
+          ].filter(d=>d.value>0);
+          const execData=result?[
+            {label:"Passed",value:result.pass.length,color:"#4caf50"},
+            {label:"Failed",value:result.fail.length,color:"#ef4444"},
+          ].filter(d=>d.value>0):[];
+          const autoData=[
+            {label:"Automatable",value:autoable.length,color:"#6366f1"},
+            {label:"Manual only",value:manOnly.length,color:"#9ca3af"},
+          ].filter(d=>d.value>0);
+          const stlc=[
+            {label:"Requirements Analysis",value:sdata?100:0,color:"#4caf50"},
+            {label:"Test Design",value:cases.length>0?100:0,color:"#3b82f6"},
+            {label:"Test Review",value:cases.length>0?Math.round(approved.length/cases.length*100):0,color:"#f59e0b"},
+            {label:"Test Execution",value:result?100:0,color:"#8b5cf6"},
+            {label:"Defect Management",value:(sessionBugs.length>0||(result&&result.fail.length===0))?100:0,color:"#ef4444"},
+          ];
+          const overall=Math.round(stlc.reduce((s,p)=>s+p.value,0)/stlc.length);
+          const scoreColor=overall>=80?"var(--color-text-success)":overall>=60?"var(--color-text-warning)":"var(--color-text-danger)";
+          const scoreBarColor=overall>=80?"#4caf50":overall>=60?"#f59e0b":"#ef4444";
+          return <div id="coverage-print-area">
+            <div style={{...card,marginBottom:12}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:10}}>
+                <div style={{display:"flex",gap:8,alignItems:"center"}}><Tag c="blue">{sid}</Tag><span style={{fontWeight:600,fontSize:15}}>Coverage Report</span><Tag c={platform==="mobile"?"amber":"blue"}>{platform}</Tag></div>
+                <div style={{display:"flex",gap:8}}>
+                  <button onClick={()=>window.print()} style={ghostBtn}>⬇ Download PDF</button>
+                  <button onClick={saveAndReset} style={ghostBtn}>↩ New story</button>
+                </div>
+              </div>
+              <div style={{display:"flex",alignItems:"center",gap:16,marginTop:14,padding:"14px 16px",borderRadius:10,background:"var(--color-background-secondary)"}}>
+                <div style={{textAlign:"center",minWidth:72}}>
+                  <div style={{fontSize:38,fontWeight:700,color:scoreColor,lineHeight:1}}>{overall}%</div>
+                  <div style={{fontSize:11,color:"var(--color-text-tertiary)",marginTop:4}}>Overall Score</div>
+                </div>
+                <div style={{flex:1}}>
+                  <div style={{height:12,background:"var(--color-border-tertiary)",borderRadius:6,overflow:"hidden",marginBottom:8}}>
+                    <div style={{height:"100%",width:overall+"%",background:scoreBarColor,borderRadius:6}}/>
+                  </div>
+                  <div style={{fontSize:12,color:"var(--color-text-secondary)",display:"flex",gap:16,flexWrap:"wrap"}}>
+                    <span><b>{approved.length}</b> approved cases</span>
+                    {result?<span><b>{result.pass.length}</b> passed · <b>{result.fail.length}</b> failed</span>:<span>No execution</span>}
+                    <span><b>{sessionBugs.length}</b> bug{sessionBugs.length!==1?"s":""} filed</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+              <div style={card}><DonutChart title="Test Cases by Type" data={byType} size={150}/></div>
+              <div style={card}>
+                {execData.length>0
+                  ?<DonutChart title="Execution Results" data={execData} size={150}/>
+                  :<div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",minHeight:190,color:"var(--color-text-tertiary)",fontSize:13,textAlign:"center"}}><div style={{fontSize:32,marginBottom:8}}>⏭</div>No execution performed</div>}
+              </div>
+              <div style={card}><DonutChart title="Automation Coverage" data={autoData} size={150}/></div>
+              <div style={card}><BarChart title="STLC Phase Coverage" data={stlc}/></div>
+            </div>
+          </div>;
+        })()}
       </div>
 
       {phase!=="input"&&<div style={{width:290,flexShrink:0,display:chat?"flex":"none",flexDirection:"column",height:"calc(100vh - 120px)",position:"sticky",top:0}}>
