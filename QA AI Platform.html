@@ -989,16 +989,23 @@ function LoginPage({onLogin}) {
 const SESSION_KEY="qa_session";
 function loadSession(){
   try{
-    // localStorage = Remember Me (persists after browser close)
-    // sessionStorage = no Remember Me (expires when tab closes)
-    const raw=localStorage.getItem(SESSION_KEY)||sessionStorage.getItem(SESSION_KEY);
-    if(!raw)return null;
-    const s=JSON.parse(raw);
-    if(!s||!s.role)return null;
-    // If stored without remember, verify it's still in sessionStorage (not a ghost localStorage entry)
-    if(s.remember===false&&!sessionStorage.getItem(SESSION_KEY)){localStorage.removeItem(SESSION_KEY);return null;}
-    if(s.role==="admin")return s;
-    if(s.role==="member"){const m=DB.members.find(x=>x.id===s.id);return m?{role:"member",member:m,id:m.id}:null;}
+    // localStorage = Remember Me checked (persists after browser close)
+    const persisted=localStorage.getItem(SESSION_KEY);
+    if(persisted){
+      const s=JSON.parse(persisted);
+      if(s?.remember===true){
+        if(s.role==="admin")return s;
+        if(s.role==="member"){const m=DB.members.find(x=>x.id===s.id);return m?{role:"member",member:m,id:m.id}:null;}
+      }
+      localStorage.removeItem(SESSION_KEY); // stale/old entry without remember=true — clear it
+    }
+    // sessionStorage = Remember Me NOT checked (expires when browser closes)
+    const session=sessionStorage.getItem(SESSION_KEY);
+    if(session){
+      const s=JSON.parse(session);
+      if(s?.role==="admin")return s;
+      if(s?.role==="member"){const m=DB.members.find(x=>x.id===s.id);return m?{role:"member",member:m,id:m.id}:null;}
+    }
     return null;
   }catch{return null;}
 }
