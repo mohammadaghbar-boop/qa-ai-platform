@@ -1279,7 +1279,10 @@ function App() {
   const [restoreTarget,setRestoreTarget]=useState(null);
   const [renamingId,setRenamingId]=useState(null); const [renameVal,setRenameVal]=useState("");
   const [,forceUpdate]=useState(0);
-  const refreshSaved=()=>{setSavedStories([...DB.savedStories]);forceUpdate(x=>x+1);};
+  const refreshSaved=()=>{
+    DB.categories=DB.categories.filter(c=>DB.savedStories.some(s=>s.categoryId===c.id));
+    setSavedStories([...DB.savedStories]);forceUpdate(x=>x+1);
+  };
   const deleteSnap=id=>{
     DB.savedStories=DB.savedStories.filter(s=>s.id!==id);
     DB.categories=DB.categories.filter(c=>DB.savedStories.some(s=>s.categoryId===c.id));
