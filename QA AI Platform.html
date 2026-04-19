@@ -570,7 +570,7 @@ function adfToText(node) {
 
 /* ─── Workspace ───────────────────────────────────────────────────────────── */
 const WS_STEPS = ["User Story","Analysis","Generate","Review","Export","Scripts","Execute","Bug Report","Coverage"];
-const WS_IDX = {input:0,mode:1,gap:1,ctype:2,ready:2,review:3,jira:4,scriptSelect:5,autoReady:5,runAsk:6,running:6,result:6,bugReport:7,coverage:8};
+const WS_IDX = {input:0,mode:1,gap:1,ctype:2,ready:2,review:3,jira:4,urlPrompt:5,scriptSelect:5,autoReady:5,runAsk:6,running:6,result:6,bugReport:7,coverage:8};
 
 function Workspace({member,refreshSaved,restoreTarget,clearRestore}) {
   const asgn=DB.assignments.find(x=>x.memberId===member.id);
@@ -586,7 +586,7 @@ const [phase,setPhase]=useState("input"); const [sid,setSid]=useState(""); const
   const [showBugForm,setShowBugForm]=useState(false); const [bf,setBf]=useState({summary:"",sev:"High",steps:"",expected:"",actual:""});
   const [fixed,setFixed]=useState(false); const [hist,setHist]=useState([]); const [chat,setChat]=useState(false); const [hasSaved,setHasSaved]=useState(false);
   const [showAddCase,setShowAddCase]=useState(false); const [newCase,setNewCase]=useState({title:"",type:"happy",platform:"web",preconditions:"",steps:[""],expected:"",automatable:true});
-  const [selectedForScripts,setSelectedForScripts]=useState([]); const [coverageText,setCoverageText]=useState(""); const [sessionBugs,setSessionBugs]=useState([]);
+  const [selectedForScripts,setSelectedForScripts]=useState([]); const [coverageText,setCoverageText]=useState(""); const [sessionBugs,setSessionBugs]=useState([]); const [appUrl,setAppUrl]=useState("");
   const [scriptCache,setScriptCache]=useState({});
   const [editingBugId,setEditingBugId]=useState(null); const [editBugForm,setEditBugForm]=useState({});
 
@@ -601,14 +601,14 @@ const [phase,setPhase]=useState("input"); const [sid,setSid]=useState(""); const
       setScripts(s.scripts||{web:"",ios:"",android:""});setTab(s.tab||"web");
       setResult(s.result||null);setExecLines(s.execLines||[]);
       setCoverageText(s.coverageText||"");setSessionBugs(s.sessionBugs||[]);
-      setSelectedForScripts(s.selectedForScripts||[]);
+      setSelectedForScripts(s.selectedForScripts||[]);setAppUrl(s.appUrl||"");
     }catch{}
   },[]);
   // Save workspace state on every change
   useEffect(()=>{
     if(phase==="input"){localStorage.removeItem(WS_SNAP);return;}
-    try{localStorage.setItem(WS_SNAP,JSON.stringify({phase,sid,sdata,platform,ctypes,gapText,cases,scripts,tab,result,execLines,coverageText,sessionBugs,selectedForScripts}));}catch{}
-  },[phase,sid,sdata,platform,ctypes,gapText,cases,scripts,tab,result,execLines,coverageText,sessionBugs,selectedForScripts]);
+    try{localStorage.setItem(WS_SNAP,JSON.stringify({phase,sid,sdata,platform,ctypes,gapText,cases,scripts,tab,result,execLines,coverageText,sessionBugs,selectedForScripts,appUrl}));}catch{}
+  },[phase,sid,sdata,platform,ctypes,gapText,cases,scripts,tab,result,execLines,coverageText,sessionBugs,selectedForScripts,appUrl]);
 
   const SYS=`You are an expert QA engineer. All story data is already provided in the user message — do NOT use any external tools, do NOT access Jira, Atlassian, or any other service. Work only with the text provided. Project:"${proj?.name}" Platform:${proj?.platform||"web"}.`;
   const approved=cases.filter(c=>c.status==="approved");
@@ -696,16 +696,18 @@ const [phase,setPhase]=useState("input"); const [sid,setSid]=useState(""); const
     try {
       let newScripts,newTab,newFiles;
       if(platform==="mobile"){
+        const urlCtx=appUrl.trim()?`\nApp URL: ${appUrl.trim()}`:"";
         const [iosR,andR]=await Promise.all([
-          callAI([{role:"user",content:`Generate a COMPLETE runnable Appium WebdriverIO test file for iOS, story ${sid}. Output ONLY JavaScript code — no markdown fences, no explanations, no prose.\nTest cases:\n${cl}\nManual-only stubs (use it.skip):\n${mc}\nRequirements: describe/it blocks, XCUITest capabilities, accessibility id selectors, full test implementation with actual driver.$$ commands and assertions, beforeEach/afterEach hooks, CommonJS require syntax. Start the file directly with const/require statements.`}],SYS,6000,""),
-          callAI([{role:"user",content:`Generate a COMPLETE runnable Appium WebdriverIO test file for Android, story ${sid}. Output ONLY JavaScript code — no markdown fences, no explanations, no prose.\nTest cases:\n${cl}\nManual-only stubs (use it.skip):\n${mc}\nRequirements: describe/it blocks, UiAutomator2 capabilities, android UiSelector or accessibility id selectors, full test implementation with actual driver.$$ commands and assertions, beforeEach/afterEach hooks, CommonJS require syntax. Start the file directly with const/require statements.`}],SYS,6000,"")
+          callAI([{role:"user",content:`Generate a COMPLETE runnable Appium WebdriverIO test file for iOS, story ${sid}.${urlCtx} Output ONLY JavaScript code — no markdown fences, no explanations, no prose.\nTest cases:\n${cl}\nManual-only stubs (use it.skip):\n${mc}\nRequirements: describe/it blocks, XCUITest capabilities, accessibility id selectors, full test implementation with actual driver.$$ commands and assertions, beforeEach/afterEach hooks, CommonJS require syntax. Start the file directly with const/require statements.`}],SYS,6000,""),
+          callAI([{role:"user",content:`Generate a COMPLETE runnable Appium WebdriverIO test file for Android, story ${sid}.${urlCtx} Output ONLY JavaScript code — no markdown fences, no explanations, no prose.\nTest cases:\n${cl}\nManual-only stubs (use it.skip):\n${mc}\nRequirements: describe/it blocks, UiAutomator2 capabilities, android UiSelector or accessibility id selectors, full test implementation with actual driver.$$ commands and assertions, beforeEach/afterEach hooks, CommonJS require syntax. Start the file directly with const/require statements.`}],SYS,6000,"")
         ]);
         newScripts={ios:iosR,android:andR,web:""}; newTab="ios";
         newFiles={"wdio.ios.js":`exports.config={specs:["./tests/ios/*.js"],capabilities:[{platformName:"iOS","appium:automationName":"XCUITest"}],framework:"mocha",reporters:["spec"]};`,"wdio.android.js":`exports.config={specs:["./tests/android/*.js"],capabilities:[{platformName:"Android","appium:automationName":"UiAutomator2"}],framework:"mocha",reporters:["spec"]};`,[`tests/ios/${sid}.spec.js`]:iosR,[`tests/android/${sid}.spec.js`]:andR,"README.md":`# Appium Tests — ${sid}\n\nnpm install && npm run test:ios`};
       } else {
-        const r=await callAI([{role:"user",content:`Generate a COMPLETE runnable Playwright test file for ${sid}. Output ONLY JavaScript code — no markdown fences, no explanations, no prose.\nTest cases:\n${cl}\nManual-only stubs (use test.skip):\n${mc}\nRequirements: const {test,expect}=require('@playwright/test'), Page Object Model class defined at the top, every test case must have a FULL implementation with page.goto/click/fill/locator calls and expect assertions, getByRole/getByLabel/getByTestId selectors, beforeEach/afterEach hooks, CommonJS require syntax. Start the file directly with the require statement.`}],SYS,6000,"");
+        const baseUrl=appUrl.trim()||"http://localhost:3000";
+        const r=await callAI([{role:"user",content:`Generate a COMPLETE runnable Playwright test file for ${sid}. Base URL: ${baseUrl}. Output ONLY JavaScript code — no markdown fences, no explanations, no prose.\nTest cases:\n${cl}\nManual-only stubs (use test.skip):\n${mc}\nRequirements: const {test,expect}=require('@playwright/test'), Page Object Model class defined at the top, use baseURL "${baseUrl}" in page.goto() calls, every test case must have a FULL implementation with page.goto/click/fill/locator calls and expect assertions, getByRole/getByLabel/getByTestId selectors, beforeEach/afterEach hooks, CommonJS require syntax. Start the file directly with the require statement.`}],SYS,6000,"");
         newScripts={web:r,ios:"",android:""}; newTab="web";
-        newFiles={"test.config.js":`module.exports={testDir:"./tests",use:{baseURL:process.env.BASE_URL||"http://localhost:3000"}};`,[`tests/${sid}.spec.js`]:r,"README.md":`# Web Tests — ${sid}\n\nnpm install && npm test`};
+        newFiles={"test.config.js":`module.exports={testDir:"./tests",use:{baseURL:"${baseUrl}"}};`,[`tests/${sid}.spec.js`]:r,"README.md":`# Web Tests — ${sid}\n\nnpm install && npm test`};
       }
       setScripts(newScripts); setTab(newTab); setProjFiles(newFiles);
       setScriptCache(prev=>({...prev,[selKey]:{scripts:newScripts,tab:newTab,projFiles:newFiles}}));
@@ -780,7 +782,7 @@ const [phase,setPhase]=useState("input"); const [sid,setSid]=useState(""); const
   const editC=(id,k,v)=>setCases(cs=>cs.map(c=>c.id===id?{...c,[k]:v}:c));
   const editS=(id,si,v)=>setCases(cs=>cs.map(c=>{if(c.id!==id)return c;const s=[...c.steps];s[si]=v;return{...c,steps:s};}));
   const addStep=id=>setCases(cs=>cs.map(c=>c.id===id?{...c,steps:[...(c.steps||[]),"New step"]}:c));
-  const reset=()=>{localStorage.removeItem(WS_SNAP);setPhase("input");setSid("");setSdata(null);setPlatform("web");setCtypes([]);setGapText("");setCases([]);setEditOn(false);setScripts({web:"",ios:"",android:""});setProjFiles(null);setExecLines([]);setResult(null);setJKey(null);setBugDone(null);setShowBugForm(false);setFixed(false);setChat(false);setShowAddCase(false);setSelectedForScripts([]);setCoverageText("");setSessionBugs([]);setHasSaved(false);};
+  const reset=()=>{localStorage.removeItem(WS_SNAP);setPhase("input");setSid("");setSdata(null);setPlatform("web");setCtypes([]);setGapText("");setCases([]);setEditOn(false);setScripts({web:"",ios:"",android:""});setProjFiles(null);setExecLines([]);setResult(null);setJKey(null);setBugDone(null);setShowBugForm(false);setFixed(false);setChat(false);setShowAddCase(false);setSelectedForScripts([]);setCoverageText("");setSessionBugs([]);setHasSaved(false);setAppUrl("");};
   const [saveModal,setSaveModal]=useState(null);
   // saveModal: null | {step:1,name:""} | {step:2,name:"",newCat:""}
   const openSaveModal=()=>{
@@ -826,7 +828,7 @@ const [phase,setPhase]=useState("input"); const [sid,setSid]=useState(""); const
     if(i===2&&sdata){const et=[...new Set(cases.map(c=>c.type))];setCtypes(et.length>0?et:[]);setPhase("ctype");return;}
     if(i===3&&cases.length>0){setPhase("review");return;}
     if(i===4&&approved.length>0){setPhase("jira");return;}
-    if(i===5){setPhase("scriptSelect");return;}
+    if(i===5){setPhase("urlPrompt");return;}
     if(i===6&&result){setPhase("result");return;}
     if(i===7){setPhase("bugReport");return;}
     if(i===8){setPhase("coverage");return;}
@@ -1025,8 +1027,27 @@ const [phase,setPhase]=useState("input"); const [sid,setSid]=useState(""); const
           <div style={{...card,padding:"16px 20px"}}>
             <div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:14}}>Story <b>{sid}</b> · <b>{approved.length}</b> approved cases · <Tag c={platform==="mobile"?"amber":"blue"}>{platform}</Tag></div>
             <div style={{display:"flex",gap:10}}>
-              <Btn v="primary" onClick={()=>{exportCSV(cases,sid);setPhase("scriptSelect");}}>⬇ Export AIO CSV</Btn>
-              <button onClick={()=>setPhase("scriptSelect")} style={ghostBtn}>Skip</button>
+              <Btn v="primary" onClick={()=>{exportCSV(cases,sid);setAppUrl("");setPhase("urlPrompt");}}>⬇ Export AIO CSV</Btn>
+              <button onClick={()=>{setAppUrl("");setPhase("urlPrompt");}} style={ghostBtn}>Skip</button>
+            </div>
+          </div>
+        </div>}
+
+        {!loading&&phase==="urlPrompt"&&<div>
+          <div style={card}>
+            <div style={{display:"flex",gap:8,marginBottom:14,alignItems:"center"}}><span style={{fontSize:20}}>🔗</span><span style={{fontWeight:500,fontSize:16}}>Application URL</span></div>
+            <div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:16,lineHeight:1.6}}>Enter the URL of the application under test. This will be used as the base URL when generating your automation scripts.</div>
+            <Lbl>Application URL <span style={{color:"var(--color-text-danger)"}}>*</span></Lbl>
+            <input
+              autoFocus
+              style={{...inp,marginBottom:16,fontSize:14}}
+              value={appUrl}
+              onChange={e=>setAppUrl(e.target.value)}
+              placeholder="https://example.com"
+              onKeyDown={e=>e.key==="Enter"&&appUrl.trim()&&setPhase("scriptSelect")}
+            />
+            <div style={{display:"flex",gap:10}}>
+              <Btn v="primary" onClick={()=>appUrl.trim()&&setPhase("scriptSelect")} disabled={!appUrl.trim()}>Continue to Script Generation →</Btn>
             </div>
           </div>
         </div>}
