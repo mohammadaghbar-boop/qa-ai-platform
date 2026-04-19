@@ -501,11 +501,13 @@ function Workspace({member,refreshSaved,restoreTarget,clearRestore}) {
     try {
       const requests=newTypes.map(type=>callAI([{role:"user",content:`You are a QA engineer. Generate ALL possible ${type} test cases for story "${sid}" (${proj.jiraProjKey}). Platform: ${platform}.\n\n${ctx}\n\nINSTRUCTIONS:\n1. Identify EVERY acceptance criterion (AC) from the description above.\n2. Generate at least 1-3 ${type} test cases per AC — do NOT skip or ignore any AC.\n3. There is NO limit on number of cases — cover everything explicitly stated in the ACs.\n4. Mark automatable:false ONLY for offline/camera/biometrics/hardware tests.\n\nReturn ONLY a valid JSON array (no markdown, no explanation):\n[{"id":"TC-001","title":"...","type":"${type}","platform":"${platform}","preconditions":"...","steps":["Step 1","Step 2"],"expected":"...","automatable":true}]`}],SYS,5000,proj.anthropicKey||""));
       const results=await Promise.all(requests);
-      const newCases=results.flatMap((r,i)=>{
+      const rawNew=results.flatMap((r,i)=>{
         const match=r.replace(/```json|```/g,"").trim().match(/\[[\s\S]*\]/);
         if(!match) throw new Error("Invalid response for "+newTypes[i]+" cases. Make sure server.js is running.");
         return JSON.parse(match[0]).map(c=>({...c,type:newTypes[i],status:"pending"}));
       });
+      const startIdx=keptCases.length;
+      const newCases=rawNew.map((c,i)=>({...c,id:"TC-"+String(startIdx+i+1).padStart(3,"0")}));
       setCases([...keptCases,...newCases]);
     } catch(e){setLoading(false);alert("Failed to generate test cases:\n\n"+e.message);return;}
     setPhase("ready");setLoading(false);
