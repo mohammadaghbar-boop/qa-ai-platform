@@ -806,7 +806,7 @@ const [phase,setPhase]=useState("input"); const [sid,setSid]=useState(""); const
   React.useEffect(()=>{
     if(!sid||!sdata)return;
     const existing=DB.savedStories.find(s=>s.sid===sid);
-    const snap={id:existing?.id||uid(),name:existing?.name||(sdata?.summary||sid),sid,sdata,cases:[...cases],gapText,platform,ctypes:[...ctypes],scripts:{...scripts},result,sessionBugs:[...sessionBugs],coverageText,savedAt:Date.now()};
+    const snap={id:existing?.id||uid(),name:existing?.name||(sdata?.summary||sid),categoryId:existing?.categoryId||null,sid,sdata,cases:[...cases],gapText,platform,ctypes:[...ctypes],scripts:{...scripts},result,sessionBugs:[...sessionBugs],coverageText,savedAt:Date.now()};
     if(existing){DB.savedStories=DB.savedStories.map(s=>s.sid===sid?snap:s);}
     else{DB.savedStories.unshift(snap);}
     saveDB();if(refreshSaved)refreshSaved();
@@ -1329,7 +1329,7 @@ function App() {
                     </div>
                     <div style={{display:"flex",gap:3,flexWrap:"wrap"}}>
                       <Tag c="blue">{s.sid}</Tag>
-                      {(s.cases?.filter(c=>c.status==="approved").length||0)>0&&<Tag c="green">{s.cases.filter(c=>c.status==="approved").length} TC</Tag>}
+                      {(s.cases?.filter(c=>c.status==="approved")?.length||0)>0&&<Tag c="green">{s.cases.filter(c=>c.status==="approved").length} TC</Tag>}
                       {s.coverageText&&<Tag c="green">✓</Tag>}
                     </div>
                   </div>}
