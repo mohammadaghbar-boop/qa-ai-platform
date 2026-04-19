@@ -130,6 +130,20 @@ const inp  = { width:"100%", padding:"8px 12px", borderRadius:8, border:"1px sol
 const sel  = { ...inp };
 const ta   = { ...inp, resize:"vertical" };
 
+function Toast({msg,type="error",onClose}) {
+  const bg=type==="error"?"var(--color-text-danger)":type==="success"?"var(--color-text-success)":"var(--color-text-warning)";
+  useEffect(()=>{const t=setTimeout(onClose,4000);return()=>clearTimeout(t);},[]);
+  return <div style={{position:"fixed",bottom:28,left:"50%",transform:"translateX(-50%)",background:bg,color:"#fff",padding:"11px 22px",borderRadius:10,fontSize:14,fontWeight:500,zIndex:9999,boxShadow:"0 4px 16px rgba(0,0,0,0.18)",display:"flex",alignItems:"center",gap:10,maxWidth:420}}>
+    <span style={{flex:1}}>{msg}</span>
+    <button onClick={onClose} style={{background:"none",border:"none",color:"#fff",cursor:"pointer",fontSize:16,lineHeight:1,padding:0,opacity:0.8}}>✕</button>
+  </div>;
+}
+function useToast(){
+  const [toast,setToast]=useState(null);
+  const showToast=(msg,type="error")=>setToast({msg,type});
+  const ToastEl=toast?<Toast msg={toast.msg} type={toast.type} onClose={()=>setToast(null)}/>:null;
+  return [showToast,ToastEl];
+}
 function Btn({v="primary",onClick,disabled,full,children}) {
   const bg = v==="primary"?"var(--color-text-info)":v==="danger"?"var(--color-text-danger)":v==="success"?"var(--color-text-success)":"transparent";
   const col = v==="ghost"?"var(--color-text-secondary)":"#fff";
@@ -575,6 +589,7 @@ const WS_IDX = {input:0,mode:1,gap:1,ctype:2,ready:2,review:3,jira:4,scriptSelec
 function Workspace({member,refreshSaved,restoreTarget,clearRestore}) {
   const asgn=DB.assignments.find(x=>x.memberId===member.id);
   const proj=asgn?DB.projects.find(x=>x.id===asgn.projectId):null;
+  const [showToast,ToastEl]=useToast();
   const [phase,setPhase]=useState("input"); const [sid,setSid]=useState(""); const [sdata,setSdata]=useState(null);
   const [platform,setPlatform]=useState("web"); const [ctypes,setCtypes]=useState([]);
   const [gapText,setGapText]=useState(""); const [cases,setCases]=useState([]);
@@ -632,7 +647,11 @@ function Workspace({member,refreshSaved,restoreTarget,clearRestore}) {
       }
       const sd={key:d.key,summary:flds.summary||sid,description:desc,labels:flds.labels||[],type:flds.issuetype?.name||"Story",status:flds.status?.name||"",assignee:flds.assignee?.displayName||"—",priority:flds.priority?.name||"Medium"};
       setSdata(sd); const pp=proj.platform||"web"; setPlatform(pp==="both"?"web":pp);
-    } catch { setSdata({key:sid,summary:"Story "+sid,description:"",labels:[],type:"Story",status:"In Progress",assignee:"—",priority:"Medium",sim:true}); const pp=proj.platform||"web"; setPlatform(pp==="both"?"web":pp); }
+    } catch(e) {
+      setLoading(false);
+      showToast(`Story "${sid}" not found in Jira. Please check the ID and try again.`);
+      return;
+    }
     setPhase("mode"); setLoading(false);
   };
 
@@ -820,6 +839,7 @@ function Workspace({member,refreshSaved,restoreTarget,clearRestore}) {
   const ghostBtn={padding:"8px 18px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:14,fontWeight:500,color:"var(--color-text-secondary)"};
 
   return <div>
+    {ToastEl}
     <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",marginBottom:16}}>
       <div><div style={{fontSize:20,fontWeight:500,marginBottom:4}}>QA Workspace</div>
         <div style={{fontSize:13,color:"var(--color-text-secondary)",display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
