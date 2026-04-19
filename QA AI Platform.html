@@ -1096,7 +1096,9 @@ const [phase,setPhase]=useState("input"); const [sid,setSid]=useState(""); const
           <div style={card}><div style={{fontWeight:500,marginBottom:10}}>Execution log</div><Terminal lines={execLines}/></div>
           {result.fail.length>0&&<Btn v="primary" onClick={doFix}>🔧 Fix scripts</Btn>}
           <div style={{display:"flex",gap:10,marginTop:12}}>
-            <Btn v="primary" onClick={()=>setPhase("bugReport")}>Bug Report →</Btn>
+            {result.fail.length>0
+              ?<Btn v="primary" onClick={()=>setPhase("bugReport")}>Bug Report →</Btn>
+              :<Btn v="primary" onClick={()=>setPhase("coverage")}>Coverage Report →</Btn>}
           </div>
         </div>}
 
