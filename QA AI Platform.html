@@ -581,7 +581,7 @@ const [phase,setPhase]=useState("input"); const [sid,setSid]=useState(""); const
   const [editOn,setEditOn]=useState(false); const [scripts,setScripts]=useState({web:"",ios:"",android:""});
   const [projFiles,setProjFiles]=useState(null); const [tab,setTab]=useState("web");
   const [execLines,setExecLines]=useState([]); const [result,setResult]=useState(null);
-  const [loading,setLoading]=useState(false); const [lmsg,setLmsg]=useState("");
+  const [loading,setLoading]=useState(false); const [lmsg,setLmsg]=useState(""); const [fetchError,setFetchError]=useState("");
   const [jKey,setJKey]=useState(null); const [bugDone,setBugDone]=useState(null);
   const [showBugForm,setShowBugForm]=useState(false); const [bf,setBf]=useState({summary:"",sev:"High",steps:"",expected:"",actual:""});
   const [fixed,setFixed]=useState(false); const [hist,setHist]=useState([]); const [chat,setChat]=useState(false); const [hasSaved,setHasSaved]=useState(false);
@@ -619,7 +619,7 @@ const [phase,setPhase]=useState("input"); const [sid,setSid]=useState(""); const
   if (!proj) return <div style={card}><div style={{color:"var(--color-text-warning)",fontWeight:500}}>No project assigned. Contact your QA lead.</div></div>;
 
   const doFetch=async()=>{
-    setLoading(true); setLmsg("Fetching story from Jira…");
+    setLoading(true); setLmsg("Fetching story from Jira…"); setFetchError("");
     try {
       const d=await callJira(proj,"GET","/issue/"+sid+"?fields=summary,description,labels,issuetype,status,assignee,priority");
       const flds=d.fields||{}; let desc="";
@@ -632,8 +632,16 @@ const [phase,setPhase]=useState("input"); const [sid,setSid]=useState(""); const
       }
       const sd={key:d.key,summary:flds.summary||sid,description:desc,labels:flds.labels||[],type:flds.issuetype?.name||"Story",status:flds.status?.name||"",assignee:flds.assignee?.displayName||"—",priority:flds.priority?.name||"Medium"};
       setSdata(sd); const pp=proj.platform||"web"; setPlatform(pp==="both"?"web":pp);
-    } catch { setSdata({key:sid,summary:"Story "+sid,description:"",labels:[],type:"Story",status:"In Progress",assignee:"—",priority:"Medium",sim:true}); const pp=proj.platform||"web"; setPlatform(pp==="both"?"web":pp); }
-    setPhase("mode"); setLoading(false);
+      setPhase("mode"); setLoading(false);
+    } catch(e) {
+      if(proj.jiraToken){
+        setFetchError("Story \""+sid+"\" was not found in Jira ("+proj.jiraProjKey+"). Please check the story ID and try again.");
+        setLoading(false); return;
+      }
+      setSdata({key:sid,summary:"Story "+sid,description:"",labels:[],type:"Story",status:"In Progress",assignee:"—",priority:"Medium",sim:true});
+      const pp=proj.platform||"web"; setPlatform(pp==="both"?"web":pp);
+      setPhase("mode"); setLoading(false);
+    }
   };
 
   const doGap=async()=>{
@@ -912,9 +920,10 @@ const [phase,setPhase]=useState("input"); const [sid,setSid]=useState(""); const
           <div style={card}><H2>Enter Jira story ID</H2>
             <div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:12}}>{proj.jiraToken?<Tag c="green">✓ Jira configured</Tag>:<Tag c="amber">No token — AI simulation</Tag>}</div>
             <div style={{display:"flex",gap:12,alignItems:"flex-end"}}>
-              <div style={{flex:1}}><Lbl>Story ID</Lbl><input style={inp} value={sid} onChange={e=>setSid(e.target.value)} placeholder={proj.jiraProjKey+"-123"} onKeyDown={e=>e.key==="Enter"&&sid&&doFetch()}/></div>
+              <div style={{flex:1}}><Lbl>Story ID</Lbl><input style={inp} value={sid} onChange={e=>{setSid(e.target.value);setFetchError("");}} placeholder={proj.jiraProjKey+"-123"} onKeyDown={e=>e.key==="Enter"&&sid&&doFetch()}/></div>
               <Btn v="primary" onClick={()=>sid&&doFetch()}>Fetch story →</Btn>
             </div>
+            {fetchError&&<div style={{marginTop:12,padding:"10px 14px",borderRadius:8,background:"var(--color-background-danger)",border:"1px solid var(--color-text-danger)",color:"var(--color-text-danger)",fontSize:13}}>⚠ {fetchError}</div>}
           </div>
         </div>}
 
