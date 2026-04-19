@@ -246,6 +246,54 @@ function NotifBell({userId}) {
   </div>;
 }
 
+/* ─── Markdown renderer for chat ─────────────────────────────────────────── */
+function renderMd(text){
+  const lines=text.split("\n");
+  const out=[];let i=0;
+  while(i<lines.length){
+    const l=lines[i];
+    // heading
+    if(/^###\s/.test(l)){out.push(<div key={i} style={{fontWeight:700,fontSize:13,marginTop:10,marginBottom:2}}>{l.replace(/^###\s/,"")}</div>);i++;continue;}
+    if(/^##\s/.test(l)){out.push(<div key={i} style={{fontWeight:700,fontSize:14,marginTop:12,marginBottom:3}}>{l.replace(/^##\s/,"")}</div>);i++;continue;}
+    if(/^#\s/.test(l)){out.push(<div key={i} style={{fontWeight:700,fontSize:15,marginTop:14,marginBottom:4}}>{l.replace(/^#\s/,"")}</div>);i++;continue;}
+    // bullet list
+    if(/^[-*]\s/.test(l)){
+      const items=[];
+      while(i<lines.length&&/^[-*]\s/.test(lines[i])){items.push(lines[i].replace(/^[-*]\s/,""));i++;}
+      out.push(<ul key={i} style={{margin:"4px 0 4px 18px",padding:0}}>{items.map((it,j)=><li key={j} style={{marginBottom:2}}>{inlineMd(it)}</li>)}</ul>);
+      continue;
+    }
+    // numbered list
+    if(/^\d+\.\s/.test(l)){
+      const items=[];
+      while(i<lines.length&&/^\d+\.\s/.test(lines[i])){items.push(lines[i].replace(/^\d+\.\s/,""));i++;}
+      out.push(<ol key={i} style={{margin:"4px 0 4px 18px",padding:0}}>{items.map((it,j)=><li key={j} style={{marginBottom:2}}>{inlineMd(it)}</li>)}</ol>);
+      continue;
+    }
+    // horizontal rule
+    if(/^---+$/.test(l.trim())){out.push(<hr key={i} style={{border:"none",borderTop:"1px solid var(--color-border-tertiary)",margin:"8px 0"}}/>);i++;continue;}
+    // blank line
+    if(l.trim()===""){out.push(<div key={i} style={{height:6}}/>);i++;continue;}
+    // paragraph
+    out.push(<div key={i} style={{marginBottom:2}}>{inlineMd(l)}</div>);i++;
+  }
+  return out;
+}
+function inlineMd(text){
+  // split on bold, italic, inline code
+  const parts=[];let rest=text;let k=0;
+  const re=/(\*\*(.+?)\*\*|\*(.+?)\*|`(.+?)`)/g;let m;let last=0;
+  while((m=re.exec(rest))!==null){
+    if(m.index>last)parts.push(<span key={k++}>{rest.slice(last,m.index)}</span>);
+    if(m[2])parts.push(<strong key={k++}>{m[2]}</strong>);
+    else if(m[3])parts.push(<em key={k++}>{m[3]}</em>);
+    else if(m[4])parts.push(<code key={k++} style={{background:"var(--color-background-secondary)",borderRadius:3,padding:"1px 5px",fontSize:12,fontFamily:"monospace"}}>{m[4]}</code>);
+    last=m.index+m[0].length;
+  }
+  if(last<rest.length)parts.push(<span key={k++}>{rest.slice(last)}</span>);
+  return parts.length>0?parts:text;
+}
+
 /* ─── AI Chat ─────────────────────────────────────────────────────────────── */
 function AIChat({proj,sid,sdata,cases=[],gapText="",result=null,sessionBugs=[],coverageText="",platform=""}) {
   const [msgs,setMsgs]=useState([{role:"assistant",text:"Hi! I can see your full story, test cases, execution results and bugs. Ask me anything!"}]);
@@ -350,7 +398,9 @@ function AIChat({proj,sid,sdata,cases=[],gapText="",result=null,sessionBugs=[],c
     </div>}
     <div ref={msgsRef} style={{flex:1,overflow:"auto",display:"flex",flexDirection:"column",gap:10,paddingBottom:8}}>
       {msgs.map((m,i)=><div key={i} style={{display:"flex",justifyContent:m.role==="user"?"flex-end":"flex-start"}}>
-        <div style={{maxWidth:"85%",padding:"10px 14px",borderRadius:12,fontSize:13,lineHeight:1.65,whiteSpace:"pre-wrap",background:m.role==="user"?"var(--color-text-info)":"var(--color-background-primary)",color:m.role==="user"?"#fff":"var(--color-text-primary)",border:m.role==="assistant"?"1px solid var(--color-border-tertiary)":"none"}}>{m.text}</div>
+        <div style={{maxWidth:"85%",padding:"10px 14px",borderRadius:12,fontSize:13,lineHeight:1.65,background:m.role==="user"?"var(--color-text-info)":"var(--color-background-primary)",color:m.role==="user"?"#fff":"var(--color-text-primary)",border:m.role==="assistant"?"1px solid var(--color-border-tertiary)":"none"}}>
+          {m.role==="assistant"?renderMd(m.text):<span style={{whiteSpace:"pre-wrap"}}>{m.text}</span>}
+        </div>
       </div>)}
       {busy&&<div style={{alignSelf:"flex-start",padding:"10px 14px",borderRadius:12,background:"var(--color-background-primary)",border:"1px solid var(--color-border-tertiary)",fontSize:13,color:"var(--color-text-tertiary)"}}>Thinking…</div>}
     </div>
