@@ -283,23 +283,37 @@ function AIChat({proj,sid,sdata,cases=[],gapText="",result=null,sessionBugs=[],c
           parts.push(`Issue ${issue.key}:\n  Summary: ${issue.fields?.summary}\n  Type: ${issue.fields?.issuetype?.name}\n  Status: ${issue.fields?.status?.name}\n  Priority: ${issue.fields?.priority?.name}\n  Assignee: ${issue.fields?.assignee?.displayName||"Unassigned"}${descText?"\n  Description: "+descText:""}${comments?"\n  Recent comments:\n"+comments:""}`);
         }catch{}
       }
+      // fetch active sprint tickets
+      if(/sprint/i.test(q)){
+        try{
+          const r=await callJira(proj,"GET",`/search?jql=project=${proj.jiraProjKey}+AND+sprint+in+openSprints()+ORDER+BY+priority+ASC&maxResults=20&fields=summary,status,issuetype,assignee,priority`);
+          const items=(r.issues||[]).map(i=>`  ${i.key}: [${i.fields?.issuetype?.name}/${i.fields?.priority?.name}] ${i.fields?.summary} — ${i.fields?.status?.name} (${i.fields?.assignee?.displayName||"Unassigned"})`).join("\n");
+          parts.push(items?`Active sprint tickets in ${proj.jiraProjKey} (${r.issues?.length||0}):\n${items}`:`No active sprint found in ${proj.jiraProjKey}.`);
+        }catch(e){parts.push(`Could not fetch sprint data: ${e.message}`);}
+      }
       // fetch open bugs for project
       if(/bug/i.test(q)){
-        const r=await callJira(proj,"GET",`/search?jql=project=${proj.jiraProjKey}+AND+issuetype=Bug+AND+status!=Done+ORDER+BY+created+DESC&maxResults=10&fields=summary,status,priority,assignee`);
-        const bugs=(r.issues||[]).map(i=>`  ${i.key}: [${i.fields?.priority?.name}] ${i.fields?.summary} — ${i.fields?.status?.name} (${i.fields?.assignee?.displayName||"Unassigned"})`).join("\n");
-        if(bugs)parts.push(`Open bugs in ${proj.jiraProjKey}:\n${bugs}`);
+        try{
+          const r=await callJira(proj,"GET",`/search?jql=project=${proj.jiraProjKey}+AND+issuetype=Bug+AND+status!=Done+ORDER+BY+created+DESC&maxResults=10&fields=summary,status,priority,assignee`);
+          const bugs=(r.issues||[]).map(i=>`  ${i.key}: [${i.fields?.priority?.name}] ${i.fields?.summary} — ${i.fields?.status?.name} (${i.fields?.assignee?.displayName||"Unassigned"})`).join("\n");
+          parts.push(bugs?`Open bugs in ${proj.jiraProjKey}:\n${bugs}`:`No open bugs found.`);
+        }catch(e){parts.push(`Could not fetch bugs: ${e.message}`);}
       }
       // fetch recent issues
-      if(/issue|ticket|task|list|show|fetch|open/i.test(q)&&!/bug/i.test(q)&&keyMatches.length===0){
-        const r=await callJira(proj,"GET",`/search?jql=project=${proj.jiraProjKey}+AND+status!=Done+ORDER+BY+updated+DESC&maxResults=8&fields=summary,status,issuetype,assignee,priority`);
-        const issues=(r.issues||[]).map(i=>`  ${i.key}: [${i.fields?.issuetype?.name}/${i.fields?.priority?.name}] ${i.fields?.summary} — ${i.fields?.status?.name}`).join("\n");
-        if(issues)parts.push(`Recent open issues in ${proj.jiraProjKey}:\n${issues}`);
+      if(/issue|ticket|task|list|show|fetch|open/i.test(q)&&!/bug|sprint/i.test(q)&&keyMatches.length===0){
+        try{
+          const r=await callJira(proj,"GET",`/search?jql=project=${proj.jiraProjKey}+AND+status!=Done+ORDER+BY+updated+DESC&maxResults=10&fields=summary,status,issuetype,assignee,priority`);
+          const issues=(r.issues||[]).map(i=>`  ${i.key}: [${i.fields?.issuetype?.name}/${i.fields?.priority?.name}] ${i.fields?.summary} — ${i.fields?.status?.name}`).join("\n");
+          parts.push(issues?`Recent open issues in ${proj.jiraProjKey}:\n${issues}`:`No open issues found.`);
+        }catch(e){parts.push(`Could not fetch issues: ${e.message}`);}
       }
       // fetch comments on current story
       if(sid&&/comment/i.test(q)&&keyMatches.length===0){
-        const r=await callJira(proj,"GET","/issue/"+sid+"/comment?maxResults=5");
-        const comments=(r.comments||[]).map(c=>`  [${c.author?.displayName}]: ${c.body?.content?.[0]?.content?.[0]?.text||""}`).join("\n");
-        if(comments)parts.push(`Comments on ${sid}:\n${comments}`);
+        try{
+          const r=await callJira(proj,"GET","/issue/"+sid+"/comment?maxResults=5");
+          const comments=(r.comments||[]).map(c=>`  [${c.author?.displayName}]: ${c.body?.content?.[0]?.content?.[0]?.text||""}`).join("\n");
+          if(comments)parts.push(`Comments on ${sid}:\n${comments}`);
+        }catch{}
       }
     }catch{}
     return parts.join("\n\n");
@@ -323,7 +337,7 @@ function AIChat({proj,sid,sdata,cases=[],gapText="",result=null,sessionBugs=[],c
       const coverageSection=coverageText?`COVERAGE REPORT:\n${coverageText}`:"";
 
       const workspaceCtx=[storySection,gapSection,casesSection,resultSection,bugsSection,coverageSection].filter(Boolean).join("\n\n");
-      const sys=`You are a QA expert assistant embedded in the QA AI Platform. You have full visibility into the current session data below. You do NOT have any tools — all Jira data is pre-fetched and provided. Never ask for tool access or permissions.\n\nProject: ${proj?.name||"—"} (Jira: ${proj?.jiraProjKey||"—"})\n\n=== CURRENT SESSION ===\n${workspaceCtx}\n${jiraSection?`\n=== JIRA DATA (fetched) ===\n${jiraSection}`:""}\n\nBe concise and specific. Reference test case IDs, bug IDs, and Jira keys by name when relevant.`;
+      const sys=`You are a QA expert assistant embedded in the QA AI Platform. CRITICAL RULES:\n1. You have ZERO tools and ZERO external access. You cannot call any APIs.\n2. NEVER mention permissions, tool access, approvals, or ask the user to do anything to grant access.\n3. All Jira data you will ever receive has already been fetched by the app and is shown below under "JIRA DATA". If it is empty, say "No data was returned from Jira for this query" and stop.\n4. Answer only from the context provided below and your QA expertise.\n\nProject: ${proj?.name||"—"} (Jira key: ${proj?.jiraProjKey||"—"})\n\n=== CURRENT SESSION ===\n${workspaceCtx}\n${jiraSection?`\n=== JIRA DATA (already fetched by the app) ===\n${jiraSection}`:"\n=== JIRA DATA ===\n(No Jira data was fetched for this query.)"}\n\nBe concise. Reference IDs and keys by name when relevant.`;
       const r=await callAI([...hist,{role:"user",content:u}],sys,2000,proj?.anthropicKey||"");
       setMsgs(m=>[...m,{role:"assistant",text:r}]);
     }catch(e){setMsgs(m=>[...m,{role:"assistant",text:"Error: "+e.message}]);}
