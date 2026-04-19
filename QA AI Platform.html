@@ -739,7 +739,7 @@ function Workspace({member,refreshSaved,restoreTarget,clearRestore}) {
 
         {!loading&&phase==="gap"&&<div>
           <div style={card}><div style={{display:"flex",gap:8,marginBottom:14,alignItems:"center"}}><Tag c="blue">{sid}</Tag><span style={{fontWeight:500}}>GAP Analysis</span></div><div style={{whiteSpace:"pre-wrap",fontSize:14,lineHeight:1.85}}>{gapText}</div></div>
-          <Confirm icon="📝" title="Would you like to write test cases?" onYes={()=>setPhase("ctype")} onNo={reset} yesLabel="Yes, write test cases" noLabel="↩ Start over"/>
+          <Confirm icon="📝" title="Would you like to write test cases?" onYes={()=>setPhase("ctype")} yesLabel="Yes, write test cases"/>
         </div>}
 
         {!loading&&phase==="ctype"&&<div style={card}>
@@ -883,12 +883,14 @@ function Workspace({member,refreshSaved,restoreTarget,clearRestore}) {
           </div>}
           <div style={card}>
             <H2>File a bug report</H2>
-            <Lbl>Summary</Lbl><input style={{...inp,marginBottom:10}} value={bf.summary} onChange={e=>setBf(p=>({...p,summary:e.target.value}))} placeholder={"Bug found in "+sid}/>
+            <Lbl>Summary <span style={{color:"var(--color-text-danger)"}}>*</span></Lbl><input style={{...inp,marginBottom:10,borderColor:bf._err&&!bf.summary.trim()?"var(--color-text-danger)":undefined}} value={bf.summary} onChange={e=>setBf(p=>({...p,summary:e.target.value,_err:false}))} placeholder={"Bug found in "+sid}/>
             <Lbl>Severity</Lbl><select style={{...sel,marginBottom:10}} value={bf.sev} onChange={e=>setBf(p=>({...p,sev:e.target.value}))}>{["Critical","High","Medium","Low"].map(s=><option key={s}>{s}</option>)}</select>
-            <Lbl>Steps to Reproduce</Lbl><textarea style={{...ta,marginBottom:10}} rows={4} value={bf.steps} onChange={e=>setBf(p=>({...p,steps:e.target.value}))} placeholder={"1. Navigate to the feature\n2. Perform the action\n3. Observe the result"}/>
-            <Lbl>Expected Result</Lbl><input style={{...inp,marginBottom:10}} value={bf.expected} onChange={e=>setBf(p=>({...p,expected:e.target.value}))} placeholder="What should happen"/>
-            <Lbl>Actual Result</Lbl><input style={{...inp,marginBottom:12}} value={bf.actual} onChange={e=>setBf(p=>({...p,actual:e.target.value}))} placeholder="What actually happened"/>
+            <Lbl>Steps to Reproduce <span style={{color:"var(--color-text-danger)"}}>*</span></Lbl><textarea style={{...ta,marginBottom:10,borderColor:bf._err&&!bf.steps.trim()?"var(--color-text-danger)":undefined}} rows={4} value={bf.steps} onChange={e=>setBf(p=>({...p,steps:e.target.value,_err:false}))} placeholder={"1. Navigate to the feature\n2. Perform the action\n3. Observe the result"}/>
+            <Lbl>Expected Result <span style={{color:"var(--color-text-danger)"}}>*</span></Lbl><input style={{...inp,marginBottom:10,borderColor:bf._err&&!bf.expected.trim()?"var(--color-text-danger)":undefined}} value={bf.expected} onChange={e=>setBf(p=>({...p,expected:e.target.value,_err:false}))} placeholder="What should happen"/>
+            <Lbl>Actual Result <span style={{color:"var(--color-text-danger)"}}>*</span></Lbl><input style={{...inp,marginBottom:bf._err?4:12,borderColor:bf._err&&!bf.actual.trim()?"var(--color-text-danger)":undefined}} value={bf.actual} onChange={e=>setBf(p=>({...p,actual:e.target.value,_err:false}))} placeholder="What actually happened"/>
+            {bf._err&&<div style={{color:"var(--color-text-danger)",fontSize:12,marginBottom:10}}>Please fill in all required fields (*) before submitting.</div>}
             <Btn v="danger" onClick={async()=>{
+              if(!bf.summary.trim()||!bf.steps.trim()||!bf.expected.trim()||!bf.actual.trim()){setBf(p=>({...p,_err:true}));return;}
               setLoading(true);setLmsg("Filing bug…");
               let jRef=null;
               const stepLines=bf.steps.split("\n").filter(Boolean);
@@ -903,11 +905,11 @@ function Workspace({member,refreshSaved,restoreTarget,clearRestore}) {
                 {type:"paragraph",content:[{type:"text",text:sid+" · Filed by "+member.name}]},
               ]};
               try{const res=await callJira(proj,"POST","/issue",{fields:{project:{key:proj.jiraProjKey},summary:bf.summary||"Bug in "+sid,description:adfDesc,issuetype:{name:"Bug"},priority:{name:bf.sev}}});jRef=res.key;}catch{}
-              const bug={bid:"BUG-"+uid().toUpperCase(),sid,summary:bf.summary||"Bug in "+sid,sev:bf.sev,who:member.name,jKey:jRef,status:"Open"};
+              const bug={bid:"BUG-"+uid().toUpperCase(),sid,summary:bf.summary||"Bug in "+sid,sev:bf.sev,who:member.name,jKey:jRef,status:"Open",steps:stepLines,expected:bf.expected,actual:bf.actual};
               DB.bugs.push(bug);saveDB();pushNotif("admin","🐛 "+bug.bid+(jRef?" ("+jRef+")":"")+" filed for "+sid);
               const bugCase={id:bug.bid,title:bf.summary||"Bug in "+sid,type:"negative",platform,preconditions:"",steps:stepLines.length>0?stepLines:["Reproduce the bug"],expected:bf.expected||"Bug is fixed",automatable:false,status:"approved",fromBug:true,sev:bf.sev};
               setCases(cs=>[...cs,bugCase]);
-              setSessionBugs(p=>[...p,bug]);setBf({summary:"",sev:"High",steps:"",expected:"",actual:""});setLoading(false);
+              setSessionBugs(p=>[...p,bug]);setBf({summary:"",sev:"High",steps:"",expected:"",actual:"",_err:false});setLoading(false);
             }}>Submit Bug</Btn>
           </div>
           {sessionBugs.length>0&&<div style={card}>
@@ -950,7 +952,21 @@ function Workspace({member,refreshSaved,restoreTarget,clearRestore}) {
               setLoading(true);setLmsg("Linking bugs to Jira…");
               const updated=[...sessionBugs];
               for(const b of updated.filter(x=>!x.jKey)){
-                try{const res=await callJira(proj,"POST","/issue",{fields:{project:{key:proj.jiraProjKey},summary:b.summary,description:{type:"doc",version:1,content:[{type:"paragraph",content:[{type:"text",text:b.desc||"See execution log."}]}]},issuetype:{name:"Bug"},priority:{name:b.sev}}});b.jKey=res.key;DB.bugs=DB.bugs.map(x=>x.bid===b.bid?{...x,jKey:b.jKey}:x);}catch{}
+                try{
+                  const stepLines=(b.steps||[]);
+                  const adfDesc={type:"doc",version:1,content:[
+                    {type:"heading",attrs:{level:3},content:[{type:"text",text:"Steps to Reproduce"}]},
+                    {type:"orderedList",content:stepLines.length>0?stepLines.map(s=>({type:"listItem",content:[{type:"paragraph",content:[{type:"text",text:s.replace(/^\d+\.\s*/,"")}]}]})):[{type:"listItem",content:[{type:"paragraph",content:[{type:"text",text:"See summary"}]}]}]},
+                    {type:"heading",attrs:{level:3},content:[{type:"text",text:"Expected Result"}]},
+                    {type:"paragraph",content:[{type:"text",text:b.expected||"—"}]},
+                    {type:"heading",attrs:{level:3},content:[{type:"text",text:"Actual Result"}]},
+                    {type:"paragraph",content:[{type:"text",text:b.actual||"—"}]},
+                    {type:"heading",attrs:{level:3},content:[{type:"text",text:"Story"}]},
+                    {type:"paragraph",content:[{type:"text",text:sid+" · Filed by "+member.name}]},
+                  ]};
+                  const res=await callJira(proj,"POST","/issue",{fields:{project:{key:proj.jiraProjKey},summary:b.summary,description:adfDesc,issuetype:{name:"Bug"},priority:{name:b.sev}}});
+                  b.jKey=res.key;DB.bugs=DB.bugs.map(x=>x.bid===b.bid?{...x,jKey:b.jKey}:x);
+                }catch{}
               }
               saveDB();setSessionBugs([...updated]);setLoading(false);
             }} style={{padding:"9px 18px",borderRadius:8,border:"none",cursor:"pointer",fontWeight:500,fontSize:14,background:"#0052CC",color:"#fff",display:"flex",alignItems:"center",gap:6}}>🔗 Link {sessionBugs.filter(b=>!b.jKey).length} bugs to Jira</button>}
