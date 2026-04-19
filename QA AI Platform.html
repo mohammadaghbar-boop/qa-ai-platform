@@ -303,7 +303,7 @@ function AIChat({proj,sid,sdata}) {
       let liveCtx="";
       if(isJiraQuery(u))liveCtx=await fetchJiraData(u);
       const jiraSection=[jiraCtx,liveCtx].filter(Boolean).join("\n\n");
-      const sys=`You are a QA expert assistant with live access to Jira.\nProject: ${proj?.name||"—"}, Jira key: ${proj?.jiraProjKey||"—"}${sid?`, Active story: ${sid}`:""}.\n${jiraSection?`\nLive Jira data:\n${jiraSection}\n`:""}\nBe concise and helpful. When referencing Jira issues use their key (e.g. ${proj?.jiraProjKey||"PROJ"}-123).`;
+      const sys=`You are a QA expert assistant. You do NOT have any tools or external access — all Jira data you need has already been fetched by the application and is provided below. Never ask the user to approve tool access or permissions. Answer only from the context provided and your QA knowledge.\nProject: ${proj?.name||"—"}, Jira key: ${proj?.jiraProjKey||"—"}${sid?`, Active story: ${sid}`:""}.\n${jiraSection?`\nJira data (already fetched for you):\n${jiraSection}\n`:"(No Jira data was fetched for this query — answer from general QA knowledge.)"}\nBe concise. When referencing Jira issues use their key (e.g. ${proj?.jiraProjKey||"PROJ"}-123).`;
       const r=await callAI([...hist,{role:"user",content:u}],sys,2000,proj?.anthropicKey||"");
       setMsgs(m=>[...m,{role:"assistant",text:r}]);
     }catch(e){setMsgs(m=>[...m,{role:"assistant",text:"Error: "+e.message}]);}
