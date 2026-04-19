@@ -966,7 +966,21 @@ function LoginPage({onLogin}) {
 
 /* ─── Root App ────────────────────────────────────────────────────────────── */
 const SESSION_KEY="qa_session";
-function loadSession(){try{const s=JSON.parse(localStorage.getItem(SESSION_KEY)||sessionStorage.getItem(SESSION_KEY));if(!s)return null;if(s.role==="admin")return s;if(s.role==="member"){const m=DB.members.find(x=>x.id===s.id);return m?{role:"member",member:m,id:m.id}:null;}return null;}catch{return null;}}
+function loadSession(){
+  try{
+    // localStorage = Remember Me (persists after browser close)
+    // sessionStorage = no Remember Me (expires when tab closes)
+    const raw=localStorage.getItem(SESSION_KEY)||sessionStorage.getItem(SESSION_KEY);
+    if(!raw)return null;
+    const s=JSON.parse(raw);
+    if(!s||!s.role)return null;
+    // If stored without remember, verify it's still in sessionStorage (not a ghost localStorage entry)
+    if(s.remember===false&&!sessionStorage.getItem(SESSION_KEY)){localStorage.removeItem(SESSION_KEY);return null;}
+    if(s.role==="admin")return s;
+    if(s.role==="member"){const m=DB.members.find(x=>x.id===s.id);return m?{role:"member",member:m,id:m.id}:null;}
+    return null;
+  }catch{return null;}
+}
 function App() {
   const [user,setUser]=useState(loadSession); const [page,setPage]=useState(()=>{const u=loadSession();return u?.role==="admin"?"dashboard":"workspace";}); const [,tick]=useState(0);
   const [savedStories,setSavedStories]=useState(()=>[...DB.savedStories]);
@@ -976,12 +990,13 @@ function App() {
   const deleteSnap=id=>{DB.savedStories=DB.savedStories.filter(s=>s.id!==id);saveDB();refreshSaved();};
   const renameSnap=(id,name)=>{DB.savedStories=DB.savedStories.map(s=>s.id===id?{...s,name}:s);saveDB();refreshSaved();setRenamingId(null);};
   const handleLogin=(u,remember)=>{
-    const data=u.role==="admin"?{role:"admin",id:"admin"}:{role:"member",id:u.id};
-    if(remember){localStorage.setItem(SESSION_KEY,JSON.stringify(data));sessionStorage.removeItem(SESSION_KEY);}
-    else{sessionStorage.setItem(SESSION_KEY,JSON.stringify(data));localStorage.removeItem(SESSION_KEY);}
+    const data=u.role==="admin"?{role:"admin",id:"admin",remember}:{role:"member",id:u.id,remember};
+    localStorage.removeItem(SESSION_KEY); sessionStorage.removeItem(SESSION_KEY);
+    if(remember){localStorage.setItem(SESSION_KEY,JSON.stringify(data));}
+    else{sessionStorage.setItem(SESSION_KEY,JSON.stringify(data));}
     setUser(u); setPage(u.role==="admin"?"dashboard":"workspace");
   };
-  const handleLogout=()=>{localStorage.removeItem(SESSION_KEY);sessionStorage.removeItem(SESSION_KEY);setUser(null);};
+  const handleLogout=()=>{localStorage.removeItem(SESSION_KEY);sessionStorage.removeItem(SESSION_KEY);setUser(null);setPage("workspace");};
   if(!user) return <LoginPage onLogin={handleLogin}/>;
   const adminNav=[{sec:"Overview",items:[{id:"dashboard",label:"Dashboard",icon:"📊"}]},{sec:"Manage",items:[{id:"members",label:"Members",icon:"👥"},{id:"projects",label:"Projects",icon:"📁"},{id:"assign",label:"Assignments",icon:"🔗"}]},{sec:"Reports",items:[{id:"bugs",label:"Bug tracker",icon:"🐛"}]}];
   const memberNav=[{sec:"Work",items:[{id:"workspace",label:"Workspace",icon:"🖥"}]}];
