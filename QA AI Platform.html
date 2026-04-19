@@ -449,7 +449,7 @@ function Workspace({member,refreshSaved,restoreTarget,clearRestore}) {
   const [execLines,setExecLines]=useState([]); const [result,setResult]=useState(null);
   const [loading,setLoading]=useState(false); const [lmsg,setLmsg]=useState("");
   const [jKey,setJKey]=useState(null); const [bugDone,setBugDone]=useState(null);
-  const [showBugForm,setShowBugForm]=useState(false); const [bf,setBf]=useState({summary:"",sev:"High",desc:""});
+  const [showBugForm,setShowBugForm]=useState(false); const [bf,setBf]=useState({summary:"",sev:"High",steps:"",expected:"",actual:""});
   const [fixed,setFixed]=useState(false); const [hist,setHist]=useState([]); const [chat,setChat]=useState(false);
   const [showAddCase,setShowAddCase]=useState(false); const [newCase,setNewCase]=useState({title:"",type:"happy",platform:"web",preconditions:"",steps:[""],expected:"",automatable:true});
   const [selectedForScripts,setSelectedForScripts]=useState([]); const [coverageText,setCoverageText]=useState(""); const [sessionBugs,setSessionBugs]=useState([]);
@@ -849,23 +849,36 @@ function Workspace({member,refreshSaved,restoreTarget,clearRestore}) {
             <H2>Failed cases</H2>
             {result.fail.map(c=><div key={c.id} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 0",borderBottom:"1px solid var(--color-border-tertiary)"}}>
               <Tag c="red">{c.id}</Tag><span style={{flex:1,fontSize:13}}>{c.title}</span>
-              <button onClick={()=>{setBf({summary:"["+c.id+"] "+c.title,sev:"High",desc:"Failed during execution of story "+sid});setShowBugForm(true);}} style={{...ghostBtn,padding:"4px 10px",fontSize:12}}>🐛 File Bug</button>
+              <button onClick={()=>{setBf({summary:"["+c.id+"] "+c.title,sev:"High",steps:"1. Run test case "+c.id+"\n2. Execute steps: "+(c.steps||[]).join(" → ")+"\n3. Observe the failure",expected:c.expected||"Test case passes successfully",actual:"Test case failed during execution of story "+sid});setShowBugForm(true);}} style={{...ghostBtn,padding:"4px 10px",fontSize:12}}>🐛 File Bug</button>
             </div>)}
           </div>}
           <div style={card}>
             <H2>File a bug report</H2>
             <Lbl>Summary</Lbl><input style={{...inp,marginBottom:10}} value={bf.summary} onChange={e=>setBf(p=>({...p,summary:e.target.value}))} placeholder={"Bug found in "+sid}/>
             <Lbl>Severity</Lbl><select style={{...sel,marginBottom:10}} value={bf.sev} onChange={e=>setBf(p=>({...p,sev:e.target.value}))}>{["Critical","High","Medium","Low"].map(s=><option key={s}>{s}</option>)}</select>
-            <Lbl>Description</Lbl><textarea style={{...ta,marginBottom:12}} rows={3} value={bf.desc} onChange={e=>setBf(p=>({...p,desc:e.target.value}))} placeholder="Steps to reproduce…"/>
+            <Lbl>Steps to Reproduce</Lbl><textarea style={{...ta,marginBottom:10}} rows={4} value={bf.steps} onChange={e=>setBf(p=>({...p,steps:e.target.value}))} placeholder={"1. Navigate to the feature\n2. Perform the action\n3. Observe the result"}/>
+            <Lbl>Expected Result</Lbl><input style={{...inp,marginBottom:10}} value={bf.expected} onChange={e=>setBf(p=>({...p,expected:e.target.value}))} placeholder="What should happen"/>
+            <Lbl>Actual Result</Lbl><input style={{...inp,marginBottom:12}} value={bf.actual} onChange={e=>setBf(p=>({...p,actual:e.target.value}))} placeholder="What actually happened"/>
             <Btn v="danger" onClick={async()=>{
               setLoading(true);setLmsg("Filing bug…");
               let jRef=null;
-              try{const res=await callJira(proj,"POST","/issue",{fields:{project:{key:proj.jiraProjKey},summary:bf.summary,description:{type:"doc",version:1,content:[{type:"paragraph",content:[{type:"text",text:bf.desc||"See execution log."}]}]},issuetype:{name:"Bug"},priority:{name:bf.sev}}});jRef=res.key;}catch{}
-              const bug={bid:"BUG-"+uid().toUpperCase(),sid,summary:bf.summary,sev:bf.sev,who:member.name,jKey:jRef,status:"Open"};
+              const stepLines=bf.steps.split("\n").filter(Boolean);
+              const adfDesc={type:"doc",version:1,content:[
+                {type:"heading",attrs:{level:3},content:[{type:"text",text:"Steps to Reproduce"}]},
+                {type:"orderedList",content:stepLines.length>0?stepLines.map(s=>({type:"listItem",content:[{type:"paragraph",content:[{type:"text",text:s.replace(/^\d+\.\s*/,"")}]}]})):[{type:"listItem",content:[{type:"paragraph",content:[{type:"text",text:"See summary"}]}]}]},
+                {type:"heading",attrs:{level:3},content:[{type:"text",text:"Expected Result"}]},
+                {type:"paragraph",content:[{type:"text",text:bf.expected||"—"}]},
+                {type:"heading",attrs:{level:3},content:[{type:"text",text:"Actual Result"}]},
+                {type:"paragraph",content:[{type:"text",text:bf.actual||"—"}]},
+                {type:"heading",attrs:{level:3},content:[{type:"text",text:"Story"}]},
+                {type:"paragraph",content:[{type:"text",text:sid+" · Filed by "+member.name}]},
+              ]};
+              try{const res=await callJira(proj,"POST","/issue",{fields:{project:{key:proj.jiraProjKey},summary:bf.summary||"Bug in "+sid,description:adfDesc,issuetype:{name:"Bug"},priority:{name:bf.sev}}});jRef=res.key;}catch{}
+              const bug={bid:"BUG-"+uid().toUpperCase(),sid,summary:bf.summary||"Bug in "+sid,sev:bf.sev,who:member.name,jKey:jRef,status:"Open"};
               DB.bugs.push(bug);saveDB();pushNotif("admin","🐛 "+bug.bid+(jRef?" ("+jRef+")":"")+" filed for "+sid);
-              const bugCase={id:bug.bid,title:bf.summary,type:"negative",platform,preconditions:"",steps:bf.desc?bf.desc.split("\n").filter(Boolean):["Reproduce the bug"],expected:"Bug is fixed and feature works as expected",automatable:false,status:"approved",fromBug:true,sev:bf.sev};
+              const bugCase={id:bug.bid,title:bf.summary||"Bug in "+sid,type:"negative",platform,preconditions:"",steps:stepLines.length>0?stepLines:["Reproduce the bug"],expected:bf.expected||"Bug is fixed",automatable:false,status:"approved",fromBug:true,sev:bf.sev};
               setCases(cs=>[...cs,bugCase]);
-              setSessionBugs(p=>[...p,bug]);setBf({summary:"",sev:"High",desc:""});setLoading(false);
+              setSessionBugs(p=>[...p,bug]);setBf({summary:"",sev:"High",steps:"",expected:"",actual:""});setLoading(false);
             }}>Submit Bug</Btn>
           </div>
           {sessionBugs.length>0&&<div style={card}>
