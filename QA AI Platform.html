@@ -1280,7 +1280,11 @@ function App() {
   const [renamingId,setRenamingId]=useState(null); const [renameVal,setRenameVal]=useState("");
   const [,forceUpdate]=useState(0);
   const refreshSaved=()=>{setSavedStories([...DB.savedStories]);forceUpdate(x=>x+1);};
-  const deleteSnap=id=>{DB.savedStories=DB.savedStories.filter(s=>s.id!==id);saveDB();refreshSaved();};
+  const deleteSnap=id=>{
+    DB.savedStories=DB.savedStories.filter(s=>s.id!==id);
+    DB.categories=DB.categories.filter(c=>DB.savedStories.some(s=>s.categoryId===c.id));
+    saveDB();refreshSaved();
+  };
   const renameSnap=(id,name)=>{DB.savedStories=DB.savedStories.map(s=>s.id===id?{...s,name}:s);saveDB();refreshSaved();setRenamingId(null);};
   const handleLogin=(u,remember)=>{
     const data=u.role==="admin"?{role:"admin",id:"admin",remember}:{role:"member",id:u.id,remember};
