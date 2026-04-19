@@ -634,12 +634,12 @@ const [phase,setPhase]=useState("input"); const [sid,setSid]=useState(""); const
       setSdata(sd); const pp=proj.platform||"web"; setPlatform(pp==="both"?"web":pp);
       setPhase("mode"); setLoading(false);
     } catch(e) {
-      if(proj.jiraToken){
+      if(proj?.jiraToken){
         setFetchError("Story \""+sid+"\" was not found in Jira ("+proj.jiraProjKey+"). Please check the story ID and try again.");
         setLoading(false); return;
       }
       setSdata({key:sid,summary:"Story "+sid,description:"",labels:[],type:"Story",status:"In Progress",assignee:"—",priority:"Medium",sim:true});
-      const pp=proj.platform||"web"; setPlatform(pp==="both"?"web":pp);
+      const pp=proj?.platform||"web"; setPlatform(pp==="both"?"web":pp);
       setPhase("mode"); setLoading(false);
     }
   };
