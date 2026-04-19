@@ -947,7 +947,7 @@ function Workspace({member,refreshSaved,restoreTarget,clearRestore}) {
         </div>}
       </div>
 
-      {phase!=="input"&&<div style={{width:290,flexShrink:0,display:chat?"flex":"none",flexDirection:"column",height:"calc(100vh - 120px)",position:"sticky",top:0}}>
+      {chat&&phase!=="input"&&<div style={{width:290,flexShrink:0,display:"flex",flexDirection:"column",height:"calc(100vh - 120px)",position:"sticky",top:0}}>
         <div style={{...card,flex:1,display:"flex",flexDirection:"column",overflow:"hidden",padding:16}}>
           <div style={{fontWeight:500,fontSize:14,marginBottom:12,display:"flex",alignItems:"center",gap:8}}>🤖 QA Assistant <Tag c="blue">{sid}</Tag></div>
           <div style={{flex:1,overflow:"auto"}}><AIChat proj={proj} sid={sid} sdata={sdata}/></div>
