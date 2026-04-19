@@ -286,7 +286,7 @@ function AIChat({proj,sid,sdata,cases=[],gapText="",result=null,sessionBugs=[],c
       // fetch active sprint tickets
       if(/sprint/i.test(q)){
         try{
-          const r=await callJira(proj,"GET",`/search?jql=project=${proj.jiraProjKey}+AND+sprint+in+openSprints()+ORDER+BY+priority+ASC&maxResults=20&fields=summary,status,issuetype,assignee,priority`);
+          const r=await callJira(proj,"POST","/search/jql",{jql:`project=${proj.jiraProjKey} AND sprint in openSprints() ORDER BY priority ASC`,maxResults:20,fields:["summary","status","issuetype","assignee","priority"]});
           const items=(r.issues||[]).map(i=>`  ${i.key}: [${i.fields?.issuetype?.name}/${i.fields?.priority?.name}] ${i.fields?.summary} — ${i.fields?.status?.name} (${i.fields?.assignee?.displayName||"Unassigned"})`).join("\n");
           parts.push(items?`Active sprint tickets in ${proj.jiraProjKey} (${r.issues?.length||0}):\n${items}`:`No active sprint found in ${proj.jiraProjKey}.`);
         }catch(e){parts.push(`Could not fetch sprint data: ${e.message}`);}
@@ -294,7 +294,7 @@ function AIChat({proj,sid,sdata,cases=[],gapText="",result=null,sessionBugs=[],c
       // fetch open bugs for project
       if(/bug/i.test(q)){
         try{
-          const r=await callJira(proj,"GET",`/search?jql=project=${proj.jiraProjKey}+AND+issuetype=Bug+AND+status!=Done+ORDER+BY+created+DESC&maxResults=10&fields=summary,status,priority,assignee`);
+          const r=await callJira(proj,"POST","/search/jql",{jql:`project=${proj.jiraProjKey} AND issuetype=Bug AND status!=Done ORDER BY created DESC`,maxResults:10,fields:["summary","status","priority","assignee"]});
           const bugs=(r.issues||[]).map(i=>`  ${i.key}: [${i.fields?.priority?.name}] ${i.fields?.summary} — ${i.fields?.status?.name} (${i.fields?.assignee?.displayName||"Unassigned"})`).join("\n");
           parts.push(bugs?`Open bugs in ${proj.jiraProjKey}:\n${bugs}`:`No open bugs found.`);
         }catch(e){parts.push(`Could not fetch bugs: ${e.message}`);}
@@ -302,7 +302,7 @@ function AIChat({proj,sid,sdata,cases=[],gapText="",result=null,sessionBugs=[],c
       // fetch recent issues
       if(/issue|ticket|task|list|show|fetch|open/i.test(q)&&!/bug|sprint/i.test(q)&&keyMatches.length===0){
         try{
-          const r=await callJira(proj,"GET",`/search?jql=project=${proj.jiraProjKey}+AND+status!=Done+ORDER+BY+updated+DESC&maxResults=10&fields=summary,status,issuetype,assignee,priority`);
+          const r=await callJira(proj,"POST","/search/jql",{jql:`project=${proj.jiraProjKey} AND status!=Done ORDER BY updated DESC`,maxResults:10,fields:["summary","status","issuetype","assignee","priority"]});
           const issues=(r.issues||[]).map(i=>`  ${i.key}: [${i.fields?.issuetype?.name}/${i.fields?.priority?.name}] ${i.fields?.summary} — ${i.fields?.status?.name}`).join("\n");
           parts.push(issues?`Recent open issues in ${proj.jiraProjKey}:\n${issues}`:`No open issues found.`);
         }catch(e){parts.push(`Could not fetch issues: ${e.message}`);}
