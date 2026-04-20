@@ -740,9 +740,9 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
         if(!match) throw new Error("Invalid response for "+newTypes[i]+" cases. Make sure server.js is running.");
         return JSON.parse(match[0]).map(c=>({...c,type:newTypes[i],status:"pending"}));
       });
-      const startIdx=keptCases.length;
-      const newCases=rawNew.map((c,i)=>({...c,id:"TC-"+String(startIdx+i+1).padStart(3,"0")}));
-      setCases([...keptCases,...newCases]);
+      const merged=[...keptCases,...rawNew];
+      const finalCases=merged.map((c,i)=>({...c,id:"TC-"+String(i+1).padStart(3,"0")}));
+      setCases(finalCases);
     } catch(e){setLoading(false);alert("Failed to generate test cases:\n\n"+e.message);return;}
     setPhase("ready");setLoading(false);
   };
