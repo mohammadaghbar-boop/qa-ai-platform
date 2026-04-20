@@ -899,10 +899,10 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
     if(i===3&&sdata){const et=[...new Set(cases.map(c=>c.type))];setCtypes(et.length>0?et:[]);setPhase("ctype");return;}
     if(i===4&&cases.length>0){setPhase("review");return;}
     if(i===5&&approved.length>0){setPhase("jira");return;}
-    if(i===6){setPhase("urlPrompt");return;}
-    if(i===6&&result){setPhase("result");return;}
-    if(i===7){setPhase("bugReport");return;}
-    if(i===8){setPhase("coverage");return;}
+    if(i===6){setPhase(result?"result":"urlPrompt");return;}
+    if(i===7&&result){setPhase("result");return;}
+    if(i===8){setPhase("bugReport");return;}
+    if(i===9){setPhase("coverage");return;}
   };
   const addManualCase=()=>{
     if(!newCase.title.trim()) return;
