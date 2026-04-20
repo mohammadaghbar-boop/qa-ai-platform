@@ -644,7 +644,7 @@ const [phase,setPhase]=useState("input"); const [sid,setSid]=useState(""); const
   const [execLines,setExecLines]=useState([]); const [result,setResult]=useState(null);
   const [loading,setLoading]=useState(false); const [lmsg,setLmsg]=useState(""); const [fetchError,setFetchError]=useState("");
   const [jKey,setJKey]=useState(null); const [bugDone,setBugDone]=useState(null);
-  const [showBugForm,setShowBugForm]=useState(false); const [bf,setBf]=useState({summary:"",sev:"High",steps:"",expected:"",actual:"",screenshot:null});
+  const [showBugForm,setShowBugForm]=useState(false); const [bf,setBf]=useState({summary:"",sev:"High",steps:[""],expected:"",actual:"",screenshot:null});
   const [fixed,setFixed]=useState(false); const [hist,setHist]=useState([]); const [chat,setChat]=useState(false); const [hasSaved,setHasSaved]=useState(false);
   const [showAddCase,setShowAddCase]=useState(false); const [newCase,setNewCase]=useState({title:"",type:"happy",platform:"web",preconditions:"",steps:[""],expected:"",automatable:true});
   const [selectedForScripts,setSelectedForScripts]=useState([]); const [coverageText,setCoverageText]=useState(""); const [sessionBugs,setSessionBugs]=useState([]); const [appUrl,setAppUrl]=useState("");
@@ -845,6 +845,7 @@ const [phase,setPhase]=useState("input"); const [sid,setSid]=useState(""); const
   const editC=(id,k,v)=>setCases(cs=>cs.map(c=>c.id===id?{...c,[k]:v}:c));
   const editS=(id,si,v)=>setCases(cs=>cs.map(c=>{if(c.id!==id)return c;const s=[...c.steps];s[si]=v;return{...c,steps:s};}));
   const addStep=id=>setCases(cs=>cs.map(c=>c.id===id?{...c,steps:[...(c.steps||[]),"New step"]}:c));
+  const delStep=(id,si)=>setCases(cs=>cs.map(c=>c.id===id?{...c,steps:(c.steps||[]).filter((_,i)=>i!==si)}:c));
   const reset=()=>{localStorage.removeItem(WS_SNAP);setPhase("input");setSid("");setSdata(null);setPlatform("web");setCtypes([]);setGapText("");setCases([]);setEditOn(false);setScripts({web:"",ios:"",android:""});setProjFiles(null);setExecLines([]);setResult(null);setJKey(null);setBugDone(null);setShowBugForm(false);setFixed(false);setChat(false);setShowAddCase(false);setSelectedForScripts([]);setCoverageText("");setSessionBugs([]);setHasSaved(false);setAppUrl("");};
   const [saveModal,setSaveModal]=useState(null);
   // saveModal: null | {step:1,name:""} | {step:2,name:"",newCat:""}
@@ -1052,7 +1053,13 @@ const [phase,setPhase]=useState("input"); const [sid,setSid]=useState(""); const
                 <div style={{display:"flex",gap:8,marginBottom:10,flexWrap:"wrap",alignItems:"center"}}><Tag c="blue">{c.id}</Tag><Tag c={tcol(c.type)}>{c.type}</Tag>{c.automatable===false&&<Tag>manual only</Tag>}{c.status==="approved"&&<Tag c="green">✓ approved</Tag>}{c.status==="rejected"&&<span style={{display:"inline-block",padding:"2px 9px",borderRadius:20,fontSize:12,fontWeight:500,background:"var(--color-background-danger)",color:"var(--color-text-danger)"}}>✗ rejected</span>}</div>
                 <Lbl>Title</Lbl><input style={{...inp,marginBottom:8,fontWeight:500}} value={c.title} onChange={e=>editC(c.id,"title",e.target.value)} disabled={!editOn}/>
                 <Lbl>Preconditions</Lbl><input style={{...inp,marginBottom:8}} value={c.preconditions||""} onChange={e=>editC(c.id,"preconditions",e.target.value)} disabled={!editOn}/>
-                <Lbl>Steps</Lbl>{(c.steps||[]).map((step,si)=><div key={si} style={{display:"flex",gap:6,marginBottom:4,alignItems:"center"}}><span style={{fontSize:11,color:"var(--color-text-tertiary)",minWidth:18}}>{si+1}.</span><input style={inp} value={step} onChange={e=>editS(c.id,si,e.target.value)} disabled={!editOn}/></div>)}
+                <Lbl>Test Data</Lbl><textarea style={{...ta,marginBottom:8,minHeight:50}} rows={2} value={c.testData||""} onChange={e=>editC(c.id,"testData",e.target.value)} disabled={!editOn} placeholder="e.g. username: admin / password: Test@123"/>
+                <Lbl>Steps</Lbl>
+                {(c.steps||[]).map((step,si)=><div key={si} style={{display:"flex",gap:6,marginBottom:4,alignItems:"center"}}>
+                  <span style={{fontSize:11,color:"var(--color-text-tertiary)",minWidth:18}}>{si+1}.</span>
+                  <input style={{...inp,flex:1}} value={step} onChange={e=>editS(c.id,si,e.target.value)} disabled={!editOn}/>
+                  {editOn&&<button onClick={()=>delStep(c.id,si)} style={{background:"none",border:"none",cursor:"pointer",color:"var(--color-text-danger)",fontSize:14,padding:"0 4px",lineHeight:1,flexShrink:0}}>✕</button>}
+                </div>)}
                 {editOn&&<button onClick={()=>addStep(c.id)} style={{marginTop:6,padding:"4px 10px",borderRadius:6,border:"1px dashed var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:12,color:"var(--color-text-secondary)"}}>+ Add step</button>}
                 <Lbl>Expected result</Lbl><input style={inp} value={c.expected||""} onChange={e=>editC(c.id,"expected",e.target.value)} disabled={!editOn}/>
               </div>
@@ -1177,7 +1184,7 @@ const [phase,setPhase]=useState("input"); const [sid,setSid]=useState(""); const
             <H2>Failed cases</H2>
             {result.fail.filter(c=>!sessionBugs.some(b=>b.tcId===c.id)).map(c=><div key={c.id} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 0",borderBottom:"1px solid var(--color-border-tertiary)"}}>
               <Tag c="red">{c.id}</Tag><span style={{flex:1,fontSize:13}}>{c.title}</span>
-              <button onClick={()=>{setBf({tcId:c.id,summary:c.title+" is not working as expected",sev:"High",steps:(c.steps||[]).map((s,i)=>`${i+1}. ${s}`).join("\n")||"1. Reproduce the issue",expected:c.expected||"The feature works as designed",actual:"Timeout error — element not found after 30s during test execution",screenshot:null,_err:false});setShowBugForm(true);}} style={{...ghostBtn,padding:"4px 10px",fontSize:12}}>🐛 File Bug</button>
+              <button onClick={()=>{setBf({tcId:c.id,summary:c.title+" is not working as expected",sev:"High",steps:(c.steps||[]).length>0?[...c.steps]:["Reproduce the issue"],expected:c.expected||"The feature works as designed",actual:"Timeout error — element not found after 30s during test execution",testData:c.testData||"",screenshot:null,_err:false});setShowBugForm(true);}} style={{...ghostBtn,padding:"4px 10px",fontSize:12}}>🐛 File Bug</button>
             </div>)}
           </div>}
           <div style={card}>
@@ -1186,8 +1193,15 @@ const [phase,setPhase]=useState("input"); const [sid,setSid]=useState(""); const
             <input style={{...inp,marginBottom:10,borderColor:bf._err&&!bf.summary.trim()?"var(--color-text-danger)":undefined}} value={bf.summary} onChange={e=>setBf(p=>({...p,summary:e.target.value,_err:false}))} placeholder="e.g. Login button unresponsive after entering valid credentials"/>
             <Lbl>Severity</Lbl>
             <select style={{...sel,marginBottom:10}} value={bf.sev} onChange={e=>setBf(p=>({...p,sev:e.target.value}))}>{["Critical","High","Medium","Low"].map(s=><option key={s}>{s}</option>)}</select>
+            <Lbl>Test Data</Lbl>
+            <textarea style={{...ta,marginBottom:10}} rows={2} value={bf.testData||""} onChange={e=>setBf(p=>({...p,testData:e.target.value}))} placeholder="e.g. username: admin / password: Test@123"/>
             <Lbl>Steps to Reproduce <span style={{color:"var(--color-text-danger)"}}>*</span></Lbl>
-            <textarea style={{...ta,marginBottom:10,borderColor:bf._err&&!bf.steps.trim()?"var(--color-text-danger)":undefined}} rows={4} value={bf.steps} onChange={e=>setBf(p=>({...p,steps:e.target.value,_err:false}))} placeholder={"1. Navigate to the feature\n2. Perform the action\n3. Observe the result"}/>
+            {(bf.steps||[""]).map((step,si)=><div key={si} style={{display:"flex",gap:6,marginBottom:4,alignItems:"center"}}>
+              <span style={{fontSize:11,color:"var(--color-text-tertiary)",minWidth:18}}>{si+1}.</span>
+              <input style={{...inp,flex:1,borderColor:bf._err&&si===0&&!(bf.steps||[""])[0]?.trim()?"var(--color-text-danger)":undefined}} value={step} onChange={e=>{const s=[...(bf.steps||[""])];s[si]=e.target.value;setBf(p=>({...p,steps:s,_err:false}));}} placeholder={si===0?"Navigate to the feature":si===1?"Perform the action":"Observe the result"}/>
+              {(bf.steps||[""]).length>1&&<button onClick={()=>{const s=[...(bf.steps||[""])];s.splice(si,1);setBf(p=>({...p,steps:s}));}} style={{background:"none",border:"none",cursor:"pointer",color:"var(--color-text-danger)",fontSize:14,padding:"0 4px",lineHeight:1,flexShrink:0}}>✕</button>}
+            </div>)}
+            <button onClick={()=>setBf(p=>({...p,steps:[...(p.steps||[""]),""]})) } style={{...ghostBtn,fontSize:12,padding:"3px 10px",marginBottom:10}}>+ Add step</button>
             <Lbl>Expected Result <span style={{color:"var(--color-text-danger)"}}>*</span></Lbl>
             <input style={{...inp,marginBottom:10,borderColor:bf._err&&!bf.expected.trim()?"var(--color-text-danger)":undefined}} value={bf.expected} onChange={e=>setBf(p=>({...p,expected:e.target.value,_err:false}))} placeholder="e.g. User is redirected to the dashboard"/>
             <Lbl>Actual Result <span style={{color:"var(--color-text-danger)"}}>*</span></Lbl>
@@ -1212,9 +1226,9 @@ const [phase,setPhase]=useState("input"); const [sid,setSid]=useState(""); const
             </div>
             {bf._err&&<div style={{color:"var(--color-text-danger)",fontSize:12,marginBottom:10}}>Please fill in all required fields (*) before submitting.</div>}
             <Btn v="danger" onClick={async()=>{
-              if(!bf.summary.trim()||!bf.steps.trim()||!bf.expected.trim()||!bf.actual.trim()){setBf(p=>({...p,_err:true}));return;}
+              const stepLines=(bf.steps||[]).filter(s=>s.trim());
+              if(!bf.summary.trim()||stepLines.length===0||!bf.expected.trim()||!bf.actual.trim()){setBf(p=>({...p,_err:true}));return;}
               setLoading(true);setLmsg("Filing bug…");
-              const stepLines=bf.steps.split("\n").filter(Boolean);
               const adfDesc={type:"doc",version:1,content:[
                 {type:"heading",attrs:{level:3},content:[{type:"text",text:"Steps to Reproduce"}]},
                 {type:"orderedList",content:stepLines.length>0?stepLines.map(s=>({type:"listItem",content:[{type:"paragraph",content:[{type:"text",text:s.replace(/^\d+\.\s*/,"")}]}]})):[{type:"listItem",content:[{type:"paragraph",content:[{type:"text",text:"See summary"}]}]}]},
@@ -1230,7 +1244,7 @@ const [phase,setPhase]=useState("input"); const [sid,setSid]=useState(""); const
               DB.bugs.push(bug);saveDB();pushNotif("admin","🐛 "+bug.bid+" filed for "+sid);
               const bugCase={id:bug.bid,title:bf.summary||"Bug in "+sid,type:"negative",platform,preconditions:"",steps:stepLines.length>0?stepLines:["Reproduce the bug"],expected:bf.expected||"Bug is fixed",automatable:false,status:"approved",fromBug:true,sev:bf.sev};
               setCases(cs=>[...cs,bugCase]);
-              setSessionBugs(p=>[...p,bug]);setBf({summary:"",sev:"High",steps:"",expected:"",actual:"",screenshot:null,_err:false});setLoading(false);
+              setSessionBugs(p=>[...p,bug]);setBf({summary:"",sev:"High",steps:[""],expected:"",actual:"",screenshot:null,_err:false});setLoading(false);
             }}>Submit Bug</Btn>
           </div>
           {sessionBugs.length>0&&<div style={card}>
