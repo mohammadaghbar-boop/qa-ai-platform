@@ -438,8 +438,8 @@ function MembersPage() {
     <div style={card}>{list.length===0?<div style={{color:"var(--color-text-tertiary)",fontSize:14}}>No members yet.</div>:
       <table style={{width:"100%",borderCollapse:"collapse",fontSize:14}}>
         <thead><tr><th style={th}>Name</th><th style={th}>Role</th><th style={th}>Email</th><th style={th}>Project</th><th style={th}></th></tr></thead>
-        <tbody>{list.map(m=>{ const a=DB.assignments.find(x=>x.memberId===m.id); const p=a?DB.projects.find(x=>x.id===a.projectId):null;
-          return <tr key={m.id}><td style={td}><b>{m.name}</b></td><td style={td}><span style={{fontSize:13,color:"var(--color-text-secondary)"}}>{m.role}</span></td><td style={td}>{m.email}</td><td style={td}>{p?<Tag c="blue">{p.name}</Tag>:<span style={{color:"var(--color-text-tertiary)",fontSize:13}}>—</span>}</td><td style={td}><Btn v="danger" onClick={()=>del(m.id)}>Remove</Btn></td></tr>;
+        <tbody>{list.map(m=>{ const ps=DB.assignments.filter(x=>x.memberId===m.id).map(a=>DB.projects.find(x=>x.id===a.projectId)).filter(Boolean);
+          return <tr key={m.id}><td style={td}><b>{m.name}</b></td><td style={td}><span style={{fontSize:13,color:"var(--color-text-secondary)"}}>{m.role}</span></td><td style={td}>{m.email}</td><td style={td}>{ps.length>0?ps.map(p=><Tag key={p.id} c="blue">{p.name}</Tag>):<span style={{color:"var(--color-text-tertiary)",fontSize:13}}>—</span>}</td><td style={td}><Btn v="danger" onClick={()=>del(m.id)}>Remove</Btn></td></tr>;
         })}</tbody>
       </table>}
     </div>
@@ -484,8 +484,8 @@ function ProjectsPage() {
 function AssignmentsPage() {
   const [list,setList]=useState([...DB.assignments]);
   const [mId,setMId]=useState(""); const [pId,setPId]=useState("");
-  const assign=()=>{ if(!mId||!pId) return; DB.assignments=DB.assignments.filter(a=>a.memberId!==mId); DB.assignments.push({memberId:mId,projectId:pId}); const m=DB.members.find(x=>x.id===mId); const p=DB.projects.find(x=>x.id===pId); if(m&&p) pushNotif(mId,"Assigned to: "+p.name); saveDB(); setList([...DB.assignments]); setMId(""); setPId(""); };
-  const del=id=>{ DB.assignments=DB.assignments.filter(a=>a.memberId!==id); saveDB(); setList([...DB.assignments]); };
+  const assign=()=>{ if(!mId||!pId) return; if(DB.assignments.some(a=>a.memberId===mId&&a.projectId===pId)) return; DB.assignments.push({memberId:mId,projectId:pId}); const m=DB.members.find(x=>x.id===mId); const p=DB.projects.find(x=>x.id===pId); if(m&&p) pushNotif(mId,"Assigned to: "+p.name); saveDB(); setList([...DB.assignments]); setMId(""); setPId(""); };
+  const del=(mId,pId)=>{ DB.assignments=DB.assignments.filter(a=>!(a.memberId===mId&&a.projectId===pId)); saveDB(); setList([...DB.assignments]); };
   const th={textAlign:"left",padding:"8px 12px",borderBottom:"1px solid var(--color-border-tertiary)",fontSize:12,fontWeight:500,color:"var(--color-text-secondary)"};
   const td={padding:"10px 12px",borderBottom:"1px solid var(--color-border-tertiary)"};
   return <div>
@@ -501,7 +501,7 @@ function AssignmentsPage() {
       <table style={{width:"100%",borderCollapse:"collapse",fontSize:14}}>
         <thead><tr><th style={th}>Member</th><th style={th}>Project</th><th style={th}></th></tr></thead>
         <tbody>{list.map(a=>{ const m=DB.members.find(x=>x.id===a.memberId); const p=DB.projects.find(x=>x.id===a.projectId);
-          return <tr key={a.memberId}><td style={td}><b>{m?.name}</b></td><td style={td}><Tag c="green">{p?.name}</Tag></td><td style={td}><Btn v="danger" onClick={()=>del(a.memberId)}>Remove</Btn></td></tr>;
+          return <tr key={a.memberId+"-"+a.projectId}><td style={td}><b>{m?.name}</b></td><td style={td}><Tag c="green">{p?.name}</Tag></td><td style={td}><Btn v="danger" onClick={()=>del(a.memberId,a.projectId)}>Remove</Btn></td></tr>;
         })}</tbody>
       </table>}
     </div>
@@ -634,8 +634,9 @@ const WS_STEPS = ["User Story","Analysis","Generate","Review","Export","Scripts"
 const WS_IDX = {input:0,mode:1,gap:1,ctype:2,ready:2,review:3,jira:4,urlPrompt:5,scriptSelect:5,autoReady:5,runAsk:6,running:6,result:6,bugReport:7,coverage:8};
 
 function Workspace({member,refreshSaved,restoreTarget,clearRestore,onActiveSid}) {
-  const asgn=DB.assignments.find(x=>x.memberId===member.id);
-  const proj=asgn?DB.projects.find(x=>x.id===asgn.projectId):null;
+  const memberProjects=DB.assignments.filter(x=>x.memberId===member.id).map(a=>DB.projects.find(x=>x.id===a.projectId)).filter(Boolean);
+  const [selectedProjId,setSelectedProjId]=React.useState(memberProjects[0]?.id||"");
+  const proj=memberProjects.find(x=>x.id===selectedProjId)||memberProjects[0]||null;
 const [phase,setPhase]=useState("input"); const [sid,setSid]=useState(""); const [sdata,setSdata]=useState(null);
   const [platform,setPlatform]=useState("web"); const [ctypes,setCtypes]=useState([]);
   const [gapText,setGapText]=useState(""); const [cases,setCases]=useState([]);
@@ -680,6 +681,7 @@ const [phase,setPhase]=useState("input"); const [sid,setSid]=useState(""); const
   const allDone=cases.length>0&&cases.every(c=>c.status!=="pending");
 
   if (!proj) return <div style={card}><div style={{color:"var(--color-text-warning)",fontWeight:500}}>No project assigned. Contact your QA lead.</div></div>;
+  const projPicker=memberProjects.length>1&&<div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12}}><span style={{fontSize:13,color:"var(--color-text-secondary)",fontWeight:500}}>Project:</span>{memberProjects.map(p=><button key={p.id} onClick={()=>setSelectedProjId(p.id)} style={{padding:"4px 14px",borderRadius:20,border:"1px solid",fontSize:13,cursor:"pointer",fontWeight:p.id===selectedProjId?600:400,background:p.id===selectedProjId?"var(--color-background-info)":"var(--color-background-secondary)",color:p.id===selectedProjId?"var(--color-text-info)":"var(--color-text-secondary)",borderColor:p.id===selectedProjId?"var(--color-text-info)":"var(--color-border-secondary)"}}>{p.name}</button>)}</div>;
 
   const doFetch=async()=>{
     setLoading(true); setLmsg("Fetching story from Jira…"); setFetchError("");
@@ -978,6 +980,7 @@ const [phase,setPhase]=useState("input"); const [sid,setSid]=useState(""); const
       </div>
     </div>
     <StepBar steps={WS_STEPS} cur={WS_IDX[phase]??0} onStepClick={goToStep}/>
+    {projPicker}
     <div style={{display:"flex",gap:16}}>
       <div style={{flex:1,minWidth:0}}>
         {loading&&<Loader msg={lmsg}/>}
