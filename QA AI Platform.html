@@ -979,7 +979,7 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
       </div>
       <div style={{display:"flex",gap:8}}>
         {phase!=="input"&&sid&&<button onClick={openSaveModal} style={ghostBtn} title="Save current session to history">💾 Save</button>}
-        {phase!=="input"&&phase!=="coverage"&&sid&&<button onClick={reset} disabled={!hasSaved} title={hasSaved?"Start a new story":"Save first to enable"} style={{...ghostBtn,opacity:hasSaved?1:0.4,cursor:hasSaved?"pointer":"not-allowed"}}>↩ New story</button>}
+        {phase!=="input"&&sid&&<button onClick={phase==="coverage"?saveAndReset:reset} disabled={phase!=="coverage"&&!hasSaved} title={phase==="coverage"?"Start a new story":hasSaved?"Start a new story":"Save first to enable"} style={{...ghostBtn,opacity:(phase==="coverage"||hasSaved)?1:0.4,cursor:(phase==="coverage"||hasSaved)?"pointer":"not-allowed"}}>↩ New story</button>}
         {phase!=="input"&&<button onClick={()=>setChat(o=>!o)} style={ghostBtn}>{chat?"Hide chat":"🤖 AI Chat"}</button>}
       </div>
     </div>
@@ -1401,7 +1401,6 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
                 <div style={{display:"flex",gap:8,alignItems:"center"}}><Tag c="blue">{sid}</Tag><span style={{fontWeight:600,fontSize:15}}>Coverage Report</span><Tag c={platform==="mobile"?"amber":"blue"}>{platform}</Tag></div>
                 <div style={{display:"flex",gap:8}}>
                   <button onClick={()=>{const el=document.getElementById("coverage-print-area");html2pdf().set({margin:10,filename:`Coverage_${sid}.pdf`,html2canvas:{scale:2,useCORS:true},jsPDF:{unit:"mm",format:"a4",orientation:"portrait"}}).from(el).save();}} style={ghostBtn}>⬇ Download PDF</button>
-                  <button onClick={saveAndReset} style={ghostBtn}>↩ New story</button>
                 </div>
               </div>
               <div style={{display:"flex",alignItems:"center",gap:16,marginTop:14,padding:"14px 16px",borderRadius:10,background:"var(--color-background-secondary)"}}>
