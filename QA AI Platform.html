@@ -1399,8 +1399,8 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
             <div style={{...card,marginBottom:12}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:10}}>
                 <div style={{display:"flex",gap:8,alignItems:"center"}}><Tag c="blue">{sid}</Tag><span style={{fontWeight:600,fontSize:15}}>Coverage Report</span><Tag c={platform==="mobile"?"amber":"blue"}>{platform}</Tag></div>
-                <div style={{display:"flex",gap:8}}>
-                  <button onClick={()=>{const el=document.getElementById("coverage-print-area");html2pdf().set({margin:10,filename:`Coverage_${sid}.pdf`,html2canvas:{scale:2,useCORS:true},jsPDF:{unit:"mm",format:"a4",orientation:"portrait"}}).from(el).save();}} style={ghostBtn}>⬇ Download PDF</button>
+                <div className="no-pdf" style={{display:"flex",gap:8}}>
+                  <button onClick={()=>{const el=document.getElementById("coverage-print-area");const btns=el.querySelectorAll(".no-pdf");btns.forEach(b=>b.style.display="none");html2pdf().set({margin:10,filename:`Coverage_${sid}.pdf`,html2canvas:{scale:2,useCORS:true},jsPDF:{unit:"mm",format:"a4",orientation:"portrait"}}).from(el).save().then(()=>btns.forEach(b=>b.style.display=""));}} style={ghostBtn}>⬇ Download PDF</button>
                 </div>
               </div>
               <div style={{display:"flex",alignItems:"center",gap:16,marginTop:14,padding:"14px 16px",borderRadius:10,background:"var(--color-background-secondary)"}}>
