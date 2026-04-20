@@ -633,7 +633,7 @@ function BarChart({data,title}) {
 const WS_STEPS = ["Project","User Story","Analysis","Generate","Review","Export","Scripts","Execute","Bug Report","Coverage"];
 const WS_IDX = {project:0,input:1,mode:2,gap:2,ctype:3,ready:3,review:4,jira:5,urlPrompt:6,scriptSelect:6,autoReady:6,runAsk:7,running:7,result:7,bugReport:8,coverage:9};
 
-function Workspace({member,refreshSaved,restoreTarget,clearRestore,onActiveSid,onProjChange}) {
+function Workspace({member,refreshSaved,restoreTarget,clearRestore,onActiveSid,onProjChange,resetTrigger}) {
   const memberProjects=DB.assignments.filter(x=>x.memberId===member.id).map(a=>DB.projects.find(x=>x.id===a.projectId)).filter(Boolean);
   const [selectedProjId,setSelectedProjId]=React.useState(memberProjects[0]?.id||"");
   const proj=memberProjects.find(x=>x.id===selectedProjId)||memberProjects[0]||null;
@@ -882,6 +882,7 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
   React.useEffect(()=>{if(onActiveSid)onActiveSid(sid);},[sid]);
   React.useEffect(()=>{if(onProjChange)onProjChange(proj);},[selectedProjId]);
   React.useEffect(()=>{if(restoreTarget){restoreStory(restoreTarget);if(clearRestore)clearRestore();}}, [restoreTarget]);
+  React.useEffect(()=>{if(resetTrigger>0)reset();},[resetTrigger]);
   React.useEffect(()=>{
     if(!sid||!sdata)return;
     const existing=DB.savedStories.find(s=>s.sid===sid);
@@ -993,7 +994,7 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))",gap:16}}>
             {memberProjects.map(p=>{
               const projStories=DB.savedStories.filter(s=>s.sid&&s.sid.startsWith(p.jiraProjKey+"-"));
-              return <div key={p.id} style={{...card,cursor:"pointer",border:selectedProjId===p.id?"2px solid var(--color-text-info)":"1px solid var(--color-border-secondary)",marginBottom:0,transition:"box-shadow 0.15s"}} onClick={()=>{switchProj(p.id);}}>
+              return <div key={p.id} style={{...card,cursor:"pointer",border:selectedProjId===p.id?"2px solid var(--color-text-info)":"1px solid var(--color-border-secondary)",marginBottom:0,transition:"box-shadow 0.15s"}} onClick={()=>{if(p.id===selectedProjId){setPhase("input");}else{switchProj(p.id);}}}>
                 <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10}}>
                   <div style={{width:40,height:40,borderRadius:10,background:"var(--color-background-info)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:20}}>📁</div>
                   <div><div style={{fontWeight:600,fontSize:15}}>{p.name}</div><div style={{fontSize:12,color:"var(--color-text-tertiary)"}}>{p.jiraProjKey} · {p.platform||"web"}</div></div>
@@ -1524,14 +1525,20 @@ function App() {
   const [renamingCatId,setRenamingCatId]=useState(null); const [renameCatVal,setRenameCatVal]=useState("");
   const renameCat=(id,name)=>{if(!name.trim())return;DB.categories=DB.categories.map(c=>c.id===id?{...c,name:name.trim()}:c);saveDB();refreshSaved();setRenamingCatId(null);};
   const [,forceUpdate]=useState(0);
+  const [resetTrigger,setResetTrigger]=useState(0);
   const refreshSaved=()=>{
     DB.categories=DB.categories.filter(c=>DB.savedStories.some(s=>s.categoryId===c.id));
     setSavedStories([...DB.savedStories]);forceUpdate(x=>x+1);
   };
   const deleteSnap=id=>{
+    const story=DB.savedStories.find(s=>s.id===id);
     DB.savedStories=DB.savedStories.filter(s=>s.id!==id);
     DB.categories=DB.categories.filter(c=>DB.savedStories.some(s=>s.categoryId===c.id));
     saveDB();refreshSaved();
+    if(story&&story.sid===activeSid){
+      localStorage.removeItem(`qa_ws_${user.id}`);
+      setResetTrigger(x=>x+1);
+    }
   };
   const renameSnap=(id,name)=>{DB.savedStories=DB.savedStories.map(s=>s.id===id?{...s,name}:s);saveDB();refreshSaved();setRenamingId(null);};
   const handleLogin=(u,remember)=>{
@@ -1631,7 +1638,7 @@ function App() {
       {user.role==="admin"&&page==="projects"&&<ProjectsPage/>}
       {user.role==="admin"&&page==="assign"&&<AssignmentsPage/>}
       {user.role==="admin"&&page==="bugs"&&<BugsPage/>}
-      {user.role==="member"&&page==="workspace"&&<Workspace member={user.member} refreshSaved={refreshSaved} restoreTarget={restoreTarget} clearRestore={()=>setRestoreTarget(null)} onActiveSid={setActiveSid} onProjChange={setActiveProj}/>}
+      {user.role==="member"&&page==="workspace"&&<Workspace member={user.member} refreshSaved={refreshSaved} restoreTarget={restoreTarget} clearRestore={()=>setRestoreTarget(null)} onActiveSid={setActiveSid} onProjChange={setActiveProj} resetTrigger={resetTrigger}/>}
     </div>
   </div>;
 }
