@@ -633,7 +633,7 @@ function BarChart({data,title}) {
 const WS_STEPS = ["User Story","Analysis","Generate","Review","Export","Scripts","Execute","Bug Report","Coverage"];
 const WS_IDX = {input:0,mode:1,gap:1,ctype:2,ready:2,review:3,jira:4,urlPrompt:5,scriptSelect:5,autoReady:5,runAsk:6,running:6,result:6,bugReport:7,coverage:8};
 
-function Workspace({member,refreshSaved,restoreTarget,clearRestore}) {
+function Workspace({member,refreshSaved,restoreTarget,clearRestore,onActiveSid}) {
   const asgn=DB.assignments.find(x=>x.memberId===member.id);
   const proj=asgn?DB.projects.find(x=>x.id===asgn.projectId):null;
 const [phase,setPhase]=useState("input"); const [sid,setSid]=useState(""); const [sdata,setSdata]=useState(null);
@@ -875,6 +875,7 @@ const [phase,setPhase]=useState("input"); const [sid,setSid]=useState(""); const
     const lastPhase=snap.phase||(snap.coverageText?"coverage":snap.result?"result":snap.cases?.some(c=>c.status==="approved")?"review":"ctype");
     setPhase(lastPhase);
   };
+  React.useEffect(()=>{if(onActiveSid)onActiveSid(sid);},[sid]);
   React.useEffect(()=>{if(restoreTarget){restoreStory(restoreTarget);if(clearRestore)clearRestore();}}, [restoreTarget]);
   React.useEffect(()=>{
     if(!sid||!sdata)return;
@@ -1475,6 +1476,7 @@ function App() {
   const [user,setUser]=useState(loadSession); const [page,setPage]=useState(()=>{const u=loadSession();return u?.role==="admin"?"dashboard":"workspace";}); const [,tick]=useState(0);
   const [savedStories,setSavedStories]=useState(()=>[...DB.savedStories]);
   const [restoreTarget,setRestoreTarget]=useState(null);
+  const [activeSid,setActiveSid]=useState("");
   const [renamingId,setRenamingId]=useState(null); const [renameVal,setRenameVal]=useState("");
   const [renamingCatId,setRenamingCatId]=useState(null); const [renameCatVal,setRenameCatVal]=useState("");
   const renameCat=(id,name)=>{if(!name.trim())return;DB.categories=DB.categories.map(c=>c.id===id?{...c,name:name.trim()}:c);saveDB();refreshSaved();setRenamingCatId(null);};
@@ -1516,10 +1518,11 @@ function App() {
             </div>;})}
         </div>)}
         {user.role==="member"&&savedStories.length>0&&(()=>{
+          const isActive=s=>s.sid===activeSid&&page==="workspace";
           const StoryCard=({s})=>(
-            <div key={s.id} style={{borderRadius:7,padding:"8px 9px",background:"var(--color-background-primary)",border:"1px solid var(--color-border-tertiary)",cursor:renamingId===s.id?"default":"pointer",transition:"border-color 0.15s"}}
-              onMouseEnter={e=>{if(renamingId!==s.id)e.currentTarget.style.borderColor="var(--color-border-primary)";}}
-              onMouseLeave={e=>{e.currentTarget.style.borderColor="var(--color-border-tertiary)";}}
+            <div key={s.id} style={{borderRadius:7,padding:"8px 9px",background:isActive(s)?"var(--color-background-info)":"var(--color-background-primary)",border:isActive(s)?"1px solid var(--color-text-info)":"1px solid var(--color-border-tertiary)",cursor:renamingId===s.id?"default":"pointer",transition:"border-color 0.15s",borderLeft:isActive(s)?"3px solid var(--color-text-info)":"1px solid var(--color-border-tertiary)"}}
+              onMouseEnter={e=>{if(renamingId!==s.id&&!isActive(s))e.currentTarget.style.borderColor="var(--color-border-primary)";}}
+              onMouseLeave={e=>{if(!isActive(s))e.currentTarget.style.borderColor="var(--color-border-tertiary)";}}
               onClick={()=>{if(renamingId!==s.id){setRestoreTarget(s);setPage("workspace");}}}>
               {renamingId===s.id
                 ?<div style={{display:"flex",gap:4}} onClick={e=>e.stopPropagation()}>
@@ -1583,7 +1586,7 @@ function App() {
       {user.role==="admin"&&page==="projects"&&<ProjectsPage/>}
       {user.role==="admin"&&page==="assign"&&<AssignmentsPage/>}
       {user.role==="admin"&&page==="bugs"&&<BugsPage/>}
-      {user.role==="member"&&page==="workspace"&&<Workspace member={user.member} refreshSaved={refreshSaved} restoreTarget={restoreTarget} clearRestore={()=>setRestoreTarget(null)}/>}
+      {user.role==="member"&&page==="workspace"&&<Workspace member={user.member} refreshSaved={refreshSaved} restoreTarget={restoreTarget} clearRestore={()=>setRestoreTarget(null)} onActiveSid={setActiveSid}/>}
     </div>
   </div>;
 }
