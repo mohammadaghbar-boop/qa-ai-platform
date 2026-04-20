@@ -855,7 +855,7 @@ const [phase,setPhase]=useState("input"); const [sid,setSid]=useState(""); const
   };
   const commitSave=(name,categoryId)=>{
     const existing=DB.savedStories.find(s=>s.sid===sid);
-    const snap={id:existing?.id||uid(),name,categoryId:categoryId||null,sid,sdata,cases:[...cases],gapText,platform,ctypes:[...ctypes],scripts:{...scripts},result,sessionBugs:[...sessionBugs],coverageText,savedAt:Date.now()};
+    const snap={id:existing?.id||uid(),name,categoryId:categoryId||null,phase,sid,sdata,cases:[...cases],gapText,platform,ctypes:[...ctypes],scripts:{...scripts},result,sessionBugs:[...sessionBugs],coverageText,savedAt:Date.now()};
     if(existing){DB.savedStories=DB.savedStories.map(s=>s.sid===sid?snap:s);}
     else{DB.savedStories.unshift(snap);}
     saveDB(); if(refreshSaved)refreshSaved(); setHasSaved(true); setSaveModal(null); showToast("Session saved successfully");
@@ -863,7 +863,7 @@ const [phase,setPhase]=useState("input"); const [sid,setSid]=useState(""); const
   const saveAndReset=()=>{
     if(sid&&sdata){
       const existing=DB.savedStories.find(s=>s.sid===sid);
-      const snap={id:existing?.id||uid(),name:existing?.name||(sdata?.summary||sid),sid,sdata,cases:[...cases],gapText,platform,ctypes:[...ctypes],scripts:{...scripts},result,sessionBugs:[...sessionBugs],coverageText,savedAt:Date.now()};
+      const snap={id:existing?.id||uid(),name:existing?.name||(sdata?.summary||sid),phase,sid,sdata,cases:[...cases],gapText,platform,ctypes:[...ctypes],scripts:{...scripts},result,sessionBugs:[...sessionBugs],coverageText,savedAt:Date.now()};
       if(existing){DB.savedStories=DB.savedStories.map(s=>s.sid===sid?snap:s);}
       else{DB.savedStories.unshift(snap);}
       saveDB(); if(refreshSaved)refreshSaved();
@@ -872,14 +872,14 @@ const [phase,setPhase]=useState("input"); const [sid,setSid]=useState(""); const
   };
   const restoreStory=snap=>{
     setSid(snap.sid);setSdata(snap.sdata);setPlatform(snap.platform);setCtypes(snap.ctypes||[]);setGapText(snap.gapText||"");setCases(snap.cases||[]);setScripts(snap.scripts||{web:"",ios:"",android:""});setResult(snap.result||null);setSessionBugs(snap.sessionBugs||[]);setCoverageText(snap.coverageText||"");setSelectedForScripts([]);setExecLines([]);setJKey(null);setBugDone(null);setShowBugForm(false);setFixed(false);setEditOn(false);setChat(false);setShowAddCase(false);
-    const lastPhase=snap.coverageText?"coverage":snap.result?"result":snap.cases?.some(c=>c.status==="approved")?"review":"ctype";
+    const lastPhase=snap.phase||(snap.coverageText?"coverage":snap.result?"result":snap.cases?.some(c=>c.status==="approved")?"review":"ctype");
     setPhase(lastPhase);
   };
   React.useEffect(()=>{if(restoreTarget){restoreStory(restoreTarget);if(clearRestore)clearRestore();}}, [restoreTarget]);
   React.useEffect(()=>{
     if(!sid||!sdata)return;
     const existing=DB.savedStories.find(s=>s.sid===sid);
-    const snap={id:existing?.id||uid(),name:existing?.name||(sdata?.summary||sid),categoryId:existing?.categoryId||null,sid,sdata,cases:[...cases],gapText,platform,ctypes:[...ctypes],scripts:{...scripts},result,sessionBugs:[...sessionBugs],coverageText,savedAt:Date.now()};
+    const snap={id:existing?.id||uid(),name:existing?.name||(sdata?.summary||sid),categoryId:existing?.categoryId||null,phase,sid,sdata,cases:[...cases],gapText,platform,ctypes:[...ctypes],scripts:{...scripts},result,sessionBugs:[...sessionBugs],coverageText,savedAt:Date.now()};
     if(existing){DB.savedStories=DB.savedStories.map(s=>s.sid===sid?snap:s);}
     else{DB.savedStories.unshift(snap);}
     saveDB();if(refreshSaved)refreshSaved();
