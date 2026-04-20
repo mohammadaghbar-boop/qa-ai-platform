@@ -34,6 +34,11 @@
   * { scrollbar-width: thin; scrollbar-color: #ccc transparent; }
   @keyframes qa-spin { to { transform: rotate(360deg); } }
   @keyframes qa-pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.5;transform:scale(1.15)} }
+  @media print {
+    body * { visibility: hidden; }
+    #coverage-print-area, #coverage-print-area * { visibility: visible; }
+    #coverage-print-area { position: fixed; top: 0; left: 0; right: 0; padding: 24px; background: #fff; }
+  }
 </style>
 </head>
 <body>
@@ -42,7 +47,7 @@
 const { useState, useRef, useEffect } = React;
 
 /* ─── DB ─────────────────────────────────────────────────────────────────── */
-const DB = { members:[], projects:[], assignments:[], sessions:[], bugs:[], notifs:[] };
+const DB = { members:[], projects:[], assignments:[], sessions:[], bugs:[], notifs:[], savedStories:[], categories:[] };
 const STORAGE_KEY = "qa_platform_db";
 function loadDB() {
   try { const s=localStorage.getItem(STORAGE_KEY); if(s){ const p=JSON.parse(s); Object.keys(p).forEach(k=>{ if(Array.isArray(p[k])) DB[k]=p[k]; }); } } catch(e){}
@@ -152,7 +157,7 @@ function Loader({msg,sub}) {
     {sub&&<div style={{color:"var(--color-text-secondary)",fontSize:13}}>{sub}</div>}
   </div>;
 }
-function Confirm({icon,title,desc,onYes,onNo,yesLabel="Yes",noLabel="No, skip",danger}) {
+function Confirm({icon,title,desc,onYes,onNo,yesLabel="Yes",noLabel="No, skip",danger,noDanger}) {
   return <div style={{...card,borderLeft:"3px solid var(--color-text-info)"}}>
     <div style={{display:"flex",gap:14}}>
       {icon&&<div style={{fontSize:26,lineHeight:1,paddingTop:2}}>{icon}</div>}
@@ -161,7 +166,7 @@ function Confirm({icon,title,desc,onYes,onNo,yesLabel="Yes",noLabel="No, skip",d
         {desc&&<div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:14,lineHeight:1.6}}>{desc}</div>}
         <div style={{display:"flex",gap:10}}>
           <Btn v={danger?"danger":"primary"} onClick={onYes}>{yesLabel}</Btn>
-          <button onClick={onNo} style={{padding:"8px 18px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:14,fontWeight:500,color:"var(--color-text-secondary)"}}>{noLabel}</button>
+          {onNo&&(noDanger?<Btn v="danger" onClick={onNo}>{noLabel}</Btn>:<button onClick={onNo} style={{padding:"8px 18px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:14,fontWeight:500,color:"var(--color-text-secondary)"}}>{noLabel}</button>)}
         </div>
       </div>
     </div>
@@ -246,33 +251,166 @@ function NotifBell({userId}) {
   </div>;
 }
 
+/* ─── Markdown renderer for chat ─────────────────────────────────────────── */
+function renderMd(text){
+  const lines=text.split("\n");
+  const out=[];let i=0;
+  while(i<lines.length){
+    const l=lines[i];
+    // heading
+    if(/^###\s/.test(l)){out.push(<div key={i} style={{fontWeight:700,fontSize:13,marginTop:10,marginBottom:2}}>{l.replace(/^###\s/,"")}</div>);i++;continue;}
+    if(/^##\s/.test(l)){out.push(<div key={i} style={{fontWeight:700,fontSize:14,marginTop:12,marginBottom:3}}>{l.replace(/^##\s/,"")}</div>);i++;continue;}
+    if(/^#\s/.test(l)){out.push(<div key={i} style={{fontWeight:700,fontSize:15,marginTop:14,marginBottom:4}}>{l.replace(/^#\s/,"")}</div>);i++;continue;}
+    // bullet list
+    if(/^[-*]\s/.test(l)){
+      const items=[];
+      while(i<lines.length&&/^[-*]\s/.test(lines[i])){items.push(lines[i].replace(/^[-*]\s/,""));i++;}
+      out.push(<ul key={i} style={{margin:"4px 0 4px 18px",padding:0}}>{items.map((it,j)=><li key={j} style={{marginBottom:2}}>{inlineMd(it)}</li>)}</ul>);
+      continue;
+    }
+    // numbered list
+    if(/^\d+\.\s/.test(l)){
+      const items=[];
+      while(i<lines.length&&/^\d+\.\s/.test(lines[i])){items.push(lines[i].replace(/^\d+\.\s/,""));i++;}
+      out.push(<ol key={i} style={{margin:"4px 0 4px 18px",padding:0}}>{items.map((it,j)=><li key={j} style={{marginBottom:2}}>{inlineMd(it)}</li>)}</ol>);
+      continue;
+    }
+    // horizontal rule
+    if(/^---+$/.test(l.trim())){out.push(<hr key={i} style={{border:"none",borderTop:"1px solid var(--color-border-tertiary)",margin:"8px 0"}}/>);i++;continue;}
+    // blank line
+    if(l.trim()===""){out.push(<div key={i} style={{height:6}}/>);i++;continue;}
+    // paragraph
+    out.push(<div key={i} style={{marginBottom:2}}>{inlineMd(l)}</div>);i++;
+  }
+  return out;
+}
+function inlineMd(text){
+  // split on bold, italic, inline code
+  const parts=[];let rest=text;let k=0;
+  const re=/(\*\*(.+?)\*\*|\*(.+?)\*|`(.+?)`)/g;let m;let last=0;
+  while((m=re.exec(rest))!==null){
+    if(m.index>last)parts.push(<span key={k++}>{rest.slice(last,m.index)}</span>);
+    if(m[2])parts.push(<strong key={k++}>{m[2]}</strong>);
+    else if(m[3])parts.push(<em key={k++}>{m[3]}</em>);
+    else if(m[4])parts.push(<code key={k++} style={{background:"var(--color-background-secondary)",borderRadius:3,padding:"1px 5px",fontSize:12,fontFamily:"monospace"}}>{m[4]}</code>);
+    last=m.index+m[0].length;
+  }
+  if(last<rest.length)parts.push(<span key={k++}>{rest.slice(last)}</span>);
+  return parts.length>0?parts:text;
+}
+
 /* ─── AI Chat ─────────────────────────────────────────────────────────────── */
-function AIChat({proj,sid,sdata}) {
-  const [msgs,setMsgs]=useState([{role:"assistant",text:"Hi! Ask me anything about QA, this story, or best practices."}]);
+function AIChat({proj,sid,sdata,cases=[],gapText="",result=null,sessionBugs=[],coverageText="",platform=""}) {
+  const [msgs,setMsgs]=useState([{role:"assistant",text:"Hi! I can see your full story, test cases, execution results and bugs. Ask me anything!"}]);
   const [msg,setMsg]=useState(""); const [busy,setBusy]=useState(false);
-  const bot=useRef(null);
-  useEffect(()=>{bot.current?.scrollIntoView({behavior:"smooth"});},[msgs]);
+  const [jiraCtx,setJiraCtx]=useState("");
+  const msgsRef=useRef(null);
+  useEffect(()=>{if(msgsRef.current) msgsRef.current.scrollTop=msgsRef.current.scrollHeight;},[msgs]);
+
+  // Pre-fetch story Jira context on open
+  useEffect(()=>{
+    if(!proj?.jiraProjKey||!sid)return;
+    (async()=>{
+      try{
+        const issue=await callJira(proj,"GET","/issue/"+sid+"?fields=summary,status,assignee,priority,description,issuetype,comment");
+        const comments=(issue.fields?.comment?.comments||[]).slice(-3).map(c=>`  [${c.author?.displayName}]: ${c.body?.content?.[0]?.content?.[0]?.text||""}"`).join("\n");
+        const ctx=`Current Jira story:\n  Key: ${issue.key}\n  Summary: ${issue.fields?.summary}\n  Status: ${issue.fields?.status?.name}\n  Priority: ${issue.fields?.priority?.name}\n  Assignee: ${issue.fields?.assignee?.displayName||"Unassigned"}\n  Type: ${issue.fields?.issuetype?.name}${comments?"\n  Recent comments:\n"+comments:""}`;
+        setJiraCtx(ctx);
+      }catch{setJiraCtx("");}
+    })();
+  },[sid]);
+
+  const isJiraQuery=t=>/bug|issue|ticket|jira|open|status|assign|sprint|backlog|comment|story|task|priority|close|resolve|report|list|show|fetch|get|[A-Z]+-\d+/i.test(t);
+
+  const fetchJiraData=async(q)=>{
+    if(!proj?.jiraProjKey)return"";
+    const parts=[];
+    try{
+      // fetch specific issue keys mentioned in query e.g. JF-10, PROJ-5
+      const keyMatches=[...new Set((q.match(/[A-Za-z]+-\d+/g)||[]).map(k=>k.toUpperCase()))];
+      for(const key of keyMatches){
+        try{
+          const issue=await callJira(proj,"GET",`/issue/${key}?fields=summary,status,assignee,priority,description,issuetype,comment`);
+          const descText=issue.fields?.description?.content?.[0]?.content?.[0]?.text||"";
+          const comments=(issue.fields?.comment?.comments||[]).slice(-3).map(c=>`    [${c.author?.displayName}]: ${c.body?.content?.[0]?.content?.[0]?.text||""}`).join("\n");
+          parts.push(`Issue ${issue.key}:\n  Summary: ${issue.fields?.summary}\n  Type: ${issue.fields?.issuetype?.name}\n  Status: ${issue.fields?.status?.name}\n  Priority: ${issue.fields?.priority?.name}\n  Assignee: ${issue.fields?.assignee?.displayName||"Unassigned"}${descText?"\n  Description: "+descText:""}${comments?"\n  Recent comments:\n"+comments:""}`);
+        }catch{}
+      }
+      // fetch active sprint tickets
+      if(/sprint/i.test(q)){
+        try{
+          const r=await callJira(proj,"POST","/search/jql",{jql:`project=${proj.jiraProjKey} AND sprint in openSprints() ORDER BY priority ASC`,maxResults:20,fields:["summary","status","issuetype","assignee","priority"]});
+          const items=(r.issues||[]).map(i=>`  ${i.key}: [${i.fields?.issuetype?.name}/${i.fields?.priority?.name}] ${i.fields?.summary} — ${i.fields?.status?.name} (${i.fields?.assignee?.displayName||"Unassigned"})`).join("\n");
+          parts.push(items?`Active sprint tickets in ${proj.jiraProjKey} (${r.issues?.length||0}):\n${items}`:`No active sprint found in ${proj.jiraProjKey}.`);
+        }catch(e){parts.push(`Could not fetch sprint data: ${e.message}`);}
+      }
+      // fetch open bugs for project
+      if(/bug/i.test(q)){
+        try{
+          const r=await callJira(proj,"POST","/search/jql",{jql:`project=${proj.jiraProjKey} AND issuetype=Bug AND status!=Done ORDER BY created DESC`,maxResults:10,fields:["summary","status","priority","assignee"]});
+          const bugs=(r.issues||[]).map(i=>`  ${i.key}: [${i.fields?.priority?.name}] ${i.fields?.summary} — ${i.fields?.status?.name} (${i.fields?.assignee?.displayName||"Unassigned"})`).join("\n");
+          parts.push(bugs?`Open bugs in ${proj.jiraProjKey}:\n${bugs}`:`No open bugs found.`);
+        }catch(e){parts.push(`Could not fetch bugs: ${e.message}`);}
+      }
+      // fetch recent issues
+      if(/issue|ticket|task|list|show|fetch|open/i.test(q)&&!/bug|sprint/i.test(q)&&keyMatches.length===0){
+        try{
+          const r=await callJira(proj,"POST","/search/jql",{jql:`project=${proj.jiraProjKey} AND status!=Done ORDER BY updated DESC`,maxResults:10,fields:["summary","status","issuetype","assignee","priority"]});
+          const issues=(r.issues||[]).map(i=>`  ${i.key}: [${i.fields?.issuetype?.name}/${i.fields?.priority?.name}] ${i.fields?.summary} — ${i.fields?.status?.name}`).join("\n");
+          parts.push(issues?`Recent open issues in ${proj.jiraProjKey}:\n${issues}`:`No open issues found.`);
+        }catch(e){parts.push(`Could not fetch issues: ${e.message}`);}
+      }
+      // fetch comments on current story
+      if(sid&&/comment/i.test(q)&&keyMatches.length===0){
+        try{
+          const r=await callJira(proj,"GET","/issue/"+sid+"/comment?maxResults=5");
+          const comments=(r.comments||[]).map(c=>`  [${c.author?.displayName}]: ${c.body?.content?.[0]?.content?.[0]?.text||""}`).join("\n");
+          if(comments)parts.push(`Comments on ${sid}:\n${comments}`);
+        }catch{}
+      }
+    }catch{}
+    return parts.join("\n\n");
+  };
+
   const send=async()=>{
-    if(!msg.trim()||busy) return;
+    if(!msg.trim()||busy)return;
     const u=msg.trim(); setMsg(""); setMsgs(m=>[...m,{role:"user",text:u}]); setBusy(true);
     const hist=msgs.map(m=>({role:m.role==="assistant"?"assistant":"user",content:m.text}));
-    try {
-      const sys=`QA expert. Project:${proj?.name}, Key:${proj?.jiraProjKey}${sid?", Story:"+sid:""}. Be concise and helpful.`;
-      const r=await callAI([...hist,{role:"user",content:u}],sys,2000,"");
+    try{
+      let liveCtx="";
+      if(isJiraQuery(u))liveCtx=await fetchJiraData(u);
+      const jiraSection=[jiraCtx,liveCtx].filter(Boolean).join("\n\n");
+
+      // Build workspace context from current session data
+      const storySection=sdata?`USER STORY:\n  ID: ${sid}\n  Summary: ${sdata.summary||""}\n  Description: ${sdata.description||sdata.rawText||""}\n  Platform: ${platform}`:sid?`Story ID: ${sid}`:"No story loaded yet.";
+      const gapSection=gapText?`GAP ANALYSIS:\n${gapText}`:"";
+      const casesSection=cases.length>0?`TEST CASES (${cases.length} total):\n${cases.map(c=>`  [${c.status?.toUpperCase()||"PENDING"}] ${c.id} (${c.type}): ${c.title}${c.steps?.length?"\n    Steps: "+c.steps.join(" → "):""}`).join("\n")}`:"No test cases yet.";
+      const resultSection=result?`EXECUTION RESULTS:\n  Total: ${result.total} | Passed: ${result.pass?.length||0} | Failed: ${result.fail?.length||0}\n  Passed: ${(result.pass||[]).join(", ")||"none"}\n  Failed: ${(result.fail||[]).join(", ")||"none"}`:"No execution results yet.";
+      const bugsSection=sessionBugs.length>0?`BUGS FILED (${sessionBugs.length}):\n${sessionBugs.map(b=>`  ${b.bid} [${b.sev}]: ${b.summary}${b.jKey?" → "+b.jKey:""}`).join("\n")}`:"No bugs filed yet.";
+      const coverageSection=coverageText?`COVERAGE REPORT:\n${coverageText}`:"";
+
+      const workspaceCtx=[storySection,gapSection,casesSection,resultSection,bugsSection,coverageSection].filter(Boolean).join("\n\n");
+      const sys=`You are a QA expert assistant embedded in the QA AI Platform. CRITICAL RULES:\n1. You have ZERO tools and ZERO external access. You cannot call any APIs.\n2. NEVER mention permissions, tool access, approvals, or ask the user to do anything to grant access.\n3. All Jira data you will ever receive has already been fetched by the app and is shown below under "JIRA DATA". If it is empty, say "No data was returned from Jira for this query" and stop.\n4. Answer only from the context provided below and your QA expertise.\n\nProject: ${proj?.name||"—"} (Jira key: ${proj?.jiraProjKey||"—"})\n\n=== CURRENT SESSION ===\n${workspaceCtx}\n${jiraSection?`\n=== JIRA DATA (already fetched by the app) ===\n${jiraSection}`:"\n=== JIRA DATA ===\n(No Jira data was fetched for this query.)"}\n\nBe concise. Reference IDs and keys by name when relevant.`;
+      const r=await callAI([...hist,{role:"user",content:u}],sys,2000,proj?.anthropicKey||"");
       setMsgs(m=>[...m,{role:"assistant",text:r}]);
-    } catch(e){setMsgs(m=>[...m,{role:"assistant",text:"Error: "+e.message}]);}
+    }catch(e){setMsgs(m=>[...m,{role:"assistant",text:"Error: "+e.message}]);}
     setBusy(false);
   };
+
   return <div style={{display:"flex",flexDirection:"column",height:"100%"}}>
-    <div style={{flex:1,overflow:"auto",display:"flex",flexDirection:"column",gap:10,paddingBottom:8}}>
+    {jiraCtx&&<div style={{fontSize:11,color:"var(--color-text-tertiary)",padding:"4px 0 8px",display:"flex",alignItems:"center",gap:5}}>
+      <span style={{width:7,height:7,borderRadius:"50%",background:"#36B37E",display:"inline-block"}}/>Connected to Jira · {proj?.jiraProjKey}{sid?" · "+sid:""}
+    </div>}
+    <div ref={msgsRef} style={{flex:1,overflow:"auto",display:"flex",flexDirection:"column",gap:10,paddingBottom:8}}>
       {msgs.map((m,i)=><div key={i} style={{display:"flex",justifyContent:m.role==="user"?"flex-end":"flex-start"}}>
-        <div style={{maxWidth:"85%",padding:"10px 14px",borderRadius:12,fontSize:13,lineHeight:1.65,whiteSpace:"pre-wrap",background:m.role==="user"?"var(--color-text-info)":"var(--color-background-primary)",color:m.role==="user"?"#fff":"var(--color-text-primary)",border:m.role==="assistant"?"1px solid var(--color-border-tertiary)":"none"}}>{m.text}</div>
+        <div style={{maxWidth:"85%",padding:"10px 14px",borderRadius:12,fontSize:13,lineHeight:1.65,background:m.role==="user"?"var(--color-text-info)":"var(--color-background-primary)",color:m.role==="user"?"#fff":"var(--color-text-primary)",border:m.role==="assistant"?"1px solid var(--color-border-tertiary)":"none"}}>
+          {m.role==="assistant"?renderMd(m.text):<span style={{whiteSpace:"pre-wrap"}}>{m.text}</span>}
+        </div>
       </div>)}
       {busy&&<div style={{alignSelf:"flex-start",padding:"10px 14px",borderRadius:12,background:"var(--color-background-primary)",border:"1px solid var(--color-border-tertiary)",fontSize:13,color:"var(--color-text-tertiary)"}}>Thinking…</div>}
-      <div ref={bot}/>
     </div>
     <div style={{display:"flex",gap:8,paddingTop:10,borderTop:"1px solid var(--color-border-tertiary)"}}>
-      <input style={{...inp,flex:1,fontSize:13}} value={msg} onChange={e=>setMsg(e.target.value)} onKeyDown={e=>e.key==="Enter"&&!e.shiftKey&&send()} placeholder="Ask anything…"/>
+      <input style={{...inp,flex:1,fontSize:13}} value={msg} onChange={e=>setMsg(e.target.value)} onKeyDown={e=>e.key==="Enter"&&!e.shiftKey&&send()} placeholder="Ask about this story, open bugs, Jira issues…"/>
       <Btn v="primary" onClick={send} disabled={busy}>Send</Btn>
     </div>
   </div>;
@@ -429,30 +567,111 @@ function adfToText(node) {
     const link = (node.marks||[]).find(m=>m.type==='link');
     return link ? `${node.text||''} (${link.attrs?.href||''})` : (node.text||'');
   }
-  if (node.type === 'inlineCard' || node.type === 'blockCard') return node.attrs?.url||'';
+  if (node.type === 'inlineCard' || node.type === 'blockCard' || node.type === 'embedCard') return node.attrs?.url||'';
   if (node.type === 'hardBreak') return '\n';
   const inner = (node.content||[]).map(adfToText).join('');
   return ['paragraph','heading','listItem','bulletList','orderedList','blockquote','panel','rule'].includes(node.type) ? inner+'\n' : inner;
 }
 
-/* ─── Workspace ───────────────────────────────────────────────────────────── */
-const WS_STEPS = ["Story","Mode","Cases","Review","Jira","Scripts","VS Code","Run"];
-const WS_IDX = {input:0,mode:1,gap:1,ctype:2,ready:2,review:3,jira:4,jiraDone:4,auto:5,autoReady:5,vscode:6,vscodeDone:6,runAsk:7,running:7,result:7};
+/* ─── Coverage charts ────────────────────────────────────────────────────── */
+function DonutChart({data,title,size=160}) {
+  const total=data.reduce((s,d)=>s+d.value,0);
+  if(!total) return <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",minHeight:size,color:"var(--color-text-tertiary)",fontSize:13}}><div style={{fontSize:28,marginBottom:6}}>—</div>No data</div>;
+  const cx=size/2,cy=size/2,r=size*0.38,ir=size*0.22;
+  if(data.length===1) return(
+    <div><div style={{fontWeight:500,fontSize:13,marginBottom:10,textAlign:"center"}}>{title}</div>
+      <div style={{display:"flex",alignItems:"center",gap:16}}>
+        <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{flexShrink:0}}>
+          <circle cx={cx} cy={cy} r={r} fill={data[0].color}/>
+          <circle cx={cx} cy={cy} r={ir} fill="#fff"/>
+          <text x={cx} y={cy-5} textAnchor="middle" dominantBaseline="middle" fontSize={size*0.12} fontWeight="700" fill="#1a1a18">{total}</text>
+          <text x={cx} y={cy+11} textAnchor="middle" dominantBaseline="middle" fontSize={size*0.075} fill="#888">total</text>
+        </svg>
+        <div style={{flex:1}}><div style={{display:"flex",alignItems:"center",gap:6,fontSize:12}}>
+          <div style={{width:10,height:10,borderRadius:2,background:data[0].color,flexShrink:0}}/><span style={{flex:1,color:"var(--color-text-secondary)"}}>{data[0].label}</span><span style={{fontWeight:600}}>{data[0].value} <span style={{fontWeight:400,color:"var(--color-text-tertiary)"}}>(100%)</span></span>
+        </div></div>
+      </div>
+    </div>);
+  let angle=-Math.PI/2;
+  const slices=data.map(d=>{
+    const frac=d.value/total,a1=angle,a2=angle+frac*2*Math.PI-0.005;
+    angle=a2+0.005;
+    const [c1,s1,c2,s2]=[Math.cos(a1),Math.sin(a1),Math.cos(a2),Math.sin(a2)],lg=frac>0.5?1:0;
+    return {d:`M ${cx+r*c1} ${cy+r*s1} A ${r} ${r} 0 ${lg} 1 ${cx+r*c2} ${cy+r*s2} L ${cx+ir*c2} ${cy+ir*s2} A ${ir} ${ir} 0 ${lg} 0 ${cx+ir*c1} ${cy+ir*s1} Z`,color:d.color,label:d.label,value:d.value,pct:Math.round(frac*100)};
+  });
+  return(
+    <div><div style={{fontWeight:500,fontSize:13,marginBottom:10,textAlign:"center"}}>{title}</div>
+      <div style={{display:"flex",alignItems:"center",gap:16}}>
+        <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{flexShrink:0}}>
+          {slices.map((s,i)=><path key={i} d={s.d} fill={s.color} stroke="#fff" strokeWidth={2}/>)}
+          <circle cx={cx} cy={cy} r={ir} fill="#fff"/>
+          <text x={cx} y={cy-5} textAnchor="middle" dominantBaseline="middle" fontSize={size*0.12} fontWeight="700" fill="#1a1a18">{total}</text>
+          <text x={cx} y={cy+11} textAnchor="middle" dominantBaseline="middle" fontSize={size*0.075} fill="#888">total</text>
+        </svg>
+        <div style={{flex:1}}>{slices.map((s,i)=><div key={i} style={{display:"flex",alignItems:"center",gap:6,fontSize:12,marginBottom:6}}>
+          <div style={{width:10,height:10,borderRadius:2,background:s.color,flexShrink:0}}/><span style={{flex:1,color:"var(--color-text-secondary)"}}>{s.label}</span><span style={{fontWeight:600}}>{s.value} <span style={{fontWeight:400,color:"var(--color-text-tertiary)"}}>({s.pct}%)</span></span>
+        </div>)}</div>
+      </div>
+    </div>);
+}
+function BarChart({data,title}) {
+  return(
+    <div><div style={{fontWeight:500,fontSize:13,marginBottom:14,textAlign:"center"}}>{title}</div>
+      {data.map((d,i)=><div key={i} style={{marginBottom:12}}>
+        <div style={{display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:4}}>
+          <span style={{color:"var(--color-text-secondary)"}}>{d.label}</span>
+          <span style={{fontWeight:600,color:d.value===100?"var(--color-text-success)":d.value>=60?"var(--color-text-warning)":"var(--color-text-danger)"}}>{d.value}%</span>
+        </div>
+        <div style={{height:10,background:"var(--color-background-tertiary)",borderRadius:5,overflow:"hidden"}}>
+          <div style={{height:"100%",width:d.value+"%",background:d.color,borderRadius:5}}/>
+        </div>
+      </div>)}
+    </div>);
+}
 
-function Workspace({member}) {
+/* ─── Workspace ───────────────────────────────────────────────────────────── */
+const WS_STEPS = ["User Story","Analysis","Generate","Review","Export","Scripts","Execute","Bug Report","Coverage"];
+const WS_IDX = {input:0,mode:1,gap:1,ctype:2,ready:2,review:3,jira:4,urlPrompt:5,scriptSelect:5,autoReady:5,runAsk:6,running:6,result:6,bugReport:7,coverage:8};
+
+function Workspace({member,refreshSaved,restoreTarget,clearRestore,onActiveSid}) {
   const asgn=DB.assignments.find(x=>x.memberId===member.id);
   const proj=asgn?DB.projects.find(x=>x.id===asgn.projectId):null;
-  const [phase,setPhase]=useState("input"); const [sid,setSid]=useState(""); const [sdata,setSdata]=useState(null);
+const [phase,setPhase]=useState("input"); const [sid,setSid]=useState(""); const [sdata,setSdata]=useState(null);
   const [platform,setPlatform]=useState("web"); const [ctypes,setCtypes]=useState([]);
   const [gapText,setGapText]=useState(""); const [cases,setCases]=useState([]);
   const [editOn,setEditOn]=useState(false); const [scripts,setScripts]=useState({web:"",ios:"",android:""});
   const [projFiles,setProjFiles]=useState(null); const [tab,setTab]=useState("web");
   const [execLines,setExecLines]=useState([]); const [result,setResult]=useState(null);
-  const [loading,setLoading]=useState(false); const [lmsg,setLmsg]=useState("");
+  const [loading,setLoading]=useState(false); const [lmsg,setLmsg]=useState(""); const [fetchError,setFetchError]=useState("");
   const [jKey,setJKey]=useState(null); const [bugDone,setBugDone]=useState(null);
-  const [showBugForm,setShowBugForm]=useState(false); const [bf,setBf]=useState({summary:"",sev:"High",desc:""});
-  const [fixed,setFixed]=useState(false); const [hist,setHist]=useState([]); const [chat,setChat]=useState(false);
+  const [showBugForm,setShowBugForm]=useState(false); const [bf,setBf]=useState({summary:"",sev:"High",steps:"",expected:"",actual:"",screenshot:null});
+  const [fixed,setFixed]=useState(false); const [hist,setHist]=useState([]); const [chat,setChat]=useState(false); const [hasSaved,setHasSaved]=useState(false);
   const [showAddCase,setShowAddCase]=useState(false); const [newCase,setNewCase]=useState({title:"",type:"happy",platform:"web",preconditions:"",steps:[""],expected:"",automatable:true});
+  const [selectedForScripts,setSelectedForScripts]=useState([]); const [coverageText,setCoverageText]=useState(""); const [sessionBugs,setSessionBugs]=useState([]); const [appUrl,setAppUrl]=useState("");
+  const [scriptCache,setScriptCache]=useState({});
+  const [editingBugId,setEditingBugId]=useState(null); const [editBugForm,setEditBugForm]=useState({});
+  const [toast,setToast]=useState(null);
+  const showToast=(msg)=>{setToast(msg);setTimeout(()=>setToast(null),3000);};
+
+  const WS_SNAP=`qa_ws_${member.id}`;
+  // Restore workspace state on mount (survives logout/login and page refresh)
+  useEffect(()=>{
+    try{
+      const s=JSON.parse(localStorage.getItem(WS_SNAP));
+      if(!s||s.phase==="input")return;
+      setPhase(s.phase);setSid(s.sid||"");setSdata(s.sdata||null);setPlatform(s.platform||"web");
+      setCtypes(s.ctypes||[]);setGapText(s.gapText||"");setCases(s.cases||[]);
+      setScripts(s.scripts||{web:"",ios:"",android:""});setTab(s.tab||"web");
+      setResult(s.result||null);setExecLines(s.execLines||[]);
+      setCoverageText(s.coverageText||"");setSessionBugs(s.sessionBugs||[]);
+      setSelectedForScripts(s.selectedForScripts||[]);setAppUrl(s.appUrl||"");
+    }catch{}
+  },[]);
+  // Save workspace state on every change
+  useEffect(()=>{
+    if(phase==="input"){localStorage.removeItem(WS_SNAP);return;}
+    try{localStorage.setItem(WS_SNAP,JSON.stringify({phase,sid,sdata,platform,ctypes,gapText,cases,scripts,tab,result,execLines,coverageText,sessionBugs,selectedForScripts,appUrl}));}catch{}
+  },[phase,sid,sdata,platform,ctypes,gapText,cases,scripts,tab,result,execLines,coverageText,sessionBugs,selectedForScripts,appUrl]);
 
   const SYS=`You are an expert QA engineer. All story data is already provided in the user message — do NOT use any external tools, do NOT access Jira, Atlassian, or any other service. Work only with the text provided. Project:"${proj?.name}" Platform:${proj?.platform||"web"}.`;
   const approved=cases.filter(c=>c.status==="approved");
@@ -463,15 +682,29 @@ function Workspace({member}) {
   if (!proj) return <div style={card}><div style={{color:"var(--color-text-warning)",fontWeight:500}}>No project assigned. Contact your QA lead.</div></div>;
 
   const doFetch=async()=>{
-    setLoading(true); setLmsg("Fetching story from Jira…");
+    setLoading(true); setLmsg("Fetching story from Jira…"); setFetchError("");
     try {
       const d=await callJira(proj,"GET","/issue/"+sid+"?fields=summary,description,labels,issuetype,status,assignee,priority");
       const flds=d.fields||{}; let desc="";
-      if(flds.description) desc=adfToText(flds.description).trim();
+      if(flds.description){
+        if(typeof flds.description==="string"){
+          desc=flds.description.replace(/\[([^\]]+)\]\(([^)]+)\)/g,"$1 ($2)").trim();
+        } else {
+          desc=adfToText(flds.description).trim();
+        }
+      }
       const sd={key:d.key,summary:flds.summary||sid,description:desc,labels:flds.labels||[],type:flds.issuetype?.name||"Story",status:flds.status?.name||"",assignee:flds.assignee?.displayName||"—",priority:flds.priority?.name||"Medium"};
       setSdata(sd); const pp=proj.platform||"web"; setPlatform(pp==="both"?"web":pp);
-    } catch { setSdata({key:sid,summary:"Story "+sid,description:"",labels:[],type:"Story",status:"In Progress",assignee:"—",priority:"Medium",sim:true}); const pp=proj.platform||"web"; setPlatform(pp==="both"?"web":pp); }
-    setPhase("mode"); setLoading(false);
+      setPhase("mode"); setLoading(false);
+    } catch(e) {
+      if(proj?.jiraToken){
+        setFetchError("Story \""+sid+"\" was not found in Jira ("+proj.jiraProjKey+"). Please check the story ID and try again.");
+        setLoading(false); return;
+      }
+      setSdata({key:sid,summary:"Story "+sid,description:"",labels:[],type:"Story",status:"In Progress",assignee:"—",priority:"Medium",sim:true});
+      const pp=proj?.platform||"web"; setPlatform(pp==="both"?"web":pp);
+      setPhase("mode"); setLoading(false);
+    }
   };
 
   const doGap=async()=>{
@@ -494,37 +727,53 @@ function Workspace({member}) {
     const newTypes=selectedTypes.filter(t=>!existingTypes.includes(t));
     const keptCases=cases.filter(c=>keepTypes.includes(c.type));
     if(newTypes.length===0){setCases(keptCases);setPhase("ready");setLoading(false);return;}
-    setLmsg("Generating "+newTypes.join(", ")+" cases…");
-    const tl=newTypes.join(", ");
-    const ctx=sdata&&!sdata.sim?`Story: "${sdata.summary}"\nFull description and Acceptance Criteria:\n${sdata.description?.slice(0,2500)||"No description provided."}`:"Simulate a realistic feature story with multiple acceptance criteria.";
+    setLmsg("Generating "+newTypes.map(t=>t+" flow").join(", ")+" in parallel…");
+    const ctx=sdata&&!sdata.sim?`Story: "${sdata.summary}"\nAcceptance Criteria:\n${sdata.description?.slice(0,2500)||"No description provided."}`:"Simulate a realistic feature story with clear acceptance criteria.";
     try {
-      const r=await callAI([{role:"user",content:`You are a QA engineer generating manual test cases for story "${sid}" (${proj.jiraProjKey}).\n\n${ctx}\n\nTest types to generate: ${tl}\nPlatform: ${platform}\n\nINSTRUCTIONS:\n1. Identify EVERY acceptance criterion (AC) from the description above.\n2. Generate at least 1-3 test cases per AC — do NOT skip, merge, or ignore any AC.\n3. For the selected types (${tl}), generate ALL possible scenarios — there is NO maximum limit on number of cases.\n4. Do not stop at a fixed number — cover everything explicitly stated in the ACs.\n5. Mark automatable:false ONLY for offline/camera/biometrics/hardware tests.\n\nReturn ONLY a valid JSON array (no markdown, no explanation):\n[{"id":"TC-001","title":"...","type":"happy|edge|negative","platform":"web|mobile","preconditions":"...","steps":["Step 1","Step 2"],"expected":"...","automatable":true}]`}],SYS,8000,proj.anthropicKey||"");
-      const clean=r.replace(/```json|```/g,"").trim();
-      const match=clean.match(/\[[\s\S]*\]/);
-      if(!match) throw new Error("AI returned text instead of JSON. Make sure server.js is running and the story has a description.");
-      const newCases=JSON.parse(match[0]).map(c=>({...c,status:"pending"}));
+      const requests=newTypes.map(type=>callAI([{role:"user",content:`You are a QA engineer. Generate ALL possible ${type} test cases for story "${sid}" (${proj.jiraProjKey}). Platform: ${platform}.\n\n${ctx}\n\nINSTRUCTIONS:\n1. Identify EVERY acceptance criterion (AC) from the description above.\n2. Generate at least 1-3 ${type} test cases per AC — do NOT skip or ignore any AC.\n3. There is NO limit on number of cases — cover everything explicitly stated in the ACs.\n4. Mark automatable:false ONLY for offline/camera/biometrics/hardware tests.\n\nReturn ONLY a valid JSON array (no markdown, no explanation):\n[{"id":"TC-001","title":"...","type":"${type}","platform":"${platform}","preconditions":"...","steps":["Step 1","Step 2"],"expected":"...","automatable":true}]`}],SYS,5000,proj.anthropicKey||""));
+      const results=await Promise.all(requests);
+      const rawNew=results.flatMap((r,i)=>{
+        const match=r.replace(/```json|```/g,"").trim().match(/\[[\s\S]*\]/);
+        if(!match) throw new Error("Invalid response for "+newTypes[i]+" cases. Make sure server.js is running.");
+        return JSON.parse(match[0]).map(c=>({...c,type:newTypes[i],status:"pending"}));
+      });
+      const startIdx=keptCases.length;
+      const newCases=rawNew.map((c,i)=>({...c,id:"TC-"+String(startIdx+i+1).padStart(3,"0")}));
       setCases([...keptCases,...newCases]);
     } catch(e){setLoading(false);alert("Failed to generate test cases:\n\n"+e.message);return;}
     setPhase("ready");setLoading(false);
   };
 
   const doScripts=async()=>{
+    const selKey=[...selectedForScripts].sort().join(",");
+    // Cache hit — same selection already generated, skip AI entirely
+    if(scriptCache[selKey]){
+      const hit=scriptCache[selKey];
+      setScripts(hit.scripts); setTab(hit.tab); setProjFiles(hit.projFiles); setFixed(false); setPhase("autoReady");
+      return;
+    }
     setLoading(true); setLmsg("Generating "+fwName(platform)+" scripts…");
-    const cl=autoable.map(c=>`${c.id}: ${c.title}\n  Steps: ${(c.steps||[]).join(" → ")}\n  Expected: ${c.expected}`).join("\n\n");
-    const mc=manOnly.map(c=>`// MANUAL ONLY — ${c.id}: ${c.title}`).join("\n");
+    const selCases=cases.filter(c=>selectedForScripts.includes(c.id));
+    const cl=selCases.map(c=>`${c.id}: ${c.title}\n  Steps: ${(c.steps||[]).join(" → ")}\n  Expected: ${c.expected}`).join("\n\n");
+    const mc="";
     try {
+      let newScripts,newTab,newFiles;
       if(platform==="mobile"){
+        const urlCtx=appUrl.trim()?`\nApp URL: ${appUrl.trim()}`:"";
         const [iosR,andR]=await Promise.all([
-          callAI([{role:"user",content:`Generate a COMPLETE runnable Appium WebdriverIO test file for iOS, story ${sid}. Output ONLY JavaScript code — no markdown fences, no explanations, no prose.\nTest cases:\n${cl}\nManual-only stubs (use it.skip):\n${mc}\nRequirements: describe/it blocks, XCUITest capabilities, accessibility id selectors, full test implementation with actual driver.$$ commands and assertions, beforeEach/afterEach hooks, CommonJS require syntax. Start the file directly with const/require statements.`}],SYS,6000,""),
-          callAI([{role:"user",content:`Generate a COMPLETE runnable Appium WebdriverIO test file for Android, story ${sid}. Output ONLY JavaScript code — no markdown fences, no explanations, no prose.\nTest cases:\n${cl}\nManual-only stubs (use it.skip):\n${mc}\nRequirements: describe/it blocks, UiAutomator2 capabilities, android UiSelector or accessibility id selectors, full test implementation with actual driver.$$ commands and assertions, beforeEach/afterEach hooks, CommonJS require syntax. Start the file directly with const/require statements.`}],SYS,6000,"")
+          callAI([{role:"user",content:`Generate a COMPLETE runnable Appium WebdriverIO test file for iOS, story ${sid}.${urlCtx} Output ONLY JavaScript code — no markdown fences, no explanations, no prose.\nTest cases:\n${cl}\nManual-only stubs (use it.skip):\n${mc}\nRequirements: describe/it blocks, XCUITest capabilities, accessibility id selectors, full test implementation with actual driver.$$ commands and assertions, beforeEach/afterEach hooks, CommonJS require syntax. Start the file directly with const/require statements.`}],SYS,6000,""),
+          callAI([{role:"user",content:`Generate a COMPLETE runnable Appium WebdriverIO test file for Android, story ${sid}.${urlCtx} Output ONLY JavaScript code — no markdown fences, no explanations, no prose.\nTest cases:\n${cl}\nManual-only stubs (use it.skip):\n${mc}\nRequirements: describe/it blocks, UiAutomator2 capabilities, android UiSelector or accessibility id selectors, full test implementation with actual driver.$$ commands and assertions, beforeEach/afterEach hooks, CommonJS require syntax. Start the file directly with const/require statements.`}],SYS,6000,"")
         ]);
-        setScripts(s=>({...s,ios:iosR,android:andR})); setTab("ios");
-        setProjFiles({"wdio.ios.js":`exports.config={specs:["./tests/ios/*.js"],capabilities:[{platformName:"iOS","appium:automationName":"XCUITest"}],framework:"mocha",reporters:["spec"]};`,"wdio.android.js":`exports.config={specs:["./tests/android/*.js"],capabilities:[{platformName:"Android","appium:automationName":"UiAutomator2"}],framework:"mocha",reporters:["spec"]};`,[`tests/ios/${sid}.spec.js`]:iosR,[`tests/android/${sid}.spec.js`]:andR,"README.md":`# Appium Tests — ${sid}\n\nnpm install && npm run test:ios`});
+        newScripts={ios:iosR,android:andR,web:""}; newTab="ios";
+        newFiles={"wdio.ios.js":`exports.config={specs:["./tests/ios/*.js"],capabilities:[{platformName:"iOS","appium:automationName":"XCUITest"}],framework:"mocha",reporters:["spec"]};`,"wdio.android.js":`exports.config={specs:["./tests/android/*.js"],capabilities:[{platformName:"Android","appium:automationName":"UiAutomator2"}],framework:"mocha",reporters:["spec"]};`,[`tests/ios/${sid}.spec.js`]:iosR,[`tests/android/${sid}.spec.js`]:andR,"README.md":`# Appium Tests — ${sid}\n\nnpm install && npm run test:ios`};
       } else {
-        const r=await callAI([{role:"user",content:`Generate a COMPLETE runnable Playwright test file for ${sid}. Output ONLY JavaScript code — no markdown fences, no explanations, no prose.\nTest cases:\n${cl}\nManual-only stubs (use test.skip):\n${mc}\nRequirements: const {test,expect}=require('@playwright/test'), Page Object Model class defined at the top, every test case must have a FULL implementation with page.goto/click/fill/locator calls and expect assertions, getByRole/getByLabel/getByTestId selectors, beforeEach/afterEach hooks, CommonJS require syntax. Start the file directly with the require statement.`}],SYS,6000,"");
-        setScripts(s=>({...s,web:r})); setTab("web");
-        setProjFiles({"test.config.js":`module.exports={testDir:"./tests",use:{baseURL:process.env.BASE_URL||"http://localhost:3000"}};`,[`tests/${sid}.spec.js`]:r,"README.md":`# Web Tests — ${sid}\n\nnpm install && npm test`});
+        const baseUrl=appUrl.trim()||"http://localhost:3000";
+        const r=await callAI([{role:"user",content:`Generate a COMPLETE runnable Playwright test file for ${sid}. Base URL: ${baseUrl}. Output ONLY JavaScript code — no markdown fences, no explanations, no prose.\nTest cases:\n${cl}\nManual-only stubs (use test.skip):\n${mc}\nRequirements: const {test,expect}=require('@playwright/test'), Page Object Model class defined at the top, use baseURL "${baseUrl}" in page.goto() calls, every test case must have a FULL implementation with page.goto/click/fill/locator calls and expect assertions, getByRole/getByLabel/getByTestId selectors, beforeEach/afterEach hooks, CommonJS require syntax. Start the file directly with the require statement.`}],SYS,6000,"");
+        newScripts={web:r,ios:"",android:""}; newTab="web";
+        newFiles={"test.config.js":`module.exports={testDir:"./tests",use:{baseURL:"${baseUrl}"}};`,[`tests/${sid}.spec.js`]:r,"README.md":`# Web Tests — ${sid}\n\nnpm install && npm test`};
       }
+      setScripts(newScripts); setTab(newTab); setProjFiles(newFiles);
+      setScriptCache(prev=>({...prev,[selKey]:{scripts:newScripts,tab:newTab,projFiles:newFiles}}));
       setFixed(false); setPhase("autoReady");
     } catch(e){alert(e.message);}
     setLoading(false);
@@ -571,7 +820,7 @@ function Workspace({member}) {
 
   const doRun=async()=>{
     setPhase("running"); setExecLines([]);
-    const pool=autoable; const pass=pool.filter((_,i)=>i%4!==2); const fail=pool.filter((_,i)=>i%4===2);
+    const pool=cases.filter(c=>selectedForScripts.includes(c.id)); const pass=pool.filter((_,i)=>i%4!==2); const fail=pool.filter((_,i)=>i%4===2);
     const emit=(l,d=0)=>new Promise(r=>setTimeout(()=>{setExecLines(ls=>[...ls,l]);r();},d));
     await emit("▶ Starting "+fwName(platform)+" runner…");
     await emit("→ Loading configuration…",400); await emit("→ Found "+pool.length+" test(s)",600); await emit("→ Launching browser…",900); await emit("",200);
@@ -596,7 +845,46 @@ function Workspace({member}) {
   const editC=(id,k,v)=>setCases(cs=>cs.map(c=>c.id===id?{...c,[k]:v}:c));
   const editS=(id,si,v)=>setCases(cs=>cs.map(c=>{if(c.id!==id)return c;const s=[...c.steps];s[si]=v;return{...c,steps:s};}));
   const addStep=id=>setCases(cs=>cs.map(c=>c.id===id?{...c,steps:[...(c.steps||[]),"New step"]}:c));
-  const reset=()=>{setPhase("input");setSid("");setSdata(null);setPlatform("web");setCtypes([]);setGapText("");setCases([]);setEditOn(false);setScripts({web:"",ios:"",android:""});setProjFiles(null);setExecLines([]);setResult(null);setJKey(null);setBugDone(null);setShowBugForm(false);setFixed(false);setChat(false);setShowAddCase(false);};
+  const reset=()=>{localStorage.removeItem(WS_SNAP);setPhase("input");setSid("");setSdata(null);setPlatform("web");setCtypes([]);setGapText("");setCases([]);setEditOn(false);setScripts({web:"",ios:"",android:""});setProjFiles(null);setExecLines([]);setResult(null);setJKey(null);setBugDone(null);setShowBugForm(false);setFixed(false);setChat(false);setShowAddCase(false);setSelectedForScripts([]);setCoverageText("");setSessionBugs([]);setHasSaved(false);setAppUrl("");};
+  const [saveModal,setSaveModal]=useState(null);
+  // saveModal: null | {step:1,name:""} | {step:2,name:"",newCat:""}
+  const openSaveModal=()=>{
+    if(!sid||!sdata)return;
+    const existing=DB.savedStories.find(s=>s.sid===sid);
+    setSaveModal({step:1,name:existing?.name||sid});
+  };
+  const commitSave=(name,categoryId)=>{
+    const existing=DB.savedStories.find(s=>s.sid===sid);
+    const snap={id:existing?.id||uid(),name,categoryId:categoryId||null,phase,sid,sdata,cases:[...cases],gapText,platform,ctypes:[...ctypes],scripts:{...scripts},result,sessionBugs:[...sessionBugs],coverageText,savedAt:Date.now()};
+    if(existing){DB.savedStories=DB.savedStories.map(s=>s.sid===sid?snap:s);}
+    else{DB.savedStories.unshift(snap);}
+    saveDB(); if(refreshSaved)refreshSaved(); setHasSaved(true); setSaveModal(null); showToast("Session saved successfully");
+  };
+  const saveAndReset=()=>{
+    if(sid&&sdata){
+      const existing=DB.savedStories.find(s=>s.sid===sid);
+      const snap={id:existing?.id||uid(),name:existing?.name||(sdata?.summary||sid),phase,sid,sdata,cases:[...cases],gapText,platform,ctypes:[...ctypes],scripts:{...scripts},result,sessionBugs:[...sessionBugs],coverageText,savedAt:Date.now()};
+      if(existing){DB.savedStories=DB.savedStories.map(s=>s.sid===sid?snap:s);}
+      else{DB.savedStories.unshift(snap);}
+      saveDB(); if(refreshSaved)refreshSaved();
+    }
+    reset();
+  };
+  const restoreStory=snap=>{
+    setSid(snap.sid);setSdata(snap.sdata);setPlatform(snap.platform);setCtypes(snap.ctypes||[]);setGapText(snap.gapText||"");setCases(snap.cases||[]);setScripts(snap.scripts||{web:"",ios:"",android:""});setResult(snap.result||null);setSessionBugs(snap.sessionBugs||[]);setCoverageText(snap.coverageText||"");setSelectedForScripts([]);setExecLines([]);setJKey(null);setBugDone(null);setShowBugForm(false);setFixed(false);setEditOn(false);setChat(false);setShowAddCase(false);
+    const lastPhase=snap.phase||(snap.coverageText?"coverage":snap.result?"result":snap.cases?.some(c=>c.status==="approved")?"review":"ctype");
+    setPhase(lastPhase);
+  };
+  React.useEffect(()=>{if(onActiveSid)onActiveSid(sid);},[sid]);
+  React.useEffect(()=>{if(restoreTarget){restoreStory(restoreTarget);if(clearRestore)clearRestore();}}, [restoreTarget]);
+  React.useEffect(()=>{
+    if(!sid||!sdata)return;
+    const existing=DB.savedStories.find(s=>s.sid===sid);
+    const snap={id:existing?.id||uid(),name:existing?.name||(sdata?.summary||sid),categoryId:existing?.categoryId||null,phase,sid,sdata,cases:[...cases],gapText,platform,ctypes:[...ctypes],scripts:{...scripts},result,sessionBugs:[...sessionBugs],coverageText,savedAt:Date.now()};
+    if(existing){DB.savedStories=DB.savedStories.map(s=>s.sid===sid?snap:s);}
+    else{DB.savedStories.unshift(snap);}
+    saveDB();if(refreshSaved)refreshSaved();
+  },[phase,cases.length,result,coverageText]);
   const goToStep=i=>{
     const cur=WS_IDX[phase]??0; if(i>=cur||phase==="running") return;
     if(i===0){setPhase("input");return;}
@@ -604,9 +892,10 @@ function Workspace({member}) {
     if(i===2&&sdata){const et=[...new Set(cases.map(c=>c.type))];setCtypes(et.length>0?et:[]);setPhase("ctype");return;}
     if(i===3&&cases.length>0){setPhase("review");return;}
     if(i===4&&approved.length>0){setPhase("jira");return;}
-    if(i===5&&(scripts.web||scripts.ios)){setPhase("autoReady");return;}
-    if(i===6&&projFiles){setPhase("vscode");return;}
-    if(i===7){setPhase("runAsk");return;}
+    if(i===5){setPhase("urlPrompt");return;}
+    if(i===6&&result){setPhase("result");return;}
+    if(i===7){setPhase("bugReport");return;}
+    if(i===8){setPhase("coverage");return;}
   };
   const addManualCase=()=>{
     if(!newCase.title.trim()) return;
@@ -618,7 +907,60 @@ function Workspace({member}) {
   const curScript=platform==="mobile"?(tab==="ios"?scripts.ios:scripts.android):scripts.web;
   const ghostBtn={padding:"8px 18px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:14,fontWeight:500,color:"var(--color-text-secondary)"};
 
+  /* ── Save modal ── */
+  const SaveModal=saveModal&&(()=>{
+    const overlayStyle={position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",zIndex:2000,display:"flex",alignItems:"center",justifyContent:"center"};
+    const boxStyle={background:"var(--color-background-primary)",borderRadius:14,padding:28,width:420,maxWidth:"90vw",boxShadow:"0 8px 32px rgba(0,0,0,0.18)"};
+    if(saveModal.step===1) return(
+      <div style={overlayStyle} onClick={()=>setSaveModal(null)}>
+        <div style={boxStyle} onClick={e=>e.stopPropagation()}>
+          <div style={{fontWeight:600,fontSize:16,marginBottom:6}}>Name this session</div>
+          <div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:16}}>Give this session a name to identify it in your history.</div>
+          <input autoFocus style={{...inp,marginBottom:16,fontSize:14}} value={saveModal.name} onChange={e=>setSaveModal(m=>({...m,name:e.target.value}))} placeholder={sid} onKeyDown={e=>e.key==="Enter"&&setSaveModal(m=>({...m,step:2,newCat:""}))}/>
+          <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
+            <button onClick={()=>setSaveModal(null)} style={ghostBtn}>Cancel</button>
+            <Btn v="primary" onClick={()=>setSaveModal(m=>({...m,step:2,newCat:""}))}>Next →</Btn>
+          </div>
+        </div>
+      </div>);
+    const cats=DB.categories;
+    return(
+      <div style={overlayStyle} onClick={()=>setSaveModal(null)}>
+        <div style={boxStyle} onClick={e=>e.stopPropagation()}>
+          <div style={{fontWeight:600,fontSize:16,marginBottom:4}}>Choose a sprint</div>
+          <div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:14}}>Select which sprint this session belongs to.</div>
+          <div style={{display:"flex",flexDirection:"column",gap:6,maxHeight:220,overflow:"auto",marginBottom:14}}>
+            {cats.length===0&&<div style={{fontSize:13,color:"var(--color-text-tertiary)",padding:"8px 0"}}>No sprints yet. Create one below.</div>}
+            {cats.map(c=>{
+              const stories=DB.savedStories.filter(s=>s.categoryId===c.id);
+              return <div key={c.id} onClick={()=>commitSave(saveModal.name||sid,c.id)} style={{borderRadius:8,border:"1px solid var(--color-border-secondary)",padding:"10px 14px",cursor:"pointer",background:"var(--color-background-secondary)"}}
+                onMouseEnter={e=>e.currentTarget.style.borderColor="var(--color-text-info)"}
+                onMouseLeave={e=>e.currentTarget.style.borderColor="var(--color-border-secondary)"}>
+                <div style={{fontWeight:500,fontSize:14}}>{c.name}</div>
+                <div style={{fontSize:12,color:"var(--color-text-tertiary)",marginTop:2}}>{stories.length} session{stories.length!==1?"s":""}{stories.length>0?" · "+stories.map(s=>s.sid).join(", "):""}</div>
+              </div>;
+            })}
+          </div>
+          <div style={{borderTop:"1px solid var(--color-border-tertiary)",paddingTop:12,marginBottom:12}}>
+            <div style={{fontSize:12,fontWeight:500,color:"var(--color-text-secondary)",marginBottom:6}}>Create new sprint</div>
+            <div style={{display:"flex",gap:8}}>
+              <input style={{...inp,flex:1,fontSize:13}} value={saveModal.newCat||""} onChange={e=>setSaveModal(m=>({...m,newCat:e.target.value}))} placeholder="e.g. Sprint 3" onKeyDown={e=>{if(e.key==="Enter"&&saveModal.newCat?.trim()){const c={id:uid(),name:saveModal.newCat.trim(),createdAt:Date.now()};DB.categories.push(c);saveDB();commitSave(saveModal.name||sid,c.id);}}}/>
+              <Btn v="primary" onClick={()=>{if(!saveModal.newCat?.trim())return;const c={id:uid(),name:saveModal.newCat.trim(),createdAt:Date.now()};DB.categories.push(c);saveDB();commitSave(saveModal.name||sid,c.id);}}>Create & Save</Btn>
+            </div>
+          </div>
+          <div style={{display:"flex",gap:8,justifyContent:"space-between"}}>
+            <button onClick={()=>setSaveModal(m=>({...m,step:1}))} style={ghostBtn}>← Back</button>
+            <button onClick={()=>commitSave(saveModal.name||sid,null)} style={{...ghostBtn,fontSize:12,color:"var(--color-text-tertiary)"}}>Save without sprint</button>
+          </div>
+        </div>
+      </div>);
+  })();
+
   return <div>
+    {SaveModal}
+    {toast&&<div style={{position:"fixed",bottom:32,left:"50%",transform:"translateX(-50%)",background:"#1a1a18",color:"#fff",padding:"12px 22px",borderRadius:10,fontSize:14,fontWeight:500,zIndex:9999,boxShadow:"0 4px 16px rgba(0,0,0,0.22)",display:"flex",alignItems:"center",gap:10,pointerEvents:"none"}}>
+      <span style={{color:"#6fcf6f",fontSize:18}}>✓</span>{toast}
+    </div>}
     <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",marginBottom:16}}>
       <div><div style={{fontSize:20,fontWeight:500,marginBottom:4}}>QA Workspace</div>
         <div style={{fontSize:13,color:"var(--color-text-secondary)",display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
@@ -628,8 +970,10 @@ function Workspace({member}) {
         </div>
       </div>
       <div style={{display:"flex",gap:8}}>
+        {phase!=="input"&&sid&&<button onClick={openSaveModal} style={ghostBtn} title="Save current session to history">💾 Save</button>}
+        {phase!=="input"&&sid&&<button onClick={reset} disabled={!hasSaved} title={hasSaved?"Start a new story":"Save first to enable"} style={{...ghostBtn,opacity:hasSaved?1:0.4,cursor:hasSaved?"pointer":"not-allowed"}}>↩ New story</button>}
         {phase!=="input"&&<button onClick={()=>setChat(o=>!o)} style={ghostBtn}>{chat?"Hide chat":"🤖 AI Chat"}</button>}
-        {phase!=="input"&&<button onClick={reset} style={ghostBtn}>↩ New story</button>}
+        {phase==="coverage"&&<button onClick={saveAndReset} style={ghostBtn}>↩ New story</button>}
       </div>
     </div>
     <StepBar steps={WS_STEPS} cur={WS_IDX[phase]??0} onStepClick={goToStep}/>
@@ -645,9 +989,10 @@ function Workspace({member}) {
           <div style={card}><H2>Enter Jira story ID</H2>
             <div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:12}}>{proj.jiraToken?<Tag c="green">✓ Jira configured</Tag>:<Tag c="amber">No token — AI simulation</Tag>}</div>
             <div style={{display:"flex",gap:12,alignItems:"flex-end"}}>
-              <div style={{flex:1}}><Lbl>Story ID</Lbl><input style={inp} value={sid} onChange={e=>setSid(e.target.value)} placeholder={proj.jiraProjKey+"-123"} onKeyDown={e=>e.key==="Enter"&&sid&&doFetch()}/></div>
+              <div style={{flex:1}}><Lbl>Story ID</Lbl><input style={inp} value={sid} onChange={e=>{setSid(e.target.value);setFetchError("");}} placeholder={proj.jiraProjKey+"-123"} onKeyDown={e=>e.key==="Enter"&&sid&&doFetch()}/></div>
               <Btn v="primary" onClick={()=>sid&&doFetch()}>Fetch story →</Btn>
             </div>
+            {fetchError&&<div style={{marginTop:12,padding:"10px 14px",borderRadius:8,background:"var(--color-background-danger)",border:"1px solid var(--color-text-danger)",color:"var(--color-text-danger)",fontSize:13}}>⚠ {fetchError}</div>}
           </div>
         </div>}
 
@@ -672,7 +1017,7 @@ function Workspace({member}) {
 
         {!loading&&phase==="gap"&&<div>
           <div style={card}><div style={{display:"flex",gap:8,marginBottom:14,alignItems:"center"}}><Tag c="blue">{sid}</Tag><span style={{fontWeight:500}}>GAP Analysis</span></div><div style={{whiteSpace:"pre-wrap",fontSize:14,lineHeight:1.85}}>{gapText}</div></div>
-          <Confirm icon="📝" title="Would you like to write test cases?" onYes={()=>setPhase("ctype")} onNo={reset} yesLabel="Yes, write test cases" noLabel="Done"/>
+          <Confirm icon="📝" title="Would you like to write test cases?" onYes={()=>setPhase("ctype")} yesLabel="Yes, write test cases"/>
         </div>}
 
         {!loading&&phase==="ctype"&&<div style={card}>
@@ -739,8 +1084,9 @@ function Workspace({member}) {
             <div style={{display:"flex",gap:8}}><Btn v="primary" onClick={addManualCase}>Add case</Btn><button onClick={()=>setShowAddCase(false)} style={ghostBtn}>Cancel</button></div>
           </div>}
           <div style={{display:"flex",gap:10,marginBottom:16}}>
-            <Btn v="primary" onClick={()=>{setCases(cs=>cs.map(c=>c.status==="pending"?{...c,status:"approved"}:c));setPhase("jira");}}>✓ Approve All & Continue</Btn>
-            {allDone&&<button onClick={()=>setPhase("jira")} style={ghostBtn}>Continue →</button>}
+            {cases.filter(c=>c.status==="pending").length>0
+              ?<Btn v="primary" onClick={()=>{setCases(cs=>cs.map(c=>c.status==="pending"?{...c,status:"approved"}:c));setPhase("jira");}}>✓ Approve {cases.filter(c=>c.status==="pending").length} Remaining & Continue</Btn>
+              :<Btn v="primary" onClick={()=>setPhase("jira")}>Continue →</Btn>}
           </div>
         </div>}
 
@@ -748,14 +1094,50 @@ function Workspace({member}) {
           <div style={{...card,padding:"16px 20px"}}>
             <div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:14}}>Story <b>{sid}</b> · <b>{approved.length}</b> approved cases · <Tag c={platform==="mobile"?"amber":"blue"}>{platform}</Tag></div>
             <div style={{display:"flex",gap:10}}>
-              <Btn v="primary" onClick={()=>{exportCSV(cases,sid);setPhase("jiraDone");}}>⬇ Export AIO CSV</Btn>
-              <button onClick={()=>setPhase("jiraDone")} style={ghostBtn}>Skip</button>
+              <Btn v="primary" onClick={()=>{exportCSV(cases,sid);setAppUrl("");setPhase("urlPrompt");}}>⬇ Export AIO CSV</Btn>
+              <button onClick={()=>{setAppUrl("");setPhase("urlPrompt");}} style={ghostBtn}>Skip</button>
             </div>
           </div>
         </div>}
 
-        {!loading&&phase==="jiraDone"&&<div>
-          <Confirm icon="🤖" title="Generate automation scripts?" desc={fwName(platform)+" for "+autoable.length+" automatable cases."+(manOnly.length>0?" "+manOnly.length+" manual-only cases included as comments.":"")} onYes={doScripts} onNo={reset} yesLabel={"Yes, generate "+fwName(platform)} noLabel="Done"/>
+        {!loading&&phase==="urlPrompt"&&<div>
+          <div style={card}>
+            <div style={{display:"flex",gap:8,marginBottom:14,alignItems:"center"}}><span style={{fontSize:20}}>🔗</span><span style={{fontWeight:500,fontSize:16}}>Application URL</span></div>
+            <div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:16,lineHeight:1.6}}>Enter the URL of the application under test. This will be used as the base URL when generating your automation scripts.</div>
+            <Lbl>Application URL <span style={{color:"var(--color-text-danger)"}}>*</span></Lbl>
+            <input
+              autoFocus
+              style={{...inp,marginBottom:16,fontSize:14}}
+              value={appUrl}
+              onChange={e=>setAppUrl(e.target.value)}
+              placeholder="https://example.com"
+              onKeyDown={e=>e.key==="Enter"&&appUrl.trim()&&setPhase("scriptSelect")}
+            />
+            <div style={{display:"flex",gap:10}}>
+              <Btn v="primary" onClick={()=>appUrl.trim()&&setPhase("scriptSelect")} disabled={!appUrl.trim()}>Continue to Script Generation →</Btn>
+            </div>
+          </div>
+        </div>}
+
+        {!loading&&phase==="scriptSelect"&&<div>
+          <Banner icon="🤖" title="Select cases to automate" sub={autoable.length+" automatable cases available · "+manOnly.length+" manual-only (excluded)"} color="info"/>
+          <div style={card}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+              <H2>Choose cases for script generation</H2>
+              <div style={{display:"flex",gap:8}}>
+                <button onClick={()=>setSelectedForScripts(autoable.map(c=>c.id))} style={{...ghostBtn,padding:"4px 10px",fontSize:12}}>Select all</button>
+                <button onClick={()=>setSelectedForScripts([])} style={{...ghostBtn,padding:"4px 10px",fontSize:12}}>Clear</button>
+              </div>
+            </div>
+            {autoable.map(c=><label key={c.id} style={{display:"flex",gap:10,padding:"9px 0",borderBottom:"1px solid var(--color-border-tertiary)",cursor:"pointer",alignItems:"center"}}>
+              <input type="checkbox" checked={selectedForScripts.includes(c.id)} onChange={()=>setSelectedForScripts(p=>p.includes(c.id)?p.filter(x=>x!==c.id):[...p,c.id])}/>
+              <Tag c="blue">{c.id}</Tag><Tag c={tcol(c.type)}>{c.type}</Tag><span style={{fontSize:14,flex:1}}>{c.title}</span>
+            </label>)}
+            {autoable.length===0&&<div style={{color:"var(--color-text-tertiary)",fontSize:14}}>No automatable cases.</div>}
+          </div>
+          <div style={{display:"flex",gap:10}}>
+            <Btn v="primary" onClick={()=>selectedForScripts.length>0&&doScripts()} disabled={selectedForScripts.length===0}>Generate Scripts ({selectedForScripts.length} cases)</Btn>
+          </div>
         </div>}
 
         {!loading&&phase==="autoReady"&&<div>
@@ -764,32 +1146,14 @@ function Workspace({member}) {
             <div style={{display:"flex",justifyContent:"space-between",marginBottom:12,alignItems:"center"}}><div style={{fontWeight:500}}>Automation scripts</div><Tag c={platform==="mobile"?"amber":"blue"}>{fwName(platform)}</Tag></div>
             {platform==="mobile"?<Tabs tabs={[{id:"ios",label:"iOS (Appium)"},{id:"android",label:"Android (Appium)"}]} active={tab} onChange={setTab}/>:<Tabs tabs={[{id:"web",label:"Web automation script"}]} active={tab} onChange={setTab}/>}
             <pre style={{background:"var(--color-background-tertiary)",borderRadius:8,padding:16,fontSize:12,fontFamily:"monospace",lineHeight:1.6,overflow:"auto",maxHeight:360,whiteSpace:"pre-wrap",wordBreak:"break-all",margin:0,marginBottom:12}}>{curScript||"No script yet."}</pre>
-            <div style={{display:"flex",gap:8,flexWrap:"wrap"}}><button onClick={()=>navigator.clipboard?.writeText(curScript)} style={ghostBtn}>📋 Copy</button><button onClick={()=>dlFile(curScript,sid+"_"+tab+".js")} style={ghostBtn}>⬇ Download</button></div>
+            <div style={{display:"flex",gap:8,flexWrap:"wrap"}}><button onClick={()=>navigator.clipboard?.writeText(curScript)} style={ghostBtn}>📋 Copy</button><button onClick={()=>dlFile(curScript,tab==="web"?sid+".spec.js":sid+"_"+tab+".test.js","text/javascript")} style={ghostBtn}>⬇ Download</button></div>
           </div>
-          <Confirm icon="💻" title="Export VS Code project scaffold?" desc={"Complete project — config, test files, README — ready to open in VS Code."} onYes={()=>setPhase("vscode")} onNo={()=>setPhase("runAsk")} yesLabel="Yes, export project" noLabel="Skip to execution"/>
-        </div>}
-
-        {!loading&&phase==="vscode"&&<div>
-          <div style={card}><H2>VS Code project files</H2>
-            <div style={{background:"var(--color-background-tertiary)",borderRadius:8,padding:12,marginBottom:16}}>
-              {projFiles&&Object.keys(projFiles).map(f=><div key={f} style={{display:"flex",alignItems:"center",padding:"6px 0",borderBottom:"1px solid var(--color-border-tertiary)"}}>
-                <span style={{fontSize:13,fontFamily:"monospace",color:"var(--color-text-secondary)",flex:1}}>{f}</span>
-                <button onClick={()=>dlFile(projFiles[f],f.split("/").pop())} style={{...ghostBtn,padding:"2px 8px",fontSize:11}}>↓</button>
-              </div>)}
-            </div>
-            <div style={{display:"flex",gap:10}}>
-              <Btn v="primary" onClick={()=>{ const all=Object.entries(projFiles||{}).map(([p,c])=>"=".repeat(60)+"\nFILE: "+p+"\n"+"=".repeat(60)+"\n"+c).join("\n\n"); dlFile(all,(platform==="mobile"?"appium":"web-tests")+"-"+sid+"-project.txt"); setPhase("vscodeDone"); }}>⬇ Download all files</Btn>
-              <button onClick={()=>setPhase("runAsk")} style={ghostBtn}>Skip →</button>
-            </div>
+          <div style={{display:"flex",gap:10}}>
+            <Btn v="primary" onClick={()=>setPhase("runAsk")}>▶ Run Tests</Btn>
           </div>
         </div>}
 
-        {!loading&&phase==="vscodeDone"&&<div>
-          <Banner icon="💻" title="Project downloaded" sub={"Open the .txt file, copy each section into VS Code, then run npm install and npm test."} color="info"/>
-          <Confirm icon="▶️" title="Run scripts in simulated execution?" desc={"Live terminal for "+autoable.length+" automatable tests."} onYes={doRun} onNo={reset} yesLabel="Yes, run" noLabel="Done"/>
-        </div>}
-
-        {!loading&&phase==="runAsk"&&<Confirm icon="▶️" title="Start test execution?" desc={"Live terminal output for "+autoable.length+" automatable scripts."} onYes={doRun} onNo={reset} yesLabel="Yes, run scripts" noLabel="Done"/>}
+        {!loading&&phase==="runAsk"&&<Confirm icon="▶️" title="Start test execution?" desc={"Live terminal output for "+selectedForScripts.length+" selected scripts."} onYes={doRun} yesLabel="Yes, run scripts"/>}
         {phase==="running"&&<div style={card}><div style={{fontWeight:500,marginBottom:12}}>▶ Running tests…</div><Terminal lines={execLines}/></div>}
 
         {phase==="result"&&result&&<div>
@@ -797,29 +1161,240 @@ function Workspace({member}) {
             {[{l:"Total",v:result.total,c:"info"},{l:"Passed",v:result.pass.length,c:"success"},{l:"Failed",v:result.fail.length,c:result.fail.length>0?"danger":"success"}].map(x=><div key={x.l} style={{...card,marginBottom:0,textAlign:"center",padding:20}}><div style={{fontSize:30,fontWeight:500,color:`var(--color-text-${x.c})`}}>{x.v}</div><div style={{fontSize:13,color:"var(--color-text-secondary)",marginTop:2}}>{x.l}</div></div>)}
           </div>
           <div style={card}><div style={{fontWeight:500,marginBottom:10}}>Execution log</div><Terminal lines={execLines}/></div>
-          {result.fail.length>0&&<div style={card}>
-            <div style={{fontWeight:500,marginBottom:10}}>Handle failures</div>
-            <div style={{display:"flex",gap:10,flexWrap:"wrap",alignItems:"center"}}>
-              <Btn v="primary" onClick={doFix}>🔧 Fix scripts</Btn>
-              {!bugDone&&!showBugForm&&<Btn v="danger" onClick={()=>setShowBugForm(true)}>🐛 File Jira bug</Btn>}
-              {bugDone&&<Tag c="green">✓ {bugDone.bid}{bugDone.jKey?" → "+bugDone.jKey:""} filed</Tag>}
-            </div>
-            {showBugForm&&<div style={{marginTop:16,padding:16,borderRadius:10,border:"1px solid var(--color-border-secondary)",background:"var(--color-background-primary)"}}>
-              <H2>File bug report</H2>
-              <Lbl>Summary</Lbl><input style={{...inp,marginBottom:10}} value={bf.summary} onChange={e=>setBf(p=>({...p,summary:e.target.value}))} placeholder={"Failure in "+sid}/>
-              <Lbl>Severity</Lbl><select style={{...sel,marginBottom:10}} value={bf.sev} onChange={e=>setBf(p=>({...p,sev:e.target.value}))}>{["Critical","High","Medium","Low"].map(s=><option key={s}>{s}</option>)}</select>
-              <Lbl>Description</Lbl><textarea style={{...ta,marginBottom:12}} rows={3} value={bf.desc} onChange={e=>setBf(p=>({...p,desc:e.target.value}))} placeholder="Steps to reproduce…"/>
-              <div style={{display:"flex",gap:8}}><Btn v="danger" onClick={doFileBug}>Submit → Jira</Btn><button onClick={()=>setShowBugForm(false)} style={ghostBtn}>Cancel</button></div>
-            </div>}
-          </div>}
-          <div style={{display:"flex",gap:10,marginTop:4}}><button onClick={reset} style={ghostBtn}>↩ New story</button><button onClick={()=>exportCSV(cases,sid)} style={ghostBtn}>⬇ Re-export CSV</button></div>
+          {result.fail.length>0&&<Btn v="primary" onClick={doFix}>🔧 Fix scripts</Btn>}
+          <div style={{display:"flex",gap:10,marginTop:12}}>
+            {result.fail.length>0
+              ?<Btn v="primary" onClick={()=>setPhase("bugReport")}>Bug Report →</Btn>
+              :<Btn v="primary" onClick={()=>{setCoverageText(t=>t||"1");setPhase("coverage");}}>Coverage Report →</Btn>}
+          </div>
         </div>}
+
+        {!loading&&phase==="bugReport"&&<div>
+          <div style={{...card,padding:"12px 20px",display:"flex",alignItems:"center",gap:16,marginBottom:4}}>
+            <div style={{flex:1,fontSize:14}}>Story: <b>{sid}</b> · {result?<><Tag c={result.fail.length>0?"red":"green"}>{result.pass.length} passed</Tag> <Tag c={result.fail.length>0?"red":"green"}>{result.fail.length} failed</Tag></>:<Tag>No execution</Tag>}</div>
+          </div>
+          {result?.fail?.filter(c=>!sessionBugs.some(b=>b.tcId===c.id)).length>0&&<div style={card}>
+            <H2>Failed cases</H2>
+            {result.fail.filter(c=>!sessionBugs.some(b=>b.tcId===c.id)).map(c=><div key={c.id} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 0",borderBottom:"1px solid var(--color-border-tertiary)"}}>
+              <Tag c="red">{c.id}</Tag><span style={{flex:1,fontSize:13}}>{c.title}</span>
+              <button onClick={()=>{setBf({tcId:c.id,summary:c.title+" is not working as expected",sev:"High",steps:(c.steps||[]).map((s,i)=>`${i+1}. ${s}`).join("\n")||"1. Reproduce the issue",expected:c.expected||"The feature works as designed",actual:"Timeout error — element not found after 30s during test execution",screenshot:null,_err:false});setShowBugForm(true);}} style={{...ghostBtn,padding:"4px 10px",fontSize:12}}>🐛 File Bug</button>
+            </div>)}
+          </div>}
+          <div style={card}>
+            <H2>File a bug report</H2>
+            <Lbl>Summary <span style={{color:"var(--color-text-danger)"}}>*</span></Lbl>
+            <input style={{...inp,marginBottom:10,borderColor:bf._err&&!bf.summary.trim()?"var(--color-text-danger)":undefined}} value={bf.summary} onChange={e=>setBf(p=>({...p,summary:e.target.value,_err:false}))} placeholder="e.g. Login button unresponsive after entering valid credentials"/>
+            <Lbl>Severity</Lbl>
+            <select style={{...sel,marginBottom:10}} value={bf.sev} onChange={e=>setBf(p=>({...p,sev:e.target.value}))}>{["Critical","High","Medium","Low"].map(s=><option key={s}>{s}</option>)}</select>
+            <Lbl>Steps to Reproduce <span style={{color:"var(--color-text-danger)"}}>*</span></Lbl>
+            <textarea style={{...ta,marginBottom:10,borderColor:bf._err&&!bf.steps.trim()?"var(--color-text-danger)":undefined}} rows={4} value={bf.steps} onChange={e=>setBf(p=>({...p,steps:e.target.value,_err:false}))} placeholder={"1. Navigate to the feature\n2. Perform the action\n3. Observe the result"}/>
+            <Lbl>Expected Result <span style={{color:"var(--color-text-danger)"}}>*</span></Lbl>
+            <input style={{...inp,marginBottom:10,borderColor:bf._err&&!bf.expected.trim()?"var(--color-text-danger)":undefined}} value={bf.expected} onChange={e=>setBf(p=>({...p,expected:e.target.value,_err:false}))} placeholder="e.g. User is redirected to the dashboard"/>
+            <Lbl>Actual Result <span style={{color:"var(--color-text-danger)"}}>*</span></Lbl>
+            <input style={{...inp,marginBottom:10,borderColor:bf._err&&!bf.actual.trim()?"var(--color-text-danger)":undefined}} value={bf.actual} onChange={e=>setBf(p=>({...p,actual:e.target.value,_err:false}))} placeholder="e.g. Page shows a 500 error / Spinner never stops / Element not clickable"/>
+            <Lbl>Screenshot (optional)</Lbl>
+            <div style={{marginBottom:bf._err?4:12}}>
+              {bf.screenshot
+                ?<div style={{position:"relative",display:"inline-block"}}>
+                    <img src={bf.screenshot} alt="Screenshot" style={{maxWidth:"100%",maxHeight:200,borderRadius:8,border:"1px solid var(--color-border-secondary)",display:"block"}}/>
+                    <button onClick={()=>setBf(p=>({...p,screenshot:null}))} style={{position:"absolute",top:6,right:6,background:"rgba(0,0,0,0.55)",color:"#fff",border:"none",borderRadius:"50%",width:24,height:24,cursor:"pointer",fontSize:14,display:"flex",alignItems:"center",justifyContent:"center",lineHeight:1}}>✕</button>
+                  </div>
+                :<label style={{display:"flex",alignItems:"center",gap:10,cursor:"pointer",padding:"14px 16px",borderRadius:8,border:"2px dashed var(--color-border-secondary)",background:"var(--color-background-secondary)"}}>
+                    <span style={{fontSize:22}}>📷</span>
+                    <div><div style={{fontSize:13,fontWeight:500,color:"var(--color-text-secondary)"}}>Click to upload screenshot</div><div style={{fontSize:12,color:"var(--color-text-tertiary)",marginTop:2}}>PNG, JPG, GIF supported</div></div>
+                    <input type="file" accept="image/*" style={{display:"none"}} onChange={e=>{
+                      const file=e.target.files?.[0]; if(!file) return;
+                      const reader=new FileReader();
+                      reader.onload=ev=>setBf(p=>({...p,screenshot:ev.target.result}));
+                      reader.readAsDataURL(file);
+                    }}/>
+                  </label>}
+            </div>
+            {bf._err&&<div style={{color:"var(--color-text-danger)",fontSize:12,marginBottom:10}}>Please fill in all required fields (*) before submitting.</div>}
+            <Btn v="danger" onClick={async()=>{
+              if(!bf.summary.trim()||!bf.steps.trim()||!bf.expected.trim()||!bf.actual.trim()){setBf(p=>({...p,_err:true}));return;}
+              setLoading(true);setLmsg("Filing bug…");
+              const stepLines=bf.steps.split("\n").filter(Boolean);
+              const adfDesc={type:"doc",version:1,content:[
+                {type:"heading",attrs:{level:3},content:[{type:"text",text:"Steps to Reproduce"}]},
+                {type:"orderedList",content:stepLines.length>0?stepLines.map(s=>({type:"listItem",content:[{type:"paragraph",content:[{type:"text",text:s.replace(/^\d+\.\s*/,"")}]}]})):[{type:"listItem",content:[{type:"paragraph",content:[{type:"text",text:"See summary"}]}]}]},
+                {type:"heading",attrs:{level:3},content:[{type:"text",text:"Expected Result"}]},
+                {type:"paragraph",content:[{type:"text",text:bf.expected||"—"}]},
+                {type:"heading",attrs:{level:3},content:[{type:"text",text:"Actual Result"}]},
+                {type:"paragraph",content:[{type:"text",text:bf.actual||"—"}]},
+                ...(bf.screenshot?[{type:"heading",attrs:{level:3},content:[{type:"text",text:"Screenshot"}]},{type:"paragraph",content:[{type:"text",text:"A screenshot was captured and saved in the QA Platform."}]}]:[]),
+                {type:"heading",attrs:{level:3},content:[{type:"text",text:"Story"}]},
+                {type:"paragraph",content:[{type:"text",text:sid+" · Filed by "+member.name}]},
+              ]};
+              const bug={bid:"BUG-"+uid().toUpperCase(),sid,summary:bf.summary||"Bug in "+sid,sev:bf.sev,who:member.name,jKey:null,status:"Open",steps:stepLines,expected:bf.expected,actual:bf.actual,screenshot:bf.screenshot||null,tcId:bf.tcId||null};
+              DB.bugs.push(bug);saveDB();pushNotif("admin","🐛 "+bug.bid+" filed for "+sid);
+              const bugCase={id:bug.bid,title:bf.summary||"Bug in "+sid,type:"negative",platform,preconditions:"",steps:stepLines.length>0?stepLines:["Reproduce the bug"],expected:bf.expected||"Bug is fixed",automatable:false,status:"approved",fromBug:true,sev:bf.sev};
+              setCases(cs=>[...cs,bugCase]);
+              setSessionBugs(p=>[...p,bug]);setBf({summary:"",sev:"High",steps:"",expected:"",actual:"",screenshot:null,_err:false});setLoading(false);
+            }}>Submit Bug</Btn>
+          </div>
+          {sessionBugs.length>0&&<div style={card}>
+            <H2>Bugs filed this session</H2>
+            {sessionBugs.map(b=><div key={b.bid} style={{borderBottom:"1px solid var(--color-border-tertiary)",padding:"8px 0"}}>
+              {editingBugId===b.bid
+                ?<div style={{display:"flex",flexDirection:"column",gap:8,paddingTop:4}}>
+                    <input style={{...inp,marginBottom:0}} value={editBugForm.summary} onChange={e=>setEditBugForm(p=>({...p,summary:e.target.value}))} placeholder="Summary"/>
+                    <select style={{...sel,marginBottom:0}} value={editBugForm.sev} onChange={e=>setEditBugForm(p=>({...p,sev:e.target.value}))}>{["Critical","High","Medium","Low"].map(s=><option key={s}>{s}</option>)}</select>
+                    <textarea style={{...ta,marginBottom:0}} rows={2} value={editBugForm.desc||""} onChange={e=>setEditBugForm(p=>({...p,desc:e.target.value}))} placeholder="Description"/>
+                    <div style={{display:"flex",gap:8}}>
+                      <Btn v="primary" onClick={()=>{
+                        const updated={...b,...editBugForm};
+                        setSessionBugs(p=>p.map(x=>x.bid===b.bid?updated:x));
+                        DB.bugs=DB.bugs.map(x=>x.bid===b.bid?{...x,...editBugForm}:x); saveDB();
+                        setCases(cs=>cs.map(c=>c.id===b.bid?{...c,title:editBugForm.summary,sev:editBugForm.sev,steps:editBugForm.desc?editBugForm.desc.split("\n").filter(Boolean):c.steps}:c));
+                        setEditingBugId(null);
+                      }}>Save</Btn>
+                      <button onClick={()=>setEditingBugId(null)} style={ghostBtn}>Cancel</button>
+                    </div>
+                  </div>
+                :<div style={{display:"flex",flexDirection:"column",gap:6}}>
+                    <div style={{display:"flex",gap:10,alignItems:"center"}}>
+                      <Tag c="red">{b.bid}</Tag>
+                      <span style={{flex:1,fontSize:13,fontWeight:500}}>{b.summary}</span>
+                      <Tag c={b.sev==="Critical"||b.sev==="High"?"red":"amber"}>{b.sev}</Tag>
+                      {b.jKey&&<Tag c="green">{b.jKey}</Tag>}
+                      <Tag c="blue">TC</Tag>
+                      <button title="Edit" onClick={()=>{setEditingBugId(b.bid);setEditBugForm({summary:b.summary,sev:b.sev,desc:b.desc||""});}} style={{background:"none",border:"none",cursor:"pointer",color:"var(--color-text-tertiary)",fontSize:14,padding:"2px 5px"}}>✎</button>
+                      <button title="Delete" onClick={()=>{
+                        setSessionBugs(p=>p.filter(x=>x.bid!==b.bid));
+                        DB.bugs=DB.bugs.filter(x=>x.bid!==b.bid); saveDB();
+                        setCases(cs=>cs.filter(c=>c.id!==b.bid));
+                      }} style={{background:"none",border:"none",cursor:"pointer",color:"var(--color-text-danger)",fontSize:14,padding:"2px 5px"}}>✕</button>
+                    </div>
+                    {b.actual&&<div style={{fontSize:12,color:"var(--color-text-secondary)",paddingLeft:4}}>Actual: {b.actual}</div>}
+                    {b.screenshot&&<img src={b.screenshot} alt="Screenshot" title="Click to view full size" onClick={()=>window.open(b.screenshot)} style={{maxWidth:200,maxHeight:100,borderRadius:6,border:"1px solid var(--color-border-secondary)",cursor:"pointer",marginTop:2}}/>}
+                  </div>}
+            </div>)}
+          </div>}
+          {sessionBugs.length>0&&proj?.jiraToken&&(()=>{
+            const unlinked=sessionBugs.filter(b=>!b.jKey);
+            return <div style={{...card,background:unlinked.length===0?"var(--color-background-success)":"var(--color-background-info)",border:"1px solid "+(unlinked.length===0?"var(--color-text-success)":"var(--color-text-info)")}}>
+              {unlinked.length===0
+                ?<div style={{display:"flex",alignItems:"center",gap:10}}>
+                    <span style={{fontSize:20}}>✅</span>
+                    <div>
+                      <div style={{fontWeight:500,fontSize:14,color:"var(--color-text-success)"}}>All bugs linked to Jira</div>
+                      <div style={{fontSize:12,color:"var(--color-text-secondary)",marginTop:2}}>{sessionBugs.length} bug{sessionBugs.length!==1?"s":""} created and linked to story <b>{sid}</b> in {proj.jiraProjKey}</div>
+                    </div>
+                    <div style={{marginLeft:"auto",display:"flex",gap:6,flexWrap:"wrap"}}>{sessionBugs.map(b=>b.jKey&&<Tag key={b.bid} c="green">{b.jKey}</Tag>)}</div>
+                  </div>
+                :<div style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
+                    <div style={{flex:1}}>
+                      <div style={{fontWeight:500,fontSize:14,color:"var(--color-text-info)"}}>Link bugs to Jira</div>
+                      <div style={{fontSize:12,color:"var(--color-text-secondary)",marginTop:2}}>{unlinked.length} bug{unlinked.length!==1?"s":""} ready to be created in <b>{proj.jiraProjKey}</b> and linked to story <b>{sid}</b></div>
+                    </div>
+                    <button onClick={async()=>{
+                      setLoading(true);setLmsg("Creating bugs in Jira and linking to "+sid+"…");
+                      const updated=[...sessionBugs];
+                      let failCount=0;
+                      for(const b of updated.filter(x=>!x.jKey)){
+                        try{
+                          const stepLines=(b.steps||[]);
+                          const adfDesc={type:"doc",version:1,content:[
+                            {type:"heading",attrs:{level:3},content:[{type:"text",text:"Steps to Reproduce"}]},
+                            {type:"orderedList",content:stepLines.length>0?stepLines.map(s=>({type:"listItem",content:[{type:"paragraph",content:[{type:"text",text:s.replace(/^\d+\.\s*/,"")}]}]})):[{type:"listItem",content:[{type:"paragraph",content:[{type:"text",text:"See summary"}]}]}]},
+                            {type:"heading",attrs:{level:3},content:[{type:"text",text:"Expected Result"}]},
+                            {type:"paragraph",content:[{type:"text",text:b.expected||"—"}]},
+                            {type:"heading",attrs:{level:3},content:[{type:"text",text:"Actual Result"}]},
+                            {type:"paragraph",content:[{type:"text",text:b.actual||"—"}]},
+                            ...(b.screenshot?[{type:"heading",attrs:{level:3},content:[{type:"text",text:"Screenshot"}]},{type:"paragraph",content:[{type:"text",text:"A screenshot was captured and saved in the QA Platform."}]}]:[]),
+                            {type:"heading",attrs:{level:3},content:[{type:"text",text:"Related Story"}]},
+                            {type:"paragraph",content:[{type:"text",text:sid+" · Filed by "+member.name}]},
+                          ]};
+                          const res=await callJira(proj,"POST","/issue",{fields:{project:{key:proj.jiraProjKey},summary:b.summary,description:adfDesc,issuetype:{name:"Bug"},priority:{name:b.sev}}});
+                          b.jKey=res.key;
+                          DB.bugs=DB.bugs.map(x=>x.bid===b.bid?{...x,jKey:b.jKey}:x);
+                          // Link bug to the user story
+                          await callJira(proj,"POST","/issueLink",{type:{name:"Relates"},inwardIssue:{key:res.key},outwardIssue:{key:sid}}).catch(()=>
+                            callJira(proj,"POST","/issueLink",{type:{name:"relates to"},inwardIssue:{key:res.key},outwardIssue:{key:sid}}).catch(()=>{})
+                          );
+                        }catch(e){failCount++;}
+                      }
+                      saveDB();setSessionBugs([...updated]);setLoading(false);
+                      if(failCount>0) alert(failCount+" bug(s) could not be created in Jira. Check your Jira configuration (URL, token, project key).");
+                      else showToast("Bugs created in Jira and linked to "+sid);
+                    }} style={{padding:"10px 20px",borderRadius:8,border:"none",cursor:"pointer",fontWeight:600,fontSize:14,background:"#0052CC",color:"#fff",display:"flex",alignItems:"center",gap:8,flexShrink:0}}>🔗 Link {unlinked.length} bug{unlinked.length!==1?"s":""} to Jira</button>
+                  </div>}
+            </div>;
+          })()}
+          <div style={{display:"flex",gap:10,marginTop:12}}>
+            <Btn v="primary" onClick={()=>{setCoverageText(t=>t||"1");setPhase("coverage");}}>Coverage Report →</Btn>
+          </div>
+        </div>}
+
+        {!loading&&phase==="coverage"&&(()=>{
+          const byType=[
+            {label:"Happy flow",value:approved.filter(c=>c.type==="happy").length,color:"#4caf50"},
+            {label:"Edge cases",value:approved.filter(c=>c.type==="edge").length,color:"#f59e0b"},
+            {label:"Negative",value:approved.filter(c=>c.type==="negative").length,color:"#3b82f6"},
+          ].filter(d=>d.value>0);
+          const execData=result?[
+            {label:"Passed",value:result.pass.length,color:"#4caf50"},
+            {label:"Failed",value:result.fail.length,color:"#ef4444"},
+          ].filter(d=>d.value>0):[];
+          const autoData=[
+            {label:"Automatable",value:autoable.length,color:"#6366f1"},
+            {label:"Manual only",value:manOnly.length,color:"#9ca3af"},
+          ].filter(d=>d.value>0);
+          const stlc=[
+            {label:"Requirements Analysis",value:sdata?100:0,color:"#4caf50"},
+            {label:"Test Design",value:cases.length>0?100:0,color:"#3b82f6"},
+            {label:"Test Review",value:cases.length>0?Math.round(approved.length/cases.length*100):0,color:"#f59e0b"},
+            {label:"Test Execution",value:result?100:0,color:"#8b5cf6"},
+            {label:"Defect Management",value:(sessionBugs.length>0||(result&&result.fail.length===0))?100:0,color:"#ef4444"},
+          ];
+          const overall=Math.round(stlc.reduce((s,p)=>s+p.value,0)/stlc.length);
+          const scoreColor=overall>=80?"var(--color-text-success)":overall>=60?"var(--color-text-warning)":"var(--color-text-danger)";
+          const scoreBarColor=overall>=80?"#4caf50":overall>=60?"#f59e0b":"#ef4444";
+          return <div id="coverage-print-area">
+            <div style={{...card,marginBottom:12}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:10}}>
+                <div style={{display:"flex",gap:8,alignItems:"center"}}><Tag c="blue">{sid}</Tag><span style={{fontWeight:600,fontSize:15}}>Coverage Report</span><Tag c={platform==="mobile"?"amber":"blue"}>{platform}</Tag></div>
+                <div style={{display:"flex",gap:8}}>
+                  <button onClick={()=>window.print()} style={ghostBtn}>⬇ Download PDF</button>
+                  <button onClick={saveAndReset} style={ghostBtn}>↩ New story</button>
+                </div>
+              </div>
+              <div style={{display:"flex",alignItems:"center",gap:16,marginTop:14,padding:"14px 16px",borderRadius:10,background:"var(--color-background-secondary)"}}>
+                <div style={{textAlign:"center",minWidth:72}}>
+                  <div style={{fontSize:38,fontWeight:700,color:scoreColor,lineHeight:1}}>{overall}%</div>
+                  <div style={{fontSize:11,color:"var(--color-text-tertiary)",marginTop:4}}>Overall Score</div>
+                </div>
+                <div style={{flex:1}}>
+                  <div style={{height:12,background:"var(--color-border-tertiary)",borderRadius:6,overflow:"hidden",marginBottom:8}}>
+                    <div style={{height:"100%",width:overall+"%",background:scoreBarColor,borderRadius:6}}/>
+                  </div>
+                  <div style={{fontSize:12,color:"var(--color-text-secondary)",display:"flex",gap:16,flexWrap:"wrap"}}>
+                    <span><b>{approved.length}</b> approved cases</span>
+                    {result?<span><b>{result.pass.length}</b> passed · <b>{result.fail.length}</b> failed</span>:<span>No execution</span>}
+                    <span><b>{sessionBugs.length}</b> bug{sessionBugs.length!==1?"s":""} filed</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+              <div style={card}><DonutChart title="Test Cases by Type" data={byType} size={150}/></div>
+              <div style={card}>
+                {execData.length>0
+                  ?<DonutChart title="Execution Results" data={execData} size={150}/>
+                  :<div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",minHeight:190,color:"var(--color-text-tertiary)",fontSize:13,textAlign:"center"}}><div style={{fontSize:32,marginBottom:8}}>⏭</div>No execution performed</div>}
+              </div>
+              <div style={card}><DonutChart title="Automation Coverage" data={autoData} size={150}/></div>
+              <div style={card}><BarChart title="STLC Phase Coverage" data={stlc}/></div>
+            </div>
+          </div>;
+        })()}
       </div>
 
-      {chat&&phase!=="input"&&<div style={{width:290,flexShrink:0,display:"flex",flexDirection:"column",height:"calc(100vh - 120px)",position:"sticky",top:0}}>
+      {phase!=="input"&&<div style={{width:290,flexShrink:0,display:chat?"flex":"none",flexDirection:"column",height:"calc(100vh - 120px)",position:"sticky",top:0}}>
         <div style={{...card,flex:1,display:"flex",flexDirection:"column",overflow:"hidden",padding:16}}>
           <div style={{fontWeight:500,fontSize:14,marginBottom:12,display:"flex",alignItems:"center",gap:8}}>🤖 QA Assistant <Tag c="blue">{sid}</Tag></div>
-          <div style={{flex:1,overflow:"auto"}}><AIChat proj={proj} sid={sid} sdata={sdata}/></div>
+          <div style={{flex:1,overflow:"auto"}}><AIChat proj={proj} sid={sid} sdata={sdata} cases={cases} gapText={gapText} result={result} sessionBugs={sessionBugs} coverageText={coverageText} platform={platform}/></div>
         </div>
       </div>}
     </div>
@@ -827,18 +1402,37 @@ function Workspace({member}) {
 }
 
 /* ─── Login ───────────────────────────────────────────────────────────────── */
+const CREDS_KEY="qa_remember_creds";
 function LoginPage({onLogin}) {
-  const [mode,setMode]=useState("admin"); const [email,setEmail]=useState(""); const [pass,setPass]=useState(""); const [err,setErr]=useState(""); const [remember,setRemember]=useState(false);
+  const saved=React.useMemo(()=>{try{return JSON.parse(localStorage.getItem(CREDS_KEY))||null;}catch{return null;}},[]);
+  const [mode,setMode]=useState(saved?.mode||"admin");
+  const [email,setEmail]=useState(saved?.email||"");
+  const [pass,setPass]=useState(saved?.pass||"");
+  const [err,setErr]=useState("");
+  const [remember,setRemember]=useState(!!saved);
   const login=()=>{
-    if(mode==="admin"){if(email==="admin"&&pass==="admin"){onLogin({role:"admin",id:"admin"},remember);return;}setErr("Use admin / admin");return;}
-    const m=DB.members.find(x=>x.email===email&&x.password===pass); if(m){onLogin({role:"member",member:m,id:m.id},remember);return;} setErr("Invalid credentials");
+    if(mode==="admin"){
+      if(email==="admin"&&pass==="admin"){
+        if(remember){localStorage.setItem(CREDS_KEY,JSON.stringify({mode,email,pass}));}
+        else{localStorage.removeItem(CREDS_KEY);}
+        onLogin({role:"admin",id:"admin"},remember);return;
+      }
+      setErr("Use admin / admin");return;
+    }
+    const m=DB.members.find(x=>x.email===email&&x.password===pass);
+    if(m){
+      if(remember){localStorage.setItem(CREDS_KEY,JSON.stringify({mode,email,pass}));}
+      else{localStorage.removeItem(CREDS_KEY);}
+      onLogin({role:"member",member:m,id:m.id},remember);return;
+    }
+    setErr("Invalid credentials");
   };
   return <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"var(--color-background-tertiary)"}}>
     <div style={{...card,width:380,padding:36}}>
       <div style={{fontSize:22,fontWeight:500,marginBottom:2}}>QA AI Platform</div>
       <div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:24}}>AI-powered QA workflow management</div>
       <div style={{display:"flex",gap:8,marginBottom:20}}>
-        {["admin","member"].map(r=><button key={r} onClick={()=>{setMode(r);setErr("");}} style={{flex:1,padding:"8px 0",borderRadius:8,border:r===mode?"none":"1px solid var(--color-border-secondary)",background:r===mode?"var(--color-text-info)":"transparent",color:r===mode?"#fff":"var(--color-text-secondary)",cursor:"pointer",fontSize:14,fontWeight:500}}>{r==="admin"?"QA Lead":"Team Member"}</button>)}
+        {["admin","member"].map(r=><button key={r} onClick={()=>{setMode(r);setErr("");setEmail(saved?.mode===r?saved.email:"");setPass(saved?.mode===r?saved.pass:"");}} style={{flex:1,padding:"8px 0",borderRadius:8,border:r===mode?"none":"1px solid var(--color-border-secondary)",background:r===mode?"var(--color-text-info)":"transparent",color:r===mode?"#fff":"var(--color-text-secondary)",cursor:"pointer",fontSize:14,fontWeight:500}}>{r==="admin"?"QA Lead":"Team Member"}</button>)}
       </div>
       <Lbl>{mode==="admin"?"Username":"Email"}</Lbl>
       <input style={{...inp,marginBottom:12}} value={email} onChange={e=>setEmail(e.target.value)} placeholder={mode==="admin"?"admin":"jane@company.com"}/>
@@ -856,16 +1450,55 @@ function LoginPage({onLogin}) {
 
 /* ─── Root App ────────────────────────────────────────────────────────────── */
 const SESSION_KEY="qa_session";
-function loadSession(){try{const s=JSON.parse(localStorage.getItem(SESSION_KEY)||sessionStorage.getItem(SESSION_KEY));if(!s)return null;if(s.role==="admin")return s;if(s.role==="member"){const m=DB.members.find(x=>x.id===s.id);return m?{role:"member",member:m,id:m.id}:null;}return null;}catch{return null;}}
+function loadSession(){
+  try{
+    // localStorage = Remember Me checked (persists after browser close)
+    const persisted=localStorage.getItem(SESSION_KEY);
+    if(persisted){
+      const s=JSON.parse(persisted);
+      if(s?.remember===true){
+        if(s.role==="admin")return s;
+        if(s.role==="member"){const m=DB.members.find(x=>x.id===s.id);return m?{role:"member",member:m,id:m.id}:null;}
+      }
+      localStorage.removeItem(SESSION_KEY); // stale/old entry without remember=true — clear it
+    }
+    // sessionStorage = Remember Me NOT checked (expires when browser closes)
+    const session=sessionStorage.getItem(SESSION_KEY);
+    if(session){
+      const s=JSON.parse(session);
+      if(s?.role==="admin")return s;
+      if(s?.role==="member"){const m=DB.members.find(x=>x.id===s.id);return m?{role:"member",member:m,id:m.id}:null;}
+    }
+    return null;
+  }catch{return null;}
+}
 function App() {
   const [user,setUser]=useState(loadSession); const [page,setPage]=useState(()=>{const u=loadSession();return u?.role==="admin"?"dashboard":"workspace";}); const [,tick]=useState(0);
+  const [savedStories,setSavedStories]=useState(()=>[...DB.savedStories]);
+  const [restoreTarget,setRestoreTarget]=useState(null);
+  const [activeSid,setActiveSid]=useState("");
+  const [renamingId,setRenamingId]=useState(null); const [renameVal,setRenameVal]=useState("");
+  const [renamingCatId,setRenamingCatId]=useState(null); const [renameCatVal,setRenameCatVal]=useState("");
+  const renameCat=(id,name)=>{if(!name.trim())return;DB.categories=DB.categories.map(c=>c.id===id?{...c,name:name.trim()}:c);saveDB();refreshSaved();setRenamingCatId(null);};
+  const [,forceUpdate]=useState(0);
+  const refreshSaved=()=>{
+    DB.categories=DB.categories.filter(c=>DB.savedStories.some(s=>s.categoryId===c.id));
+    setSavedStories([...DB.savedStories]);forceUpdate(x=>x+1);
+  };
+  const deleteSnap=id=>{
+    DB.savedStories=DB.savedStories.filter(s=>s.id!==id);
+    DB.categories=DB.categories.filter(c=>DB.savedStories.some(s=>s.categoryId===c.id));
+    saveDB();refreshSaved();
+  };
+  const renameSnap=(id,name)=>{DB.savedStories=DB.savedStories.map(s=>s.id===id?{...s,name}:s);saveDB();refreshSaved();setRenamingId(null);};
   const handleLogin=(u,remember)=>{
-    const data=u.role==="admin"?{role:"admin",id:"admin"}:{role:"member",id:u.id};
-    if(remember){localStorage.setItem(SESSION_KEY,JSON.stringify(data));sessionStorage.removeItem(SESSION_KEY);}
-    else{sessionStorage.setItem(SESSION_KEY,JSON.stringify(data));localStorage.removeItem(SESSION_KEY);}
+    const data=u.role==="admin"?{role:"admin",id:"admin",remember}:{role:"member",id:u.id,remember};
+    localStorage.removeItem(SESSION_KEY); sessionStorage.removeItem(SESSION_KEY);
+    if(remember){localStorage.setItem(SESSION_KEY,JSON.stringify(data));}
+    else{sessionStorage.setItem(SESSION_KEY,JSON.stringify(data));}
     setUser(u); setPage(u.role==="admin"?"dashboard":"workspace");
   };
-  const handleLogout=()=>{localStorage.removeItem(SESSION_KEY);sessionStorage.removeItem(SESSION_KEY);setUser(null);};
+  const handleLogout=()=>{localStorage.removeItem(SESSION_KEY);sessionStorage.removeItem(SESSION_KEY);setUser(null);setPage("workspace");};
   if(!user) return <LoginPage onLogin={handleLogin}/>;
   const adminNav=[{sec:"Overview",items:[{id:"dashboard",label:"Dashboard",icon:"📊"}]},{sec:"Manage",items:[{id:"members",label:"Members",icon:"👥"},{id:"projects",label:"Projects",icon:"📁"},{id:"assign",label:"Assignments",icon:"🔗"}]},{sec:"Reports",items:[{id:"bugs",label:"Bug tracker",icon:"🐛"}]}];
   const memberNav=[{sec:"Work",items:[{id:"workspace",label:"Workspace",icon:"🖥"}]}];
@@ -884,6 +1517,60 @@ function App() {
               <span>{n.icon}</span>{n.label}{ob>0&&<span style={{marginLeft:"auto",background:"var(--color-text-danger)",color:"#fff",borderRadius:20,padding:"0 6px",fontSize:11}}>{ob}</span>}
             </div>;})}
         </div>)}
+        {user.role==="member"&&savedStories.length>0&&(()=>{
+          const isActive=s=>s.sid===activeSid&&page==="workspace";
+          const StoryCard=({s})=>(
+            <div key={s.id} style={{borderRadius:7,padding:"8px 9px",background:isActive(s)?"var(--color-background-info)":"var(--color-background-primary)",border:isActive(s)?"1px solid var(--color-text-info)":"1px solid var(--color-border-tertiary)",cursor:renamingId===s.id?"default":"pointer",transition:"border-color 0.15s",borderLeft:isActive(s)?"3px solid var(--color-text-info)":"1px solid var(--color-border-tertiary)"}}
+              onMouseEnter={e=>{if(renamingId!==s.id&&!isActive(s))e.currentTarget.style.borderColor="var(--color-border-primary)";}}
+              onMouseLeave={e=>{if(!isActive(s))e.currentTarget.style.borderColor="var(--color-border-tertiary)";}}
+              onClick={()=>{if(renamingId!==s.id){setRestoreTarget(s);setPage("workspace");}}}>
+              {renamingId===s.id
+                ?<div style={{display:"flex",gap:4}} onClick={e=>e.stopPropagation()}>
+                    <input autoFocus style={{flex:1,fontSize:12,padding:"3px 7px",borderRadius:5,border:"1px solid var(--color-border-primary)",background:"var(--color-background-secondary)",color:"var(--color-text-primary)",outline:"none"}} value={renameVal} onChange={e=>setRenameVal(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")renameSnap(s.id,renameVal||s.sid);if(e.key==="Escape")setRenamingId(null);}}/>
+                    <button onClick={()=>renameSnap(s.id,renameVal||s.sid)} style={{background:"none",border:"none",cursor:"pointer",color:"var(--color-text-success)",fontSize:14,padding:"0 2px"}}>✓</button>
+                  </div>
+                :<div>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+                      <span style={{fontSize:12,fontWeight:500,color:"var(--color-text-primary)",flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{s.name}</span>
+                      <div style={{display:"flex",gap:1,marginLeft:4,flexShrink:0,opacity:0.7}} onClick={e=>e.stopPropagation()}>
+                        <button title="Rename" onClick={()=>{setRenamingId(s.id);setRenameVal(s.name);}} style={{background:"none",border:"none",cursor:"pointer",color:"var(--color-text-tertiary)",fontSize:11,padding:"2px 3px",borderRadius:3}}>✎</button>
+                        <button title="Delete" onClick={()=>deleteSnap(s.id)} style={{background:"none",border:"none",cursor:"pointer",color:"var(--color-text-danger)",fontSize:11,padding:"2px 3px",borderRadius:3}}>✕</button>
+                      </div>
+                    </div>
+                    <div style={{display:"flex",gap:3,flexWrap:"wrap"}}>
+                      <Tag c="blue">{s.sid}</Tag>
+                      {(s.cases?.filter(c=>c.status==="approved")?.length||0)>0&&<Tag c="green">{s.cases.filter(c=>c.status==="approved").length} TC</Tag>}
+                      {s.coverageText&&<Tag c="green">✓</Tag>}
+                    </div>
+                  </div>}
+            </div>);
+          const cats=DB.categories;
+          const grouped=cats.map(c=>({cat:c,stories:savedStories.filter(s=>s.categoryId===c.id)})).filter(g=>g.stories.length>0);
+          const uncategorized=savedStories.filter(s=>!s.categoryId);
+          return <div style={{padding:"6px 12px 12px"}}>
+            <div style={{fontSize:11,fontWeight:500,color:"var(--color-text-tertiary)",textTransform:"uppercase",letterSpacing:"0.07em",padding:"10px 8px 6px"}}>Saved Stories</div>
+            {grouped.map(({cat,stories})=>(
+              <div key={cat.id} style={{marginBottom:10}}>
+                <div style={{fontSize:11,fontWeight:600,color:"var(--color-text-secondary)",padding:"2px 4px 5px",display:"flex",alignItems:"center",gap:4}}>
+                  <span style={{fontSize:10}}>📁</span>
+                  {renamingCatId===cat.id
+                    ?<input autoFocus style={{flex:1,fontSize:11,padding:"1px 5px",borderRadius:4,border:"1px solid var(--color-border-primary)",background:"var(--color-background-secondary)",color:"var(--color-text-primary)",outline:"none",fontWeight:600}} value={renameCatVal} onChange={e=>setRenameCatVal(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")renameCat(cat.id,renameCatVal);if(e.key==="Escape")setRenamingCatId(null);}} onBlur={()=>renameCat(cat.id,renameCatVal||cat.name)}/>
+                    :<span style={{flex:1}}>{cat.name}</span>}
+                  <span style={{fontSize:10,color:"var(--color-text-tertiary)",fontWeight:400}}>{stories.length}</span>
+                  {renamingCatId!==cat.id&&<button title="Rename sprint" onClick={()=>{setRenamingCatId(cat.id);setRenameCatVal(cat.name);}} style={{background:"none",border:"none",cursor:"pointer",color:"var(--color-text-tertiary)",fontSize:10,padding:"1px 3px",borderRadius:3,lineHeight:1}}>✎</button>}
+                </div>
+                <div style={{display:"flex",flexDirection:"column",gap:4,paddingLeft:8,borderLeft:"2px solid var(--color-border-tertiary)"}}>
+                  {stories.map(s=><StoryCard key={s.id} s={s}/>)}
+                </div>
+              </div>))}
+            {uncategorized.length>0&&<div style={{marginBottom:6}}>
+              {grouped.length>0&&<div style={{fontSize:11,fontWeight:600,color:"var(--color-text-tertiary)",padding:"4px 4px 5px"}}>No sprint</div>}
+              <div style={{display:"flex",flexDirection:"column",gap:4}}>
+                {uncategorized.map(s=><StoryCard key={s.id} s={s}/>)}
+              </div>
+            </div>}
+          </div>;
+        })()}
       </div>
       <div style={{padding:"12px 20px",borderTop:"1px solid var(--color-border-tertiary)"}}>
         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
@@ -899,7 +1586,7 @@ function App() {
       {user.role==="admin"&&page==="projects"&&<ProjectsPage/>}
       {user.role==="admin"&&page==="assign"&&<AssignmentsPage/>}
       {user.role==="admin"&&page==="bugs"&&<BugsPage/>}
-      {user.role==="member"&&page==="workspace"&&<Workspace member={user.member}/>}
+      {user.role==="member"&&page==="workspace"&&<Workspace member={user.member} refreshSaved={refreshSaved} restoreTarget={restoreTarget} clearRestore={()=>setRestoreTarget(null)} onActiveSid={setActiveSid}/>}
     </div>
   </div>;
 }
