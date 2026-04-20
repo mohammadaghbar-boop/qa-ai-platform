@@ -1,0 +1,493 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>QA AI Platform — Management Presentation</title>
+<style>
+  *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+  :root{
+    --blue:#1a56db;--blue-light:#e8f0fe;--green:#16a34a;--green-light:#dcfce7;
+    --amber:#d97706;--amber-light:#fef3c7;--red:#dc2626;--red-light:#fee2e2;
+    --gray:#6b7280;--dark:#111827;--white:#ffffff;--bg:#f8fafc;
+    --shadow:0 4px 24px rgba(0,0,0,0.10);
+  }
+  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0f172a;color:var(--dark);overflow:hidden;height:100vh;}
+  .deck{width:100vw;height:100vh;position:relative;}
+  .slide{position:absolute;inset:0;display:none;flex-direction:column;padding:48px 64px;background:var(--bg);}
+  .slide.active{display:flex;animation:fadeIn .35s ease;}
+  @keyframes fadeIn{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+
+  /* Nav */
+  .nav{position:fixed;bottom:28px;left:50%;transform:translateX(-50%);display:flex;gap:12px;align-items:center;z-index:100;background:rgba(15,23,42,.85);backdrop-filter:blur(8px);border-radius:50px;padding:10px 20px;}
+  .nav button{background:none;border:none;color:#94a3b8;cursor:pointer;font-size:16px;padding:4px 8px;border-radius:6px;transition:color .2s;}
+  .nav button:hover{color:#fff;}
+  .nav .dots{display:flex;gap:6px;}
+  .nav .dot{width:8px;height:8px;border-radius:50%;background:#334155;cursor:pointer;transition:background .2s;}
+  .nav .dot.on{background:#3b82f6;}
+  .slide-count{color:#64748b;font-size:13px;min-width:48px;text-align:center;}
+
+  /* Cover slide */
+  .slide-cover{background:linear-gradient(135deg,#0f172a 0%,#1e3a5f 60%,#0f172a 100%);color:#fff;}
+  .cover-badge{display:inline-flex;align-items:center;gap:8px;background:rgba(59,130,246,.2);border:1px solid rgba(59,130,246,.4);border-radius:50px;padding:6px 16px;font-size:13px;color:#93c5fd;margin-bottom:24px;}
+  .cover-title{font-size:54px;font-weight:700;line-height:1.1;margin-bottom:16px;background:linear-gradient(135deg,#fff 40%,#93c5fd 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;}
+  .cover-sub{font-size:20px;color:#94a3b8;margin-bottom:48px;line-height:1.5;}
+  .cover-pills{display:flex;gap:12px;flex-wrap:wrap;}
+  .cover-pill{background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.15);border-radius:50px;padding:8px 20px;font-size:14px;color:#e2e8f0;}
+  .cover-graphic{position:absolute;right:48px;top:50%;transform:translateY(-50%);opacity:.15;font-size:180px;pointer-events:none;}
+
+  /* Section header */
+  .slide-header{margin-bottom:32px;}
+  .slide-tag{font-size:12px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--blue);margin-bottom:8px;}
+  .slide-title{font-size:36px;font-weight:700;color:var(--dark);line-height:1.2;}
+  .slide-title span{color:var(--blue);}
+
+  /* Cards */
+  .cards{display:grid;gap:16px;}
+  .cards-2{grid-template-columns:1fr 1fr;}
+  .cards-3{grid-template-columns:1fr 1fr 1fr;}
+  .cards-4{grid-template-columns:1fr 1fr 1fr 1fr;}
+  .card{background:#fff;border-radius:14px;padding:24px;box-shadow:var(--shadow);border:1px solid #e5e7eb;}
+  .card-icon{font-size:28px;margin-bottom:12px;}
+  .card-title{font-size:15px;font-weight:600;color:var(--dark);margin-bottom:6px;}
+  .card-desc{font-size:13px;color:var(--gray);line-height:1.6;}
+  .card.accent-blue{border-top:3px solid var(--blue);}
+  .card.accent-green{border-top:3px solid var(--green);}
+  .card.accent-amber{border-top:3px solid var(--amber);}
+  .card.accent-red{border-top:3px solid var(--red);}
+
+  /* Stat cards */
+  .stat-val{font-size:40px;font-weight:700;line-height:1;}
+  .stat-label{font-size:13px;color:var(--gray);margin-top:6px;}
+  .stat-sub{font-size:12px;color:var(--green);font-weight:500;margin-top:4px;}
+
+  /* Problem bullets */
+  .prob-list{display:flex;flex-direction:column;gap:14px;}
+  .prob-item{display:flex;gap:14px;align-items:flex-start;background:#fff;border-radius:12px;padding:16px 20px;box-shadow:var(--shadow);}
+  .prob-icon{font-size:22px;flex-shrink:0;}
+  .prob-text b{display:block;font-size:14px;font-weight:600;margin-bottom:2px;}
+  .prob-text span{font-size:13px;color:var(--gray);}
+
+  /* Flow diagram */
+  .flow-wrap{flex:1;display:flex;align-items:center;justify-content:center;}
+
+  /* SDLC table */
+  .sdlc-table{width:100%;border-collapse:collapse;}
+  .sdlc-table th{background:var(--blue);color:#fff;padding:12px 16px;font-size:13px;font-weight:600;text-align:left;}
+  .sdlc-table th:first-child{border-radius:10px 0 0 0;}
+  .sdlc-table th:last-child{border-radius:0 10px 0 0;}
+  .sdlc-table td{padding:12px 16px;font-size:13px;border-bottom:1px solid #f1f5f9;background:#fff;}
+  .sdlc-table tr:last-child td{border-bottom:none;}
+  .sdlc-table tr:last-child td:first-child{border-radius:0 0 0 10px;}
+  .sdlc-table tr:last-child td:last-child{border-radius:0 0 10px 0;}
+  .badge{display:inline-block;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:600;}
+  .badge-blue{background:var(--blue-light);color:var(--blue);}
+  .badge-green{background:var(--green-light);color:var(--green);}
+  .badge-amber{background:var(--amber-light);color:var(--amber);}
+
+  /* Bar chart */
+  .bar-wrap{display:flex;flex-direction:column;gap:14px;}
+  .bar-row{display:flex;align-items:center;gap:12px;}
+  .bar-label{font-size:13px;color:var(--gray);min-width:160px;text-align:right;}
+  .bar-track{flex:1;height:28px;background:#f1f5f9;border-radius:8px;overflow:hidden;position:relative;}
+  .bar-fill{height:100%;border-radius:8px;display:flex;align-items:center;padding-left:12px;font-size:12px;font-weight:600;color:#fff;transition:width 1s ease;}
+  .bar-val{font-size:13px;font-weight:700;min-width:48px;color:var(--dark);}
+
+  /* Feature grid */
+  .feat-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;flex:1;}
+  .feat-item{background:#fff;border-radius:12px;padding:18px 20px;display:flex;gap:14px;align-items:flex-start;box-shadow:0 2px 8px rgba(0,0,0,.06);border:1px solid #e5e7eb;}
+  .feat-num{background:var(--blue);color:#fff;border-radius:8px;width:28px;height:28px;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;flex-shrink:0;}
+  .feat-body b{display:block;font-size:14px;font-weight:600;margin-bottom:3px;}
+  .feat-body span{font-size:12px;color:var(--gray);line-height:1.5;}
+
+  /* CTA slide */
+  .slide-cta{background:linear-gradient(135deg,#0f172a 0%,#1a3a5c 100%);color:#fff;align-items:center;justify-content:center;text-align:center;}
+  .cta-title{font-size:48px;font-weight:700;margin-bottom:16px;}
+  .cta-sub{font-size:18px;color:#94a3b8;margin-bottom:40px;}
+  .cta-pills{display:flex;gap:16px;justify-content:center;flex-wrap:wrap;}
+  .cta-pill{background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.2);border-radius:12px;padding:16px 28px;text-align:center;}
+  .cta-pill b{display:block;font-size:24px;margin-bottom:4px;}
+  .cta-pill span{font-size:13px;color:#94a3b8;}
+
+  @media print{
+    body{overflow:visible;height:auto;}
+    .deck{height:auto;}
+    .slide{position:relative;display:flex!important;page-break-after:always;min-height:100vh;}
+    .nav{display:none;}
+  }
+</style>
+</head>
+<body>
+<div class="deck" id="deck">
+
+  <!-- ① Cover -->
+  <div class="slide slide-cover active" id="s0">
+    <div class="cover-badge">🤖 AI-Powered QA Platform</div>
+    <div class="cover-title">Smarter QA.<br/>Faster Delivery.</div>
+    <div class="cover-sub">An end-to-end AI platform that empowers QA engineers<br/>to test more, faster — from story analysis to coverage reports.</div>
+    <div class="cover-pills">
+      <div class="cover-pill">📋 Jira Integration</div>
+      <div class="cover-pill">🧠 AI Test Generation</div>
+      <div class="cover-pill">🎭 Playwright / Appium</div>
+      <div class="cover-pill">📊 Coverage Reports</div>
+      <div class="cover-pill">🐛 Bug Tracking</div>
+    </div>
+    <div class="cover-graphic">🧪</div>
+  </div>
+
+  <!-- ② The Problem -->
+  <div class="slide" id="s1">
+    <div class="slide-header">
+      <div class="slide-tag">The Challenge</div>
+      <div class="slide-title">QA teams are <span>overwhelmed</span> — not empowered</div>
+    </div>
+    <div class="prob-list">
+      <div class="prob-item">
+        <div class="prob-icon">⏱️</div>
+        <div class="prob-text"><b>Slow manual test case writing</b><span>Engineers spend 60–70% of their time writing test cases by hand, leaving little time for exploratory and risk-based testing.</span></div>
+      </div>
+      <div class="prob-item">
+        <div class="prob-icon">🔍</div>
+        <div class="prob-text"><b>Missed coverage gaps</b><span>Without systematic analysis, edge cases and negative scenarios are missed — bugs reach production.</span></div>
+      </div>
+      <div class="prob-item">
+        <div class="prob-icon">🔧</div>
+        <div class="prob-text"><b>Automation bottleneck</b><span>Writing Playwright and Appium scripts from scratch is time-consuming, requiring deep framework expertise.</span></div>
+      </div>
+      <div class="prob-item">
+        <div class="prob-icon">📉</div>
+        <div class="prob-text"><b>No visibility for management</b><span>Coverage metrics, test results, and SDLC progress are scattered across tools — hard to report on quickly.</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ③ Solution Overview -->
+  <div class="slide" id="s2">
+    <div class="slide-header">
+      <div class="slide-tag">Our Solution</div>
+      <div class="slide-title">One platform. Every QA step — <span>AI-accelerated</span></div>
+    </div>
+    <div class="cards cards-4" style="flex:1;align-items:stretch;">
+      <div class="card accent-blue" style="display:flex;flex-direction:column;">
+        <div class="card-icon">📖</div>
+        <div class="card-title">Story Analysis</div>
+        <div class="card-desc">Fetch any Jira story and instantly run an AI-powered GAP analysis — spotting missing requirements before a single test is written.</div>
+      </div>
+      <div class="card accent-green" style="display:flex;flex-direction:column;">
+        <div class="card-icon">✅</div>
+        <div class="card-title">AI Test Cases</div>
+        <div class="card-desc">Generate structured happy-flow, edge-case, and negative test cases in seconds. Engineers review and approve, not write from scratch.</div>
+      </div>
+      <div class="card accent-amber" style="display:flex;flex-direction:column;">
+        <div class="card-icon">🤖</div>
+        <div class="card-title">Script Generation</div>
+        <div class="card-desc">Approved cases become ready-to-run Playwright (web) or Appium (mobile) scripts — complete with Page Object Model and assertions.</div>
+      </div>
+      <div class="card accent-red" style="display:flex;flex-direction:column;">
+        <div class="card-icon">📊</div>
+        <div class="card-title">Coverage Reports</div>
+        <div class="card-desc">Live charts: test type breakdown, execution results, automation coverage, and STLC phase completion — all downloadable as PDF.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ④ Workflow Flow Diagram -->
+  <div class="slide" id="s3">
+    <div class="slide-header">
+      <div class="slide-tag">The Workflow</div>
+      <div class="slide-title">9-step pipeline from <span>story → coverage</span></div>
+    </div>
+    <div class="flow-wrap">
+      <svg viewBox="0 0 960 320" width="100%" style="max-height:280px;">
+        <defs>
+          <marker id="arr" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+            <path d="M0,0 L0,6 L8,3 z" fill="#94a3b8"/>
+          </marker>
+        </defs>
+        <!-- Nodes -->
+        <!-- Row 1: steps 1-5 -->
+        <g transform="translate(20,40)">
+          <!-- 1 -->
+          <rect x="0" y="0" width="120" height="60" rx="12" fill="#dbeafe" stroke="#3b82f6" stroke-width="1.5"/>
+          <text x="60" y="22" text-anchor="middle" font-size="18">📋</text>
+          <text x="60" y="40" text-anchor="middle" font-size="11" font-weight="600" fill="#1e40af">Jira Story</text>
+          <text x="60" y="54" text-anchor="middle" font-size="10" fill="#3b82f6">Fetch &amp; parse</text>
+          <!-- arrow -->
+          <line x1="122" y1="30" x2="158" y2="30" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#arr)"/>
+          <!-- 2 -->
+          <rect x="160" y="0" width="120" height="60" rx="12" fill="#dcfce7" stroke="#16a34a" stroke-width="1.5"/>
+          <text x="220" y="22" text-anchor="middle" font-size="18">🔍</text>
+          <text x="220" y="40" text-anchor="middle" font-size="11" font-weight="600" fill="#14532d">GAP Analysis</text>
+          <text x="220" y="54" text-anchor="middle" font-size="10" fill="#16a34a">AI-powered</text>
+          <!-- arrow -->
+          <line x1="282" y1="30" x2="318" y2="30" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#arr)"/>
+          <!-- 3 -->
+          <rect x="320" y="0" width="120" height="60" rx="12" fill="#fef3c7" stroke="#d97706" stroke-width="1.5"/>
+          <text x="380" y="22" text-anchor="middle" font-size="18">📝</text>
+          <text x="380" y="40" text-anchor="middle" font-size="11" font-weight="600" fill="#78350f">Test Cases</text>
+          <text x="380" y="54" text-anchor="middle" font-size="10" fill="#d97706">Generate &amp; review</text>
+          <!-- arrow -->
+          <line x1="442" y1="30" x2="478" y2="30" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#arr)"/>
+          <!-- 4 -->
+          <rect x="480" y="0" width="120" height="60" rx="12" fill="#f3e8ff" stroke="#7c3aed" stroke-width="1.5"/>
+          <text x="540" y="22" text-anchor="middle" font-size="18">✅</text>
+          <text x="540" y="40" text-anchor="middle" font-size="11" font-weight="600" fill="#4c1d95">Approve &amp; Export</text>
+          <text x="540" y="54" text-anchor="middle" font-size="10" fill="#7c3aed">AIO CSV + Jira</text>
+          <!-- arrow -->
+          <line x1="602" y1="30" x2="638" y2="30" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#arr)"/>
+          <!-- 5 -->
+          <rect x="640" y="0" width="120" height="60" rx="12" fill="#fee2e2" stroke="#dc2626" stroke-width="1.5"/>
+          <text x="700" y="22" text-anchor="middle" font-size="18">🔗</text>
+          <text x="700" y="40" text-anchor="middle" font-size="11" font-weight="600" fill="#7f1d1d">App URL</text>
+          <text x="700" y="54" text-anchor="middle" font-size="10" fill="#dc2626">Set base URL</text>
+        </g>
+        <!-- Connector down -->
+        <line x1="760" y1="70" x2="800" y2="70" stroke="#94a3b8" stroke-width="1.5"/>
+        <line x1="800" y1="70" x2="800" y2="200" stroke="#94a3b8" stroke-width="1.5"/>
+        <line x1="800" y1="200" x2="780" y2="200" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#arr)"/>
+        <!-- Row 2: steps 6-9 right to left -->
+        <g transform="translate(20,160)">
+          <!-- 9 -->
+          <rect x="640" y="0" width="120" height="60" rx="12" fill="#f0fdf4" stroke="#16a34a" stroke-width="1.5"/>
+          <text x="700" y="22" text-anchor="middle" font-size="18">📊</text>
+          <text x="700" y="40" text-anchor="middle" font-size="11" font-weight="600" fill="#14532d">Coverage</text>
+          <text x="700" y="54" text-anchor="middle" font-size="10" fill="#16a34a">Charts + PDF</text>
+          <!-- arrow left -->
+          <line x1="638" y1="30" x2="602" y2="30" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#arr)"/>
+          <!-- 8 -->
+          <rect x="480" y="0" width="120" height="60" rx="12" fill="#fff7ed" stroke="#ea580c" stroke-width="1.5"/>
+          <text x="540" y="22" text-anchor="middle" font-size="18">🐛</text>
+          <text x="540" y="40" text-anchor="middle" font-size="11" font-weight="600" fill="#7c2d12">Bug Report</text>
+          <text x="540" y="54" text-anchor="middle" font-size="10" fill="#ea580c">Jira integration</text>
+          <!-- arrow left -->
+          <line x1="478" y1="30" x2="442" y2="30" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#arr)"/>
+          <!-- 7 -->
+          <rect x="320" y="0" width="120" height="60" rx="12" fill="#f0f9ff" stroke="#0284c7" stroke-width="1.5"/>
+          <text x="380" y="22" text-anchor="middle" font-size="18">▶️</text>
+          <text x="380" y="40" text-anchor="middle" font-size="11" font-weight="600" fill="#0c4a6e">Execute Tests</text>
+          <text x="380" y="54" text-anchor="middle" font-size="10" fill="#0284c7">Live results</text>
+          <!-- arrow left -->
+          <line x1="318" y1="30" x2="282" y2="30" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#arr)"/>
+          <!-- 6 -->
+          <rect x="160" y="0" width="120" height="60" rx="12" fill="#fdf4ff" stroke="#a855f7" stroke-width="1.5"/>
+          <text x="220" y="22" text-anchor="middle" font-size="18">🤖</text>
+          <text x="220" y="40" text-anchor="middle" font-size="11" font-weight="600" fill="#581c87">Script Gen</text>
+          <text x="220" y="54" text-anchor="middle" font-size="10" fill="#a855f7">Playwright/Appium</text>
+        </g>
+        <!-- Step numbers -->
+        <g font-size="10" font-weight="700" fill="#fff">
+          <circle cx="36" cy="50" r="9" fill="#3b82f6"/><text x="36" y="54" text-anchor="middle">1</text>
+          <circle cx="196" cy="50" r="9" fill="#16a34a"/><text x="196" y="54" text-anchor="middle">2</text>
+          <circle cx="356" cy="50" r="9" fill="#d97706"/><text x="356" y="54" text-anchor="middle">3</text>
+          <circle cx="516" cy="50" r="9" fill="#7c3aed"/><text x="516" y="54" text-anchor="middle">4</text>
+          <circle cx="676" cy="50" r="9" fill="#dc2626"/><text x="676" y="54" text-anchor="middle">5</text>
+          <circle cx="196" cy="210" r="9" fill="#a855f7"/><text x="196" y="214" text-anchor="middle">6</text>
+          <circle cx="356" cy="210" r="9" fill="#0284c7"/><text x="356" y="214" text-anchor="middle">7</text>
+          <circle cx="516" cy="210" r="9" fill="#ea580c"/><text x="516" y="214" text-anchor="middle">8</text>
+          <circle cx="676" cy="210" r="9" fill="#16a34a"/><text x="676" y="214" text-anchor="middle">9</text>
+        </g>
+      </svg>
+    </div>
+  </div>
+
+  <!-- ⑤ SDLC Integration -->
+  <div class="slide" id="s4">
+    <div class="slide-header">
+      <div class="slide-tag">SDLC Integration</div>
+      <div class="slide-title">Where the platform fits in the <span>software lifecycle</span></div>
+    </div>
+    <table class="sdlc-table" style="flex:1;">
+      <thead>
+        <tr>
+          <th>SDLC Phase</th>
+          <th>Traditional QA</th>
+          <th>With QA AI Platform</th>
+          <th>Impact</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><b>📋 Requirements</b></td>
+          <td style="color:#6b7280;">Manual review, often missed gaps</td>
+          <td>AI GAP Analysis flags missing ACs instantly</td>
+          <td><span class="badge badge-green">↓ Defect leakage</span></td>
+        </tr>
+        <tr>
+          <td><b>🎨 Design</b></td>
+          <td style="color:#6b7280;">Hours writing test plans</td>
+          <td>Test cases generated in seconds, reviewed by engineer</td>
+          <td><span class="badge badge-blue">70% faster</span></td>
+        </tr>
+        <tr>
+          <td><b>💻 Development</b></td>
+          <td style="color:#6b7280;">Scripts written after dev is done</td>
+          <td>Playwright/Appium scripts ready as dev completes</td>
+          <td><span class="badge badge-blue">Shift-left QA</span></td>
+        </tr>
+        <tr>
+          <td><b>🧪 Testing</b></td>
+          <td style="color:#6b7280;">Manual execution, spreadsheet tracking</td>
+          <td>Automated execution, live logs, AIO CSV export</td>
+          <td><span class="badge badge-green">Full traceability</span></td>
+        </tr>
+        <tr>
+          <td><b>🐛 Bug Tracking</b></td>
+          <td style="color:#6b7280;">Manually creating Jira issues</td>
+          <td>Structured bugs filed &amp; linked to story in 1 click</td>
+          <td><span class="badge badge-amber">Zero copy-paste</span></td>
+        </tr>
+        <tr>
+          <td><b>🚀 Release</b></td>
+          <td style="color:#6b7280;">Coverage unknown until reports are prepared</td>
+          <td>Live coverage charts + STLC score ready instantly</td>
+          <td><span class="badge badge-green">Release confidence</span></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ⑥ Key Features -->
+  <div class="slide" id="s5">
+    <div class="slide-header">
+      <div class="slide-tag">Key Features</div>
+      <div class="slide-title">Everything a QA team needs — <span>in one place</span></div>
+    </div>
+    <div class="feat-grid">
+      <div class="feat-item">
+        <div class="feat-num">1</div>
+        <div class="feat-body"><b>Jira Story Fetcher</b><span>Pull any story by ID. Fields, description, ACs, labels — all parsed automatically including hyperlinks and ADF format.</span></div>
+      </div>
+      <div class="feat-item">
+        <div class="feat-num">2</div>
+        <div class="feat-body"><b>AI GAP Analysis</b><span>Risk-scored analysis of acceptance criteria — highlights what's missing, ambiguous, or untestable before work begins.</span></div>
+      </div>
+      <div class="feat-item">
+        <div class="feat-num">3</div>
+        <div class="feat-body"><b>Test Case Generator</b><span>Happy flow, edge case, and negative scenarios. Engineers approve, reject, edit, and add manual cases — full control.</span></div>
+      </div>
+      <div class="feat-item">
+        <div class="feat-num">4</div>
+        <div class="feat-body"><b>AIO CSV Export</b><span>Export approved test cases in AIO Test Manager format with UTF-8 BOM — ready to import into Jira test management.</span></div>
+      </div>
+      <div class="feat-item">
+        <div class="feat-num">5</div>
+        <div class="feat-body"><b>Script Generation</b><span>Full Playwright (web) or Appium (iOS + Android) scripts with Page Object Model, selectors, assertions, and hooks.</span></div>
+      </div>
+      <div class="feat-item">
+        <div class="feat-num">6</div>
+        <div class="feat-body"><b>Bug Report + Jira Sync</b><span>Structured bug form with screenshot upload. One click creates Jira Bug issues and links them to the original story.</span></div>
+      </div>
+      <div class="feat-item">
+        <div class="feat-num">7</div>
+        <div class="feat-body"><b>Coverage Dashboard</b><span>Live donut and bar charts: test type breakdown, execution results, automation %, STLC phase score. PDF download.</span></div>
+      </div>
+      <div class="feat-item">
+        <div class="feat-num">8</div>
+        <div class="feat-body"><b>Session History</b><span>Every story session is saved — restore any previous state, organised by sprint. Workspace survives page refresh.</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ⑦ Impact & ROI -->
+  <div class="slide" id="s6">
+    <div class="slide-header">
+      <div class="slide-tag">Impact &amp; ROI</div>
+      <div class="slide-title">Measurable gains — from day <span>one</span></div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1.6fr;gap:24px;flex:1;">
+      <div style="display:flex;flex-direction:column;gap:14px;">
+        <div class="card accent-green">
+          <div class="stat-val" style="color:var(--green);">70%</div>
+          <div class="stat-label">Reduction in test case writing time</div>
+          <div class="stat-sub">↑ More time for exploratory testing</div>
+        </div>
+        <div class="card accent-blue">
+          <div class="stat-val" style="color:var(--blue);">3×</div>
+          <div class="stat-label">Faster automation script delivery</div>
+          <div class="stat-sub">↑ Playwright + Appium in seconds</div>
+        </div>
+        <div class="card accent-amber">
+          <div class="stat-val" style="color:var(--amber);">100%</div>
+          <div class="stat-label">Jira traceability — story → bug → test</div>
+          <div class="stat-sub">↑ Full audit trail for every release</div>
+        </div>
+      </div>
+      <div class="card" style="display:flex;flex-direction:column;justify-content:center;padding:28px 32px;">
+        <div style="font-weight:600;font-size:15px;margin-bottom:20px;color:var(--dark);">Time saved per story (estimated)</div>
+        <div class="bar-wrap">
+          <div class="bar-row">
+            <div class="bar-label">Test case writing</div>
+            <div class="bar-track"><div class="bar-fill" style="width:75%;background:#16a34a;">75% faster</div></div>
+          </div>
+          <div class="bar-row">
+            <div class="bar-label">Script automation</div>
+            <div class="bar-track"><div class="bar-fill" style="width:80%;background:#2563eb;">80% faster</div></div>
+          </div>
+          <div class="bar-row">
+            <div class="bar-label">Bug documentation</div>
+            <div class="bar-track"><div class="bar-fill" style="width:65%;background:#d97706;">65% faster</div></div>
+          </div>
+          <div class="bar-row">
+            <div class="bar-label">Coverage reporting</div>
+            <div class="bar-track"><div class="bar-fill" style="width:90%;background:#7c3aed;">90% faster</div></div>
+          </div>
+          <div class="bar-row">
+            <div class="bar-label">GAP identification</div>
+            <div class="bar-track"><div class="bar-fill" style="width:85%;background:#dc2626;">85% faster</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ⑧ CTA -->
+  <div class="slide slide-cta" id="s7">
+    <div class="cta-title">Ready to see it live?</div>
+    <div class="cta-sub">The platform is built, tested, and running today.<br/>Let's walk through a real story — end to end.</div>
+    <div class="cta-pills">
+      <div class="cta-pill"><b>9</b><span>Workflow steps</span></div>
+      <div class="cta-pill"><b>AI</b><span>Claude-powered</span></div>
+      <div class="cta-pill"><b>Web + Mobile</b><span>Playwright &amp; Appium</span></div>
+      <div class="cta-pill"><b>Jira</b><span>Full integration</span></div>
+    </div>
+    <div style="margin-top:48px;font-size:14px;color:#475569;">QA AI Platform · Built for the QA team · 2026</div>
+  </div>
+
+</div>
+
+<!-- Navigation -->
+<div class="nav">
+  <button id="btn-prev" onclick="go(-1)">←</button>
+  <div class="dots" id="dots"></div>
+  <button id="btn-next" onclick="go(1)">→</button>
+  <div class="slide-count" id="count"></div>
+</div>
+
+<script>
+  const slides=document.querySelectorAll('.slide');
+  const dots=document.getElementById('dots');
+  const count=document.getElementById('count');
+  let cur=0;
+  slides.forEach((_,i)=>{
+    const d=document.createElement('div');
+    d.className='dot'+(i===0?' on':'');
+    d.onclick=()=>show(i);
+    dots.appendChild(d);
+  });
+  function show(n){
+    slides[cur].classList.remove('active');
+    document.querySelectorAll('.dot')[cur].classList.remove('on');
+    cur=(n+slides.length)%slides.length;
+    slides[cur].classList.add('active');
+    document.querySelectorAll('.dot')[cur].classList.add('on');
+    count.textContent=(cur+1)+' / '+slides.length;
+  }
+  function go(d){show(cur+d);}
+  count.textContent='1 / '+slides.length;
+  document.addEventListener('keydown',e=>{
+    if(e.key==='ArrowRight'||e.key==='ArrowDown') go(1);
+    if(e.key==='ArrowLeft'||e.key==='ArrowUp') go(-1);
+  });
+</script>
+</body>
+</html>
