@@ -630,14 +630,14 @@ function BarChart({data,title}) {
 }
 
 /* ─── Workspace ───────────────────────────────────────────────────────────── */
-const WS_STEPS = ["User Story","Analysis","Generate","Review","Export","Scripts","Execute","Bug Report","Coverage"];
-const WS_IDX = {input:0,mode:1,gap:1,ctype:2,ready:2,review:3,jira:4,urlPrompt:5,scriptSelect:5,autoReady:5,runAsk:6,running:6,result:6,bugReport:7,coverage:8};
+const WS_STEPS = ["Project","User Story","Analysis","Generate","Review","Export","Scripts","Execute","Bug Report","Coverage"];
+const WS_IDX = {project:0,input:1,mode:2,gap:2,ctype:3,ready:3,review:4,jira:5,urlPrompt:6,scriptSelect:6,autoReady:6,runAsk:7,running:7,result:7,bugReport:8,coverage:9};
 
 function Workspace({member,refreshSaved,restoreTarget,clearRestore,onActiveSid}) {
   const memberProjects=DB.assignments.filter(x=>x.memberId===member.id).map(a=>DB.projects.find(x=>x.id===a.projectId)).filter(Boolean);
   const [selectedProjId,setSelectedProjId]=React.useState(memberProjects[0]?.id||"");
   const proj=memberProjects.find(x=>x.id===selectedProjId)||memberProjects[0]||null;
-const [phase,setPhase]=useState("input"); const [sid,setSid]=useState(""); const [sdata,setSdata]=useState(null);
+const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.memberId===member.id); return ps.length>1?"project":"input"; }); const [sid,setSid]=useState(""); const [sdata,setSdata]=useState(null);
   const [platform,setPlatform]=useState("web"); const [ctypes,setCtypes]=useState([]);
   const [gapText,setGapText]=useState(""); const [cases,setCases]=useState([]);
   const [editOn,setEditOn]=useState(false); const [scripts,setScripts]=useState({web:"",ios:"",android:""});
@@ -682,7 +682,7 @@ const [phase,setPhase]=useState("input"); const [sid,setSid]=useState(""); const
 
   if (!proj) return <div style={card}><div style={{color:"var(--color-text-warning)",fontWeight:500}}>No project assigned. Contact your QA lead.</div></div>;
   const switchProj=(id)=>{if(id===selectedProjId)return;setSelectedProjId(id);setPhase("input");setSid("");setSdata(null);setCases([]);setResult(null);setExecLines([]);setScripts({web:"",ios:"",android:""});setHasSaved(false);};
-  const projPicker=memberProjects.length>1&&<div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12}}><span style={{fontSize:13,color:"var(--color-text-secondary)",fontWeight:500}}>Project:</span>{memberProjects.map(p=><button key={p.id} onClick={()=>switchProj(p.id)} style={{padding:"4px 14px",borderRadius:20,border:"1px solid",fontSize:13,cursor:"pointer",fontWeight:p.id===selectedProjId?600:400,background:p.id===selectedProjId?"var(--color-background-info)":"var(--color-background-secondary)",color:p.id===selectedProjId?"var(--color-text-info)":"var(--color-text-secondary)",borderColor:p.id===selectedProjId?"var(--color-text-info)":"var(--color-border-secondary)"}}>{p.name}</button>)}</div>;
+  const projPicker=memberProjects.length>1&&phase!=="project"&&<div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12}}><span style={{fontSize:13,color:"var(--color-text-secondary)",fontWeight:500}}>Project:</span>{memberProjects.map(p=><button key={p.id} onClick={()=>switchProj(p.id)} style={{padding:"4px 14px",borderRadius:20,border:"1px solid",fontSize:13,cursor:"pointer",fontWeight:p.id===selectedProjId?600:400,background:p.id===selectedProjId?"var(--color-background-info)":"var(--color-background-secondary)",color:p.id===selectedProjId?"var(--color-text-info)":"var(--color-text-secondary)",borderColor:p.id===selectedProjId?"var(--color-text-info)":"var(--color-border-secondary)"}}>{p.name}</button>)}</div>;
 
   const doFetch=async()=>{
     setLoading(true); setLmsg("Fetching story from Jira…"); setFetchError("");
@@ -849,7 +849,7 @@ const [phase,setPhase]=useState("input"); const [sid,setSid]=useState(""); const
   const editS=(id,si,v)=>setCases(cs=>cs.map(c=>{if(c.id!==id)return c;const s=[...c.steps];s[si]=v;return{...c,steps:s};}));
   const addStep=id=>setCases(cs=>cs.map(c=>c.id===id?{...c,steps:[...(c.steps||[]),"New step"]}:c));
   const delStep=(id,si)=>setCases(cs=>cs.map(c=>c.id===id?{...c,steps:(c.steps||[]).filter((_,i)=>i!==si)}:c));
-  const reset=()=>{localStorage.removeItem(WS_SNAP);setPhase("input");setSid("");setSdata(null);setPlatform("web");setCtypes([]);setGapText("");setCases([]);setEditOn(false);setScripts({web:"",ios:"",android:""});setProjFiles(null);setExecLines([]);setResult(null);setJKey(null);setBugDone(null);setShowBugForm(false);setFixed(false);setChat(false);setShowAddCase(false);setSelectedForScripts([]);setCoverageText("");setSessionBugs([]);setHasSaved(false);setAppUrl("");};
+  const reset=()=>{localStorage.removeItem(WS_SNAP);setPhase(memberProjects.length>1?"project":"input");setSid("");setSdata(null);setPlatform("web");setCtypes([]);setGapText("");setCases([]);setEditOn(false);setScripts({web:"",ios:"",android:""});setProjFiles(null);setExecLines([]);setResult(null);setJKey(null);setBugDone(null);setShowBugForm(false);setFixed(false);setChat(false);setShowAddCase(false);setSelectedForScripts([]);setCoverageText("");setSessionBugs([]);setHasSaved(false);setAppUrl("");};
   const [saveModal,setSaveModal]=useState(null);
   // saveModal: null | {step:1,name:""} | {step:2,name:"",newCat:""}
   const openSaveModal=()=>{
@@ -891,12 +891,13 @@ const [phase,setPhase]=useState("input"); const [sid,setSid]=useState(""); const
   },[phase,cases.length,result,coverageText]);
   const goToStep=i=>{
     const cur=WS_IDX[phase]??0; if(i>=cur||phase==="running") return;
-    if(i===0){setPhase("input");return;}
-    if(i===1&&sdata){setPhase("mode");return;}
-    if(i===2&&sdata){const et=[...new Set(cases.map(c=>c.type))];setCtypes(et.length>0?et:[]);setPhase("ctype");return;}
-    if(i===3&&cases.length>0){setPhase("review");return;}
-    if(i===4&&approved.length>0){setPhase("jira");return;}
-    if(i===5){setPhase("urlPrompt");return;}
+    if(i===0){setPhase("project");return;}
+    if(i===1){setPhase("input");return;}
+    if(i===2&&sdata){setPhase("mode");return;}
+    if(i===3&&sdata){const et=[...new Set(cases.map(c=>c.type))];setCtypes(et.length>0?et:[]);setPhase("ctype");return;}
+    if(i===4&&cases.length>0){setPhase("review");return;}
+    if(i===5&&approved.length>0){setPhase("jira");return;}
+    if(i===6){setPhase("urlPrompt");return;}
     if(i===6&&result){setPhase("result");return;}
     if(i===7){setPhase("bugReport");return;}
     if(i===8){setPhase("coverage");return;}
@@ -985,6 +986,29 @@ const [phase,setPhase]=useState("input"); const [sid,setSid]=useState(""); const
     <div style={{display:"flex",gap:16}}>
       <div style={{flex:1,minWidth:0}}>
         {loading&&<Loader msg={lmsg}/>}
+
+        {!loading&&phase==="project"&&<div>
+          <H2 style={{marginBottom:16}}>Choose a project to start</H2>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))",gap:16}}>
+            {memberProjects.map(p=>{
+              const projStories=DB.savedStories.filter(s=>s.sid&&s.sid.startsWith(p.jiraProjKey+"-"));
+              return <div key={p.id} style={{...card,cursor:"pointer",border:selectedProjId===p.id?"2px solid var(--color-text-info)":"1px solid var(--color-border-secondary)",marginBottom:0,transition:"box-shadow 0.15s"}} onClick={()=>{switchProj(p.id);}}>
+                <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10}}>
+                  <div style={{width:40,height:40,borderRadius:10,background:"var(--color-background-info)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:20}}>📁</div>
+                  <div><div style={{fontWeight:600,fontSize:15}}>{p.name}</div><div style={{fontSize:12,color:"var(--color-text-tertiary)"}}>{p.jiraProjKey} · {p.platform||"web"}</div></div>
+                </div>
+                <div style={{fontSize:12,color:"var(--color-text-secondary)",marginBottom:projStories.length>0?10:0}}>{projStories.length} saved session{projStories.length!==1?"s":""}</div>
+                {projStories.length>0&&<div style={{borderTop:"1px solid var(--color-border-tertiary)",paddingTop:8,display:"flex",flexDirection:"column",gap:4}}>
+                  {projStories.slice(0,3).map(s=><div key={s.id} style={{display:"flex",alignItems:"center",gap:6,fontSize:12}}>
+                    <Tag c="blue" style={{flexShrink:0}}>{s.sid}</Tag>
+                    <span style={{color:"var(--color-text-secondary)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flex:1}}>{s.name||s.sid}</span>
+                  </div>)}
+                  {projStories.length>3&&<div style={{fontSize:11,color:"var(--color-text-tertiary)"}}>+{projStories.length-3} more</div>}
+                </div>}
+              </div>;
+            })}
+          </div>
+        </div>}
 
         {!loading&&phase==="input"&&<div>
           {hist.length>0&&<div style={{...card,padding:"12px 16px",marginBottom:12}}>
