@@ -681,7 +681,8 @@ const [phase,setPhase]=useState("input"); const [sid,setSid]=useState(""); const
   const allDone=cases.length>0&&cases.every(c=>c.status!=="pending");
 
   if (!proj) return <div style={card}><div style={{color:"var(--color-text-warning)",fontWeight:500}}>No project assigned. Contact your QA lead.</div></div>;
-  const projPicker=memberProjects.length>1&&<div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12}}><span style={{fontSize:13,color:"var(--color-text-secondary)",fontWeight:500}}>Project:</span>{memberProjects.map(p=><button key={p.id} onClick={()=>setSelectedProjId(p.id)} style={{padding:"4px 14px",borderRadius:20,border:"1px solid",fontSize:13,cursor:"pointer",fontWeight:p.id===selectedProjId?600:400,background:p.id===selectedProjId?"var(--color-background-info)":"var(--color-background-secondary)",color:p.id===selectedProjId?"var(--color-text-info)":"var(--color-text-secondary)",borderColor:p.id===selectedProjId?"var(--color-text-info)":"var(--color-border-secondary)"}}>{p.name}</button>)}</div>;
+  const switchProj=(id)=>{if(id===selectedProjId)return;setSelectedProjId(id);setPhase("input");setSid("");setSdata(null);setCases([]);setResult(null);setExecLines([]);setScripts({web:"",ios:"",android:""});setHasSaved(false);};
+  const projPicker=memberProjects.length>1&&<div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12}}><span style={{fontSize:13,color:"var(--color-text-secondary)",fontWeight:500}}>Project:</span>{memberProjects.map(p=><button key={p.id} onClick={()=>switchProj(p.id)} style={{padding:"4px 14px",borderRadius:20,border:"1px solid",fontSize:13,cursor:"pointer",fontWeight:p.id===selectedProjId?600:400,background:p.id===selectedProjId?"var(--color-background-info)":"var(--color-background-secondary)",color:p.id===selectedProjId?"var(--color-text-info)":"var(--color-text-secondary)",borderColor:p.id===selectedProjId?"var(--color-text-info)":"var(--color-border-secondary)"}}>{p.name}</button>)}</div>;
 
   const doFetch=async()=>{
     setLoading(true); setLmsg("Fetching story from Jira…"); setFetchError("");
@@ -1036,7 +1037,7 @@ const [phase,setPhase]=useState("input"); const [sid,setSid]=useState(""); const
         </div>}
 
         {!loading&&phase==="ready"&&<div>
-          <Banner icon="✅" title={cases.length+" test cases generated"} sub={"Platform: "+platform+" · "+autoable.length+" automatable · "+manOnly.length+" manual-only"} color="success"/>
+          <Banner icon="✅" title={cases.length+" test cases generated"} sub={"Platform: "+platform+" · "+cases.filter(c=>c.automatable!==false).length+" automatable · "+cases.filter(c=>c.automatable===false).length+" manual-only"} color="success"/>
           <div style={card}>{cases.map(c=><div key={c.id} style={{padding:"9px 0",borderBottom:"1px solid var(--color-border-tertiary)",display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}><Tag c="blue">{c.id}</Tag><Tag c={tcol(c.type)}>{c.type}</Tag>{c.automatable===false&&<Tag>manual only</Tag>}<span style={{fontSize:14}}>{c.title}</span></div>)}</div>
           <Confirm icon="🔍" title="Would you like to review and edit the test cases?" desc="Approve, reject, and modify each case before proceeding." onYes={()=>{setEditOn(true);setPhase("review");}} onNo={()=>{setCases(cs=>cs.map(c=>({...c,status:"approved"})));setPhase("jira");}} yesLabel="Yes, review" noLabel="Approve all"/>
         </div>}
