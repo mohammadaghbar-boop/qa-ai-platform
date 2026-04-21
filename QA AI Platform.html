@@ -7,6 +7,7 @@
 <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f5f0; color: #1a1a18; min-height: 100vh; }
@@ -438,8 +439,8 @@ function MembersPage() {
     <div style={card}>{list.length===0?<div style={{color:"var(--color-text-tertiary)",fontSize:14}}>No members yet.</div>:
       <table style={{width:"100%",borderCollapse:"collapse",fontSize:14}}>
         <thead><tr><th style={th}>Name</th><th style={th}>Role</th><th style={th}>Email</th><th style={th}>Project</th><th style={th}></th></tr></thead>
-        <tbody>{list.map(m=>{ const a=DB.assignments.find(x=>x.memberId===m.id); const p=a?DB.projects.find(x=>x.id===a.projectId):null;
-          return <tr key={m.id}><td style={td}><b>{m.name}</b></td><td style={td}><span style={{fontSize:13,color:"var(--color-text-secondary)"}}>{m.role}</span></td><td style={td}>{m.email}</td><td style={td}>{p?<Tag c="blue">{p.name}</Tag>:<span style={{color:"var(--color-text-tertiary)",fontSize:13}}>—</span>}</td><td style={td}><Btn v="danger" onClick={()=>del(m.id)}>Remove</Btn></td></tr>;
+        <tbody>{list.map(m=>{ const ps=DB.assignments.filter(x=>x.memberId===m.id).map(a=>DB.projects.find(x=>x.id===a.projectId)).filter(Boolean);
+          return <tr key={m.id}><td style={td}><b>{m.name}</b></td><td style={td}><span style={{fontSize:13,color:"var(--color-text-secondary)"}}>{m.role}</span></td><td style={td}>{m.email}</td><td style={td}>{ps.length>0?ps.map(p=><Tag key={p.id} c="blue">{p.name}</Tag>):<span style={{color:"var(--color-text-tertiary)",fontSize:13}}>—</span>}</td><td style={td}><Btn v="danger" onClick={()=>del(m.id)}>Remove</Btn></td></tr>;
         })}</tbody>
       </table>}
     </div>
@@ -484,8 +485,8 @@ function ProjectsPage() {
 function AssignmentsPage() {
   const [list,setList]=useState([...DB.assignments]);
   const [mId,setMId]=useState(""); const [pId,setPId]=useState("");
-  const assign=()=>{ if(!mId||!pId) return; DB.assignments=DB.assignments.filter(a=>a.memberId!==mId); DB.assignments.push({memberId:mId,projectId:pId}); const m=DB.members.find(x=>x.id===mId); const p=DB.projects.find(x=>x.id===pId); if(m&&p) pushNotif(mId,"Assigned to: "+p.name); saveDB(); setList([...DB.assignments]); setMId(""); setPId(""); };
-  const del=id=>{ DB.assignments=DB.assignments.filter(a=>a.memberId!==id); saveDB(); setList([...DB.assignments]); };
+  const assign=()=>{ if(!mId||!pId) return; if(DB.assignments.some(a=>a.memberId===mId&&a.projectId===pId)) return; DB.assignments.push({memberId:mId,projectId:pId}); const m=DB.members.find(x=>x.id===mId); const p=DB.projects.find(x=>x.id===pId); if(m&&p) pushNotif(mId,"Assigned to: "+p.name); saveDB(); setList([...DB.assignments]); setMId(""); setPId(""); };
+  const del=(mId,pId)=>{ DB.assignments=DB.assignments.filter(a=>!(a.memberId===mId&&a.projectId===pId)); saveDB(); setList([...DB.assignments]); };
   const th={textAlign:"left",padding:"8px 12px",borderBottom:"1px solid var(--color-border-tertiary)",fontSize:12,fontWeight:500,color:"var(--color-text-secondary)"};
   const td={padding:"10px 12px",borderBottom:"1px solid var(--color-border-tertiary)"};
   return <div>
@@ -501,7 +502,7 @@ function AssignmentsPage() {
       <table style={{width:"100%",borderCollapse:"collapse",fontSize:14}}>
         <thead><tr><th style={th}>Member</th><th style={th}>Project</th><th style={th}></th></tr></thead>
         <tbody>{list.map(a=>{ const m=DB.members.find(x=>x.id===a.memberId); const p=DB.projects.find(x=>x.id===a.projectId);
-          return <tr key={a.memberId}><td style={td}><b>{m?.name}</b></td><td style={td}><Tag c="green">{p?.name}</Tag></td><td style={td}><Btn v="danger" onClick={()=>del(a.memberId)}>Remove</Btn></td></tr>;
+          return <tr key={a.memberId+"-"+a.projectId}><td style={td}><b>{m?.name}</b></td><td style={td}><Tag c="green">{p?.name}</Tag></td><td style={td}><Btn v="danger" onClick={()=>del(a.memberId,a.projectId)}>Remove</Btn></td></tr>;
         })}</tbody>
       </table>}
     </div>
@@ -630,13 +631,14 @@ function BarChart({data,title}) {
 }
 
 /* ─── Workspace ───────────────────────────────────────────────────────────── */
-const WS_STEPS = ["User Story","Analysis","Generate","Review","Export","Scripts","Execute","Bug Report","Coverage"];
-const WS_IDX = {input:0,mode:1,gap:1,ctype:2,ready:2,review:3,jira:4,urlPrompt:5,scriptSelect:5,autoReady:5,runAsk:6,running:6,result:6,bugReport:7,coverage:8};
+const WS_STEPS = ["Project","User Story","Analysis","Generate","Review","Export","Scripts","Execute","Bug Report","Coverage"];
+const WS_IDX = {project:0,input:1,mode:2,gap:2,ctype:3,ready:3,review:4,jira:5,urlPrompt:6,scriptSelect:6,autoReady:6,runAsk:7,running:7,result:7,bugReport:8,coverage:9};
 
-function Workspace({member,refreshSaved,restoreTarget,clearRestore,onActiveSid}) {
-  const asgn=DB.assignments.find(x=>x.memberId===member.id);
-  const proj=asgn?DB.projects.find(x=>x.id===asgn.projectId):null;
-const [phase,setPhase]=useState("input"); const [sid,setSid]=useState(""); const [sdata,setSdata]=useState(null);
+function Workspace({member,refreshSaved,restoreTarget,clearRestore,onActiveSid,onProjChange,resetTrigger}) {
+  const memberProjects=DB.assignments.filter(x=>x.memberId===member.id).map(a=>DB.projects.find(x=>x.id===a.projectId)).filter(Boolean);
+  const [selectedProjId,setSelectedProjId]=React.useState(memberProjects[0]?.id||"");
+  const proj=memberProjects.find(x=>x.id===selectedProjId)||memberProjects[0]||null;
+const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.memberId===member.id); return ps.length>1?"project":"input"; }); const [sid,setSid]=useState(""); const [sdata,setSdata]=useState(null);
   const [platform,setPlatform]=useState("web"); const [ctypes,setCtypes]=useState([]);
   const [gapText,setGapText]=useState(""); const [cases,setCases]=useState([]);
   const [editOn,setEditOn]=useState(false); const [scripts,setScripts]=useState({web:"",ios:"",android:""});
@@ -644,7 +646,7 @@ const [phase,setPhase]=useState("input"); const [sid,setSid]=useState(""); const
   const [execLines,setExecLines]=useState([]); const [result,setResult]=useState(null);
   const [loading,setLoading]=useState(false); const [lmsg,setLmsg]=useState(""); const [fetchError,setFetchError]=useState("");
   const [jKey,setJKey]=useState(null); const [bugDone,setBugDone]=useState(null);
-  const [showBugForm,setShowBugForm]=useState(false); const [bf,setBf]=useState({summary:"",sev:"High",steps:"",expected:"",actual:"",screenshot:null});
+  const [showBugForm,setShowBugForm]=useState(false); const [bf,setBf]=useState({summary:"",sev:"High",steps:[""],expected:"",actual:"",screenshot:null});
   const [fixed,setFixed]=useState(false); const [hist,setHist]=useState([]); const [chat,setChat]=useState(false); const [hasSaved,setHasSaved]=useState(false);
   const [showAddCase,setShowAddCase]=useState(false); const [newCase,setNewCase]=useState({title:"",type:"happy",platform:"web",preconditions:"",steps:[""],expected:"",automatable:true});
   const [selectedForScripts,setSelectedForScripts]=useState([]); const [coverageText,setCoverageText]=useState(""); const [sessionBugs,setSessionBugs]=useState([]); const [appUrl,setAppUrl]=useState("");
@@ -680,6 +682,8 @@ const [phase,setPhase]=useState("input"); const [sid,setSid]=useState(""); const
   const allDone=cases.length>0&&cases.every(c=>c.status!=="pending");
 
   if (!proj) return <div style={card}><div style={{color:"var(--color-text-warning)",fontWeight:500}}>No project assigned. Contact your QA lead.</div></div>;
+  const switchProj=(id)=>{if(id===selectedProjId)return;setSelectedProjId(id);setPhase("input");setSid("");setSdata(null);setCases([]);setResult(null);setExecLines([]);setScripts({web:"",ios:"",android:""});setHasSaved(false);};
+  const projPicker=memberProjects.length>1&&phase!=="project"&&<div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12}}><span style={{fontSize:13,color:"var(--color-text-secondary)",fontWeight:500}}>Project:</span>{memberProjects.map(p=><button key={p.id} onClick={()=>switchProj(p.id)} style={{padding:"4px 14px",borderRadius:20,border:"1px solid",fontSize:13,cursor:"pointer",fontWeight:p.id===selectedProjId?600:400,background:p.id===selectedProjId?"var(--color-background-info)":"var(--color-background-secondary)",color:p.id===selectedProjId?"var(--color-text-info)":"var(--color-text-secondary)",borderColor:p.id===selectedProjId?"var(--color-text-info)":"var(--color-border-secondary)"}}>{p.name}</button>)}</div>;
 
   const doFetch=async()=>{
     setLoading(true); setLmsg("Fetching story from Jira…"); setFetchError("");
@@ -737,9 +741,9 @@ const [phase,setPhase]=useState("input"); const [sid,setSid]=useState(""); const
         if(!match) throw new Error("Invalid response for "+newTypes[i]+" cases. Make sure server.js is running.");
         return JSON.parse(match[0]).map(c=>({...c,type:newTypes[i],status:"pending"}));
       });
-      const startIdx=keptCases.length;
-      const newCases=rawNew.map((c,i)=>({...c,id:"TC-"+String(startIdx+i+1).padStart(3,"0")}));
-      setCases([...keptCases,...newCases]);
+      const merged=[...keptCases,...rawNew];
+      const finalCases=merged.map((c,i)=>({...c,id:"TC-"+String(i+1).padStart(3,"0")}));
+      setCases(finalCases);
     } catch(e){setLoading(false);alert("Failed to generate test cases:\n\n"+e.message);return;}
     setPhase("ready");setLoading(false);
   };
@@ -845,7 +849,8 @@ const [phase,setPhase]=useState("input"); const [sid,setSid]=useState(""); const
   const editC=(id,k,v)=>setCases(cs=>cs.map(c=>c.id===id?{...c,[k]:v}:c));
   const editS=(id,si,v)=>setCases(cs=>cs.map(c=>{if(c.id!==id)return c;const s=[...c.steps];s[si]=v;return{...c,steps:s};}));
   const addStep=id=>setCases(cs=>cs.map(c=>c.id===id?{...c,steps:[...(c.steps||[]),"New step"]}:c));
-  const reset=()=>{localStorage.removeItem(WS_SNAP);setPhase("input");setSid("");setSdata(null);setPlatform("web");setCtypes([]);setGapText("");setCases([]);setEditOn(false);setScripts({web:"",ios:"",android:""});setProjFiles(null);setExecLines([]);setResult(null);setJKey(null);setBugDone(null);setShowBugForm(false);setFixed(false);setChat(false);setShowAddCase(false);setSelectedForScripts([]);setCoverageText("");setSessionBugs([]);setHasSaved(false);setAppUrl("");};
+  const delStep=(id,si)=>setCases(cs=>cs.map(c=>c.id===id?{...c,steps:(c.steps||[]).filter((_,i)=>i!==si)}:c));
+  const reset=()=>{localStorage.removeItem(WS_SNAP);setPhase(memberProjects.length>1?"project":"input");setSid("");setSdata(null);setPlatform("web");setCtypes([]);setGapText("");setCases([]);setEditOn(false);setScripts({web:"",ios:"",android:""});setProjFiles(null);setExecLines([]);setResult(null);setJKey(null);setBugDone(null);setShowBugForm(false);setFixed(false);setChat(false);setShowAddCase(false);setSelectedForScripts([]);setCoverageText("");setSessionBugs([]);setHasSaved(false);setAppUrl("");};
   const [saveModal,setSaveModal]=useState(null);
   // saveModal: null | {step:1,name:""} | {step:2,name:"",newCat:""}
   const openSaveModal=()=>{
@@ -876,7 +881,9 @@ const [phase,setPhase]=useState("input"); const [sid,setSid]=useState(""); const
     setPhase(lastPhase);
   };
   React.useEffect(()=>{if(onActiveSid)onActiveSid(sid);},[sid]);
+  React.useEffect(()=>{if(onProjChange)onProjChange(proj);},[selectedProjId]);
   React.useEffect(()=>{if(restoreTarget){restoreStory(restoreTarget);if(clearRestore)clearRestore();}}, [restoreTarget]);
+  React.useEffect(()=>{if(resetTrigger>0)reset();},[resetTrigger]);
   React.useEffect(()=>{
     if(!sid||!sdata)return;
     const existing=DB.savedStories.find(s=>s.sid===sid);
@@ -887,15 +894,16 @@ const [phase,setPhase]=useState("input"); const [sid,setSid]=useState(""); const
   },[phase,cases.length,result,coverageText]);
   const goToStep=i=>{
     const cur=WS_IDX[phase]??0; if(i>=cur||phase==="running") return;
-    if(i===0){setPhase("input");return;}
-    if(i===1&&sdata){setPhase("mode");return;}
-    if(i===2&&sdata){const et=[...new Set(cases.map(c=>c.type))];setCtypes(et.length>0?et:[]);setPhase("ctype");return;}
-    if(i===3&&cases.length>0){setPhase("review");return;}
-    if(i===4&&approved.length>0){setPhase("jira");return;}
-    if(i===5){setPhase("urlPrompt");return;}
-    if(i===6&&result){setPhase("result");return;}
-    if(i===7){setPhase("bugReport");return;}
-    if(i===8){setPhase("coverage");return;}
+    if(i===0){setPhase("project");return;}
+    if(i===1){setPhase("input");return;}
+    if(i===2&&sdata){setPhase("mode");return;}
+    if(i===3&&sdata){const et=[...new Set(cases.map(c=>c.type))];setCtypes(et.length>0?et:[]);setPhase("ctype");return;}
+    if(i===4&&cases.length>0){setPhase("review");return;}
+    if(i===5&&approved.length>0){setPhase("jira");return;}
+    if(i===6){setPhase(result?"result":"urlPrompt");return;}
+    if(i===7&&result){setPhase("result");return;}
+    if(i===8){setPhase("bugReport");return;}
+    if(i===9){setPhase("coverage");return;}
   };
   const addManualCase=()=>{
     if(!newCase.title.trim()) return;
@@ -971,15 +979,38 @@ const [phase,setPhase]=useState("input"); const [sid,setSid]=useState(""); const
       </div>
       <div style={{display:"flex",gap:8}}>
         {phase!=="input"&&sid&&<button onClick={openSaveModal} style={ghostBtn} title="Save current session to history">💾 Save</button>}
-        {phase!=="input"&&sid&&<button onClick={reset} disabled={!hasSaved} title={hasSaved?"Start a new story":"Save first to enable"} style={{...ghostBtn,opacity:hasSaved?1:0.4,cursor:hasSaved?"pointer":"not-allowed"}}>↩ New story</button>}
+        {phase!=="input"&&sid&&<button onClick={phase==="coverage"?saveAndReset:reset} disabled={phase!=="coverage"&&!hasSaved} title={phase==="coverage"?"Start a new story":hasSaved?"Start a new story":"Save first to enable"} style={{...ghostBtn,opacity:(phase==="coverage"||hasSaved)?1:0.4,cursor:(phase==="coverage"||hasSaved)?"pointer":"not-allowed"}}>↩ New story</button>}
         {phase!=="input"&&<button onClick={()=>setChat(o=>!o)} style={ghostBtn}>{chat?"Hide chat":"🤖 AI Chat"}</button>}
-        {phase==="coverage"&&<button onClick={saveAndReset} style={ghostBtn}>↩ New story</button>}
       </div>
     </div>
     <StepBar steps={WS_STEPS} cur={WS_IDX[phase]??0} onStepClick={goToStep}/>
+    {projPicker}
     <div style={{display:"flex",gap:16}}>
       <div style={{flex:1,minWidth:0}}>
         {loading&&<Loader msg={lmsg}/>}
+
+        {!loading&&phase==="project"&&<div>
+          <H2 style={{marginBottom:16}}>Choose a project to start</H2>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))",gap:16}}>
+            {memberProjects.map(p=>{
+              const projStories=DB.savedStories.filter(s=>s.sid&&s.sid.startsWith(p.jiraProjKey+"-"));
+              return <div key={p.id} style={{...card,cursor:"pointer",border:selectedProjId===p.id?"2px solid var(--color-text-info)":"1px solid var(--color-border-secondary)",marginBottom:0,transition:"box-shadow 0.15s"}} onClick={()=>{if(p.id===selectedProjId){setPhase("input");}else{switchProj(p.id);}}}>
+                <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10}}>
+                  <div style={{width:40,height:40,borderRadius:10,background:"var(--color-background-info)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:20}}>📁</div>
+                  <div><div style={{fontWeight:600,fontSize:15}}>{p.name}</div><div style={{fontSize:12,color:"var(--color-text-tertiary)"}}>{p.jiraProjKey} · {p.platform||"web"}</div></div>
+                </div>
+                <div style={{fontSize:12,color:"var(--color-text-secondary)",marginBottom:projStories.length>0?10:0}}>{projStories.length} saved session{projStories.length!==1?"s":""}</div>
+                {projStories.length>0&&<div style={{borderTop:"1px solid var(--color-border-tertiary)",paddingTop:8,display:"flex",flexDirection:"column",gap:4}}>
+                  {projStories.slice(0,3).map(s=><div key={s.id} style={{display:"flex",alignItems:"center",gap:6,fontSize:12}}>
+                    <Tag c="blue" style={{flexShrink:0}}>{s.sid}</Tag>
+                    <span style={{color:"var(--color-text-secondary)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flex:1}}>{s.name||s.sid}</span>
+                  </div>)}
+                  {projStories.length>3&&<div style={{fontSize:11,color:"var(--color-text-tertiary)"}}>+{projStories.length-3} more</div>}
+                </div>}
+              </div>;
+            })}
+          </div>
+        </div>}
 
         {!loading&&phase==="input"&&<div>
           {hist.length>0&&<div style={{...card,padding:"12px 16px",marginBottom:12}}>
@@ -1032,7 +1063,7 @@ const [phase,setPhase]=useState("input"); const [sid,setSid]=useState(""); const
         </div>}
 
         {!loading&&phase==="ready"&&<div>
-          <Banner icon="✅" title={cases.length+" test cases generated"} sub={"Platform: "+platform+" · "+autoable.length+" automatable · "+manOnly.length+" manual-only"} color="success"/>
+          <Banner icon="✅" title={cases.length+" test cases generated"} sub={"Platform: "+platform+" · "+cases.filter(c=>c.automatable!==false).length+" automatable · "+cases.filter(c=>c.automatable===false).length+" manual-only"} color="success"/>
           <div style={card}>{cases.map(c=><div key={c.id} style={{padding:"9px 0",borderBottom:"1px solid var(--color-border-tertiary)",display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}><Tag c="blue">{c.id}</Tag><Tag c={tcol(c.type)}>{c.type}</Tag>{c.automatable===false&&<Tag>manual only</Tag>}<span style={{fontSize:14}}>{c.title}</span></div>)}</div>
           <Confirm icon="🔍" title="Would you like to review and edit the test cases?" desc="Approve, reject, and modify each case before proceeding." onYes={()=>{setEditOn(true);setPhase("review");}} onNo={()=>{setCases(cs=>cs.map(c=>({...c,status:"approved"})));setPhase("jira");}} yesLabel="Yes, review" noLabel="Approve all"/>
         </div>}
@@ -1052,9 +1083,18 @@ const [phase,setPhase]=useState("input"); const [sid,setSid]=useState(""); const
                 <div style={{display:"flex",gap:8,marginBottom:10,flexWrap:"wrap",alignItems:"center"}}><Tag c="blue">{c.id}</Tag><Tag c={tcol(c.type)}>{c.type}</Tag>{c.automatable===false&&<Tag>manual only</Tag>}{c.status==="approved"&&<Tag c="green">✓ approved</Tag>}{c.status==="rejected"&&<span style={{display:"inline-block",padding:"2px 9px",borderRadius:20,fontSize:12,fontWeight:500,background:"var(--color-background-danger)",color:"var(--color-text-danger)"}}>✗ rejected</span>}</div>
                 <Lbl>Title</Lbl><input style={{...inp,marginBottom:8,fontWeight:500}} value={c.title} onChange={e=>editC(c.id,"title",e.target.value)} disabled={!editOn}/>
                 <Lbl>Preconditions</Lbl><input style={{...inp,marginBottom:8}} value={c.preconditions||""} onChange={e=>editC(c.id,"preconditions",e.target.value)} disabled={!editOn}/>
-                <Lbl>Steps</Lbl>{(c.steps||[]).map((step,si)=><div key={si} style={{display:"flex",gap:6,marginBottom:4,alignItems:"center"}}><span style={{fontSize:11,color:"var(--color-text-tertiary)",minWidth:18}}>{si+1}.</span><input style={inp} value={step} onChange={e=>editS(c.id,si,e.target.value)} disabled={!editOn}/></div>)}
+                <Lbl>Test Data</Lbl><textarea style={{...ta,marginBottom:8,minHeight:50}} rows={2} value={c.testData||""} onChange={e=>editC(c.id,"testData",e.target.value)} disabled={!editOn} placeholder="e.g. username: admin / password: Test@123"/>
+                <Lbl>Steps</Lbl>
+                {(c.steps||[]).map((step,si)=><div key={si} style={{display:"flex",gap:6,marginBottom:4,alignItems:"center"}}>
+                  <span style={{fontSize:11,color:"var(--color-text-tertiary)",minWidth:18}}>{si+1}.</span>
+                  <input style={{...inp,flex:1}} value={step} onChange={e=>editS(c.id,si,e.target.value)} disabled={!editOn}/>
+                  {editOn&&<button onClick={()=>delStep(c.id,si)} style={{background:"none",border:"none",cursor:"pointer",color:"var(--color-text-danger)",fontSize:14,padding:"0 4px",lineHeight:1,flexShrink:0}}>✕</button>}
+                </div>)}
                 {editOn&&<button onClick={()=>addStep(c.id)} style={{marginTop:6,padding:"4px 10px",borderRadius:6,border:"1px dashed var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:12,color:"var(--color-text-secondary)"}}>+ Add step</button>}
-                <Lbl>Expected result</Lbl><input style={inp} value={c.expected||""} onChange={e=>editC(c.id,"expected",e.target.value)} disabled={!editOn}/>
+                <Lbl>Expected result</Lbl><input style={{...inp,marginBottom:8}} value={c.expected||""} onChange={e=>editC(c.id,"expected",e.target.value)} disabled={!editOn}/>
+                <label style={{display:"flex",alignItems:"center",gap:8,fontSize:13,cursor:editOn?"pointer":"default",opacity:editOn?1:0.6}}>
+                  <input type="checkbox" checked={c.automatable!==false} disabled={!editOn} onChange={e=>editC(c.id,"automatable",e.target.checked)}/> Automatable
+                </label>
               </div>
               <div style={{display:"flex",flexDirection:"column",gap:8,minWidth:96}}><Btn v="success" onClick={()=>approve(c.id)}>✓ Approve</Btn><Btn v="danger" onClick={()=>reject(c.id)}>✗ Reject</Btn></div>
             </div>
@@ -1177,7 +1217,7 @@ const [phase,setPhase]=useState("input"); const [sid,setSid]=useState(""); const
             <H2>Failed cases</H2>
             {result.fail.filter(c=>!sessionBugs.some(b=>b.tcId===c.id)).map(c=><div key={c.id} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 0",borderBottom:"1px solid var(--color-border-tertiary)"}}>
               <Tag c="red">{c.id}</Tag><span style={{flex:1,fontSize:13}}>{c.title}</span>
-              <button onClick={()=>{setBf({tcId:c.id,summary:c.title+" is not working as expected",sev:"High",steps:(c.steps||[]).map((s,i)=>`${i+1}. ${s}`).join("\n")||"1. Reproduce the issue",expected:c.expected||"The feature works as designed",actual:"Timeout error — element not found after 30s during test execution",screenshot:null,_err:false});setShowBugForm(true);}} style={{...ghostBtn,padding:"4px 10px",fontSize:12}}>🐛 File Bug</button>
+              <button onClick={()=>{setBf({tcId:c.id,summary:c.title+" is not working as expected",sev:"High",steps:(c.steps||[]).length>0?[...c.steps]:["Reproduce the issue"],expected:c.expected||"The feature works as designed",actual:"Timeout error — element not found after 30s during test execution",testData:c.testData||"",screenshot:null,_err:false});setShowBugForm(true);}} style={{...ghostBtn,padding:"4px 10px",fontSize:12}}>🐛 File Bug</button>
             </div>)}
           </div>}
           <div style={card}>
@@ -1186,8 +1226,15 @@ const [phase,setPhase]=useState("input"); const [sid,setSid]=useState(""); const
             <input style={{...inp,marginBottom:10,borderColor:bf._err&&!bf.summary.trim()?"var(--color-text-danger)":undefined}} value={bf.summary} onChange={e=>setBf(p=>({...p,summary:e.target.value,_err:false}))} placeholder="e.g. Login button unresponsive after entering valid credentials"/>
             <Lbl>Severity</Lbl>
             <select style={{...sel,marginBottom:10}} value={bf.sev} onChange={e=>setBf(p=>({...p,sev:e.target.value}))}>{["Critical","High","Medium","Low"].map(s=><option key={s}>{s}</option>)}</select>
+            <Lbl>Test Data</Lbl>
+            <textarea style={{...ta,marginBottom:10}} rows={2} value={bf.testData||""} onChange={e=>setBf(p=>({...p,testData:e.target.value}))} placeholder="e.g. username: admin / password: Test@123"/>
             <Lbl>Steps to Reproduce <span style={{color:"var(--color-text-danger)"}}>*</span></Lbl>
-            <textarea style={{...ta,marginBottom:10,borderColor:bf._err&&!bf.steps.trim()?"var(--color-text-danger)":undefined}} rows={4} value={bf.steps} onChange={e=>setBf(p=>({...p,steps:e.target.value,_err:false}))} placeholder={"1. Navigate to the feature\n2. Perform the action\n3. Observe the result"}/>
+            {(bf.steps||[""]).map((step,si)=><div key={si} style={{display:"flex",gap:6,marginBottom:4,alignItems:"center"}}>
+              <span style={{fontSize:11,color:"var(--color-text-tertiary)",minWidth:18}}>{si+1}.</span>
+              <input style={{...inp,flex:1,borderColor:bf._err&&si===0&&!(bf.steps||[""])[0]?.trim()?"var(--color-text-danger)":undefined}} value={step} onChange={e=>{const s=[...(bf.steps||[""])];s[si]=e.target.value;setBf(p=>({...p,steps:s,_err:false}));}} placeholder={si===0?"Navigate to the feature":si===1?"Perform the action":"Observe the result"}/>
+              {(bf.steps||[""]).length>1&&<button onClick={()=>{const s=[...(bf.steps||[""])];s.splice(si,1);setBf(p=>({...p,steps:s}));}} style={{background:"none",border:"none",cursor:"pointer",color:"var(--color-text-danger)",fontSize:14,padding:"0 4px",lineHeight:1,flexShrink:0}}>✕</button>}
+            </div>)}
+            <button onClick={()=>setBf(p=>({...p,steps:[...(p.steps||[""]),""]})) } style={{...ghostBtn,fontSize:12,padding:"3px 10px",marginBottom:10}}>+ Add step</button>
             <Lbl>Expected Result <span style={{color:"var(--color-text-danger)"}}>*</span></Lbl>
             <input style={{...inp,marginBottom:10,borderColor:bf._err&&!bf.expected.trim()?"var(--color-text-danger)":undefined}} value={bf.expected} onChange={e=>setBf(p=>({...p,expected:e.target.value,_err:false}))} placeholder="e.g. User is redirected to the dashboard"/>
             <Lbl>Actual Result <span style={{color:"var(--color-text-danger)"}}>*</span></Lbl>
@@ -1212,9 +1259,9 @@ const [phase,setPhase]=useState("input"); const [sid,setSid]=useState(""); const
             </div>
             {bf._err&&<div style={{color:"var(--color-text-danger)",fontSize:12,marginBottom:10}}>Please fill in all required fields (*) before submitting.</div>}
             <Btn v="danger" onClick={async()=>{
-              if(!bf.summary.trim()||!bf.steps.trim()||!bf.expected.trim()||!bf.actual.trim()){setBf(p=>({...p,_err:true}));return;}
+              const stepLines=(bf.steps||[]).filter(s=>s.trim());
+              if(!bf.summary.trim()||stepLines.length===0||!bf.expected.trim()||!bf.actual.trim()){setBf(p=>({...p,_err:true}));return;}
               setLoading(true);setLmsg("Filing bug…");
-              const stepLines=bf.steps.split("\n").filter(Boolean);
               const adfDesc={type:"doc",version:1,content:[
                 {type:"heading",attrs:{level:3},content:[{type:"text",text:"Steps to Reproduce"}]},
                 {type:"orderedList",content:stepLines.length>0?stepLines.map(s=>({type:"listItem",content:[{type:"paragraph",content:[{type:"text",text:s.replace(/^\d+\.\s*/,"")}]}]})):[{type:"listItem",content:[{type:"paragraph",content:[{type:"text",text:"See summary"}]}]}]},
@@ -1230,7 +1277,7 @@ const [phase,setPhase]=useState("input"); const [sid,setSid]=useState(""); const
               DB.bugs.push(bug);saveDB();pushNotif("admin","🐛 "+bug.bid+" filed for "+sid);
               const bugCase={id:bug.bid,title:bf.summary||"Bug in "+sid,type:"negative",platform,preconditions:"",steps:stepLines.length>0?stepLines:["Reproduce the bug"],expected:bf.expected||"Bug is fixed",automatable:false,status:"approved",fromBug:true,sev:bf.sev};
               setCases(cs=>[...cs,bugCase]);
-              setSessionBugs(p=>[...p,bug]);setBf({summary:"",sev:"High",steps:"",expected:"",actual:"",screenshot:null,_err:false});setLoading(false);
+              setSessionBugs(p=>[...p,bug]);setBf({summary:"",sev:"High",steps:[""],expected:"",actual:"",screenshot:null,_err:false});setLoading(false);
             }}>Submit Bug</Btn>
           </div>
           {sessionBugs.length>0&&<div style={card}>
@@ -1355,9 +1402,8 @@ const [phase,setPhase]=useState("input"); const [sid,setSid]=useState(""); const
             <div style={{...card,marginBottom:12}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:10}}>
                 <div style={{display:"flex",gap:8,alignItems:"center"}}><Tag c="blue">{sid}</Tag><span style={{fontWeight:600,fontSize:15}}>Coverage Report</span><Tag c={platform==="mobile"?"amber":"blue"}>{platform}</Tag></div>
-                <div style={{display:"flex",gap:8}}>
-                  <button onClick={()=>window.print()} style={ghostBtn}>⬇ Download PDF</button>
-                  <button onClick={saveAndReset} style={ghostBtn}>↩ New story</button>
+                <div className="no-pdf" style={{display:"flex",gap:8}}>
+                  <button onClick={()=>{const el=document.getElementById("coverage-print-area");const btns=el.querySelectorAll(".no-pdf");btns.forEach(b=>b.style.display="none");html2pdf().set({margin:10,filename:`Coverage_${sid}.pdf`,html2canvas:{scale:2,useCORS:true},jsPDF:{unit:"mm",format:"a4",orientation:"portrait"}}).from(el).save().then(()=>btns.forEach(b=>b.style.display=""));}} style={ghostBtn}>⬇ Download PDF</button>
                 </div>
               </div>
               <div style={{display:"flex",alignItems:"center",gap:16,marginTop:14,padding:"14px 16px",borderRadius:10,background:"var(--color-background-secondary)"}}>
@@ -1476,19 +1522,25 @@ function App() {
   const [user,setUser]=useState(loadSession); const [page,setPage]=useState(()=>{const u=loadSession();return u?.role==="admin"?"dashboard":"workspace";}); const [,tick]=useState(0);
   const [savedStories,setSavedStories]=useState(()=>[...DB.savedStories]);
   const [restoreTarget,setRestoreTarget]=useState(null);
-  const [activeSid,setActiveSid]=useState("");
+  const [activeSid,setActiveSid]=useState(""); const [activeProj,setActiveProj]=useState(null);
   const [renamingId,setRenamingId]=useState(null); const [renameVal,setRenameVal]=useState("");
   const [renamingCatId,setRenamingCatId]=useState(null); const [renameCatVal,setRenameCatVal]=useState("");
   const renameCat=(id,name)=>{if(!name.trim())return;DB.categories=DB.categories.map(c=>c.id===id?{...c,name:name.trim()}:c);saveDB();refreshSaved();setRenamingCatId(null);};
   const [,forceUpdate]=useState(0);
+  const [resetTrigger,setResetTrigger]=useState(0);
   const refreshSaved=()=>{
     DB.categories=DB.categories.filter(c=>DB.savedStories.some(s=>s.categoryId===c.id));
     setSavedStories([...DB.savedStories]);forceUpdate(x=>x+1);
   };
   const deleteSnap=id=>{
+    const story=DB.savedStories.find(s=>s.id===id);
     DB.savedStories=DB.savedStories.filter(s=>s.id!==id);
     DB.categories=DB.categories.filter(c=>DB.savedStories.some(s=>s.categoryId===c.id));
     saveDB();refreshSaved();
+    if(story&&story.sid===activeSid){
+      localStorage.removeItem(`qa_ws_${user.id}`);
+      setResetTrigger(x=>x+1);
+    }
   };
   const renameSnap=(id,name)=>{DB.savedStories=DB.savedStories.map(s=>s.id===id?{...s,name}:s);saveDB();refreshSaved();setRenamingId(null);};
   const handleLogin=(u,remember)=>{
@@ -1518,6 +1570,8 @@ function App() {
             </div>;})}
         </div>)}
         {user.role==="member"&&savedStories.length>0&&(()=>{
+          const visibleStories=activeProj?.jiraProjKey?savedStories.filter(s=>s.sid&&s.sid.startsWith(activeProj.jiraProjKey+"-")):savedStories;
+          if(visibleStories.length===0)return null;
           const isActive=s=>s.sid===activeSid&&page==="workspace";
           const StoryCard=({s})=>(
             <div key={s.id} style={{borderRadius:7,padding:"8px 9px",background:isActive(s)?"var(--color-background-info)":"var(--color-background-primary)",border:isActive(s)?"1px solid var(--color-text-info)":"1px solid var(--color-border-tertiary)",cursor:renamingId===s.id?"default":"pointer",transition:"border-color 0.15s",borderLeft:isActive(s)?"3px solid var(--color-text-info)":"1px solid var(--color-border-tertiary)"}}
@@ -1545,8 +1599,8 @@ function App() {
                   </div>}
             </div>);
           const cats=DB.categories;
-          const grouped=cats.map(c=>({cat:c,stories:savedStories.filter(s=>s.categoryId===c.id)})).filter(g=>g.stories.length>0);
-          const uncategorized=savedStories.filter(s=>!s.categoryId);
+          const grouped=cats.map(c=>({cat:c,stories:visibleStories.filter(s=>s.categoryId===c.id)})).filter(g=>g.stories.length>0);
+          const uncategorized=visibleStories.filter(s=>!s.categoryId);
           return <div style={{padding:"6px 12px 12px"}}>
             <div style={{fontSize:11,fontWeight:500,color:"var(--color-text-tertiary)",textTransform:"uppercase",letterSpacing:"0.07em",padding:"10px 8px 6px"}}>Saved Stories</div>
             {grouped.map(({cat,stories})=>(
@@ -1586,7 +1640,7 @@ function App() {
       {user.role==="admin"&&page==="projects"&&<ProjectsPage/>}
       {user.role==="admin"&&page==="assign"&&<AssignmentsPage/>}
       {user.role==="admin"&&page==="bugs"&&<BugsPage/>}
-      {user.role==="member"&&page==="workspace"&&<Workspace member={user.member} refreshSaved={refreshSaved} restoreTarget={restoreTarget} clearRestore={()=>setRestoreTarget(null)} onActiveSid={setActiveSid}/>}
+      {user.role==="member"&&page==="workspace"&&<Workspace member={user.member} refreshSaved={refreshSaved} restoreTarget={restoreTarget} clearRestore={()=>setRestoreTarget(null)} onActiveSid={setActiveSid} onProjChange={setActiveProj} resetTrigger={resetTrigger}/>}
     </div>
   </div>;
 }
