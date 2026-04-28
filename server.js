@@ -91,17 +91,17 @@ function proxyJira(jiraUrl, path, method, auth, body) {
 }
 
 /* ── Performance Test (k6) ─────────────────────────────────────────────── */
-function generateK6Script({ testType, method, apiUrl, vus, duration, ramp, p95Threshold, authType, token, basicUsername, basicPassword, requestBody, expectedStatus }) {
+function generateK6Script({ testType, method, apiUrl, vus, duration, ramp, p95Threshold, authType, token, basicUsername, basicPassword, requestBody, expectedStatus, csvUsers }) {
   const m    = (method || 'GET').toLowerCase();
   const vusN = parseInt(vus) || 100;
   const p95N = parseInt(p95Threshold) || 2000;
   const exp  = parseInt(expectedStatus) || 200;
 
-  const headers = { 'Content-Type': 'application/json', 'Accept': 'application/json' };
+  const baseHeaders = { 'Content-Type': 'application/json', 'Accept': 'application/json' };
   if (authType === 'bearer' && token)
-    headers['Authorization'] = 'Bearer ' + token;
+    baseHeaders['Authorization'] = 'Bearer ' + token;
   if (authType === 'basic' && basicUsername)
-    headers['Authorization'] = 'Basic ' + Buffer.from(basicUsername + ':' + (basicPassword || '')).toString('base64');
+    baseHeaders['Authorization'] = 'Basic ' + Buffer.from(basicUsername + ':' + (basicPassword || '')).toString('base64');
 
   const bodyArg = ['post', 'put', 'patch'].includes(m) && requestBody
     ? ', `' + (requestBody || '').replace(/`/g, '\\`') + '`'
@@ -115,6 +115,28 @@ function generateK6Script({ testType, method, apiUrl, vus, duration, ramp, p95Th
     stages = `[{duration:'${ramp}',target:${vusN}},{duration:'${duration}',target:${vusN}},{duration:'${ramp}',target:0}]`;
   }
 
+  // CSV auth: pre-encode each username:password pair on the server side,
+  // then embed the array in the k6 script so each VU picks its credential by index.
+  if (authType === 'csv' && Array.isArray(csvUsers) && csvUsers.length > 0) {
+    const encodedCreds = csvUsers.map(u =>
+      Buffer.from((u.username || '') + ':' + (u.password || '')).toString('base64')
+    );
+    return `import http from 'k6/http';
+import { check, sleep } from 'k6';
+const __creds = ${JSON.stringify(encodedCreds)};
+export let options = {
+  stages: ${stages},
+  thresholds: { 'http_req_duration': ['p(95)<${p95N}'], 'http_req_failed': ['rate<0.05'] }
+};
+export default function () {
+  const headers = ${JSON.stringify(baseHeaders)};
+  headers['Authorization'] = 'Basic ' + __creds[(__VU - 1) % __creds.length];
+  const res = http.${m}('${apiUrl}'${bodyArg}, { headers });
+  check(res, { 'status ${exp}': r => r.status === ${exp} });
+  sleep(1);
+}`;
+  }
+
   return `import http from 'k6/http';
 import { check, sleep } from 'k6';
 export let options = {
@@ -122,7 +144,7 @@ export let options = {
   thresholds: { 'http_req_duration': ['p(95)<${p95N}'], 'http_req_failed': ['rate<0.05'] }
 };
 export default function () {
-  const res = http.${m}('${apiUrl}'${bodyArg}, { headers: ${JSON.stringify(headers)} });
+  const res = http.${m}('${apiUrl}'${bodyArg}, { headers: ${JSON.stringify(baseHeaders)} });
   check(res, { 'status ${exp}': r => r.status === ${exp} });
   sleep(1);
 }`;

@@ -141,6 +141,23 @@ function exportCSV(cases, sid) {
   dlFile("\uFEFF"+csv,"AIO_"+sid+".csv","text/csv;charset=utf-8");
 }
 
+/* ─── CSV user-data parser ───────────────────────────────────────────────── */
+function parseCSVUsers(text) {
+  const lines = text.trim().split(/\r?\n/).filter(l => l.trim());
+  if (lines.length < 2) return { error: "CSV must have a header row and at least one data row." };
+  const headers = lines[0].split(',').map(h => h.trim().replace(/^["']|["']$/g, '').toLowerCase());
+  const uIdx = headers.findIndex(h => /^(username|user|email|login|name)$/.test(h));
+  const pIdx = headers.findIndex(h => /^(password|pass|pwd|secret)$/.test(h));
+  if (uIdx === -1) return { error: "Column not found. Add a column named 'username', 'user', 'email', or 'login'." };
+  if (pIdx === -1) return { error: "Column not found. Add a column named 'password', 'pass', or 'pwd'." };
+  const users = lines.slice(1).map(line => {
+    const cols = line.split(',').map(c => c.trim().replace(/^["']|["']$/g, ''));
+    return { username: cols[uIdx] || '', password: cols[pIdx] || '' };
+  }).filter(u => u.username);
+  if (users.length === 0) return { error: "No valid rows found in the CSV." };
+  return { users };
+}
+
 /* ─── Styles ─────────────────────────────────────────────────────────────── */
 const card = { background:"var(--color-background-secondary)", border:"1px solid var(--color-border-tertiary)", borderRadius:12, padding:20, marginBottom:16 };
 const inp  = { width:"100%", padding:"8px 12px", borderRadius:8, border:"1px solid var(--color-border-secondary)", background:"var(--color-background-primary)", color:"var(--color-text-primary)", fontSize:14, boxSizing:"border-box" };
@@ -668,7 +685,7 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
   const showToast=(msg)=>{setToast(msg);setTimeout(()=>setToast(null),3000);};
 
   // ── Non-functional / performance test state ──────────────────────────────
-  const PERF_FORM_DEFAULT={testType:"load",testName:"",method:"GET",apiUrl:"",expectedStatus:200,authType:"none",token:"",basicUsername:"",basicPassword:"",requestBody:"",vus:100,duration:"60s",ramp:"10s",p95Threshold:2000};
+  const PERF_FORM_DEFAULT={testType:"load",testName:"",method:"GET",apiUrl:"",expectedStatus:200,authType:"none",token:"",basicUsername:"",basicPassword:"",requestBody:"",vus:100,duration:"60s",ramp:"10s",p95Threshold:2000,csvUsers:null,csvFileName:"",csvError:""};
   const [testKind,setTestKind]=useState("functional");
   const [perfForm,setPerfForm]=useState(PERF_FORM_DEFAULT);
   const [perfResult,setPerfResult]=useState(null);
@@ -1143,7 +1160,7 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
                   <div>
                     <Lbl>Authentication</Lbl>
                     <div style={{display:"flex",gap:8,marginTop:6}}>
-                      {[{v:"none",label:"🔓 None"},{v:"bearer",label:"🔑 Bearer"},{v:"basic",label:"👤 Basic"}].map(o=>(
+                      {[{v:"none",label:"🔓 None"},{v:"bearer",label:"🔑 Bearer"},{v:"basic",label:"👤 Basic"},{v:"csv",label:"📋 CSV Users"}].map(o=>(
                         <button key={o.v} onClick={()=>s_({authType:o.v})} style={{padding:"6px 14px",borderRadius:8,border:"1px solid "+(perfForm.authType===o.v?"var(--color-text-info)":"var(--color-border-secondary)"),background:perfForm.authType===o.v?"var(--color-background-info)":"transparent",cursor:"pointer",fontSize:13,fontWeight:perfForm.authType===o.v?600:400,color:perfForm.authType===o.v?"var(--color-text-info)":"var(--color-text-secondary)"}}>
                           {o.label}
                         </button>
@@ -1154,6 +1171,34 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
                   {perfForm.authType==="basic"&&<div style={{display:"flex",gap:12}}>
                     <div style={{flex:1}}><Lbl>Username *</Lbl><input style={inp} value={perfForm.basicUsername} onChange={e=>s_({basicUsername:e.target.value})} placeholder="admin"/></div>
                     <div style={{flex:1}}><Lbl>Password *</Lbl><input style={{...inp}} type="password" value={perfForm.basicPassword} onChange={e=>s_({basicPassword:e.target.value})} placeholder="••••••"/></div>
+                  </div>}
+                  {perfForm.authType==="csv"&&<div>
+                    <Lbl>Upload CSV File *</Lbl>
+                    <div style={{fontSize:12,color:"var(--color-text-tertiary)",marginBottom:8}}>CSV must have columns: <strong>username</strong> (or <em>email</em>/<em>login</em>) and <strong>password</strong> (or <em>pass</em>/<em>pwd</em>). Each virtual user cycles through the rows.</div>
+                    <input type="file" accept=".csv" id="csvUploadInput" style={{display:"none"}} onChange={e=>{
+                      const file=e.target.files[0];
+                      if(!file)return;
+                      const reader=new FileReader();
+                      reader.onload=ev=>{
+                        const result=parseCSVUsers(ev.target.result);
+                        if(result.error){s_({csvError:result.error,csvUsers:null,csvFileName:file.name});}
+                        else{s_({csvUsers:result.users,csvFileName:file.name,csvError:""});}
+                      };
+                      reader.readAsText(file);
+                      e.target.value="";
+                    }}/>
+                    <label htmlFor="csvUploadInput" style={{display:"inline-flex",alignItems:"center",gap:8,padding:"8px 16px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"var(--color-background-tertiary)",cursor:"pointer",fontSize:13,fontWeight:500}}>
+                      📁 {perfForm.csvFileName?perfForm.csvFileName:"Choose CSV File"}
+                    </label>
+                    {perfForm.csvError&&<div style={{marginTop:8,padding:"8px 12px",borderRadius:8,background:"var(--color-background-danger)",border:"1px solid var(--color-text-danger)",color:"var(--color-text-danger)",fontSize:13}}>⚠ {perfForm.csvError}</div>}
+                    {perfForm.csvUsers&&perfForm.csvUsers.length>0&&<div style={{marginTop:10}}>
+                      <div style={{fontSize:13,color:"var(--color-text-success)",fontWeight:500,marginBottom:6}}>✓ {perfForm.csvUsers.length} users loaded</div>
+                      <div style={{fontSize:12,background:"var(--color-background-tertiary)",border:"1px solid var(--color-border-tertiary)",borderRadius:8,padding:"8px 12px",fontFamily:"monospace",maxHeight:110,overflowY:"auto"}}>
+                        <div style={{fontWeight:600,color:"var(--color-text-secondary)",marginBottom:4,borderBottom:"1px solid var(--color-border-tertiary)",paddingBottom:4}}>username · password</div>
+                        {perfForm.csvUsers.slice(0,4).map((u,i)=><div key={i} style={{color:"var(--color-text-primary)",padding:"2px 0"}}>{u.username} · {"•".repeat(Math.min(u.password.length,10))}</div>)}
+                        {perfForm.csvUsers.length>4&&<div style={{color:"var(--color-text-tertiary)",marginTop:4}}>… and {perfForm.csvUsers.length-4} more</div>}
+                      </div>
+                    </div>}
                   </div>}
                   {["POST","PUT","PATCH"].includes(perfForm.method)&&<div><Lbl>Request Body (JSON)</Lbl><textarea style={{...inp,height:76,fontFamily:"monospace",resize:"vertical"}} value={perfForm.requestBody} onChange={e=>s_({requestBody:e.target.value})} placeholder='{"key":"value"}'/></div>}
                 </div>
@@ -1190,7 +1235,7 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
               </div>
 
               <div style={{display:"flex",gap:12,alignItems:"center"}}>
-                <Btn v="primary" onClick={doRunPerfTest} disabled={!perfForm.testName.trim()||!perfForm.apiUrl.trim()}>▶ Start Test</Btn>
+                <Btn v="primary" onClick={doRunPerfTest} disabled={!perfForm.testName.trim()||!perfForm.apiUrl.trim()||(perfForm.authType==="csv"&&(!perfForm.csvUsers||perfForm.csvUsers.length===0))}>▶ Start Test</Btn>
                 <button onClick={()=>setPhase("testType")} style={{...ghostBtn,fontSize:13}}>← Back</button>
               </div>
             </div>
@@ -1204,7 +1249,7 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
                   {label:"Name",val:perfForm.testName||"—"},
                   {label:"Method",val:<Tag c="blue">{perfForm.method}</Tag>},
                   {label:"URL",val:<span style={{fontSize:11,wordBreak:"break-all"}}>{perfForm.apiUrl||"—"}</span>},
-                  {label:"Auth",val:perfForm.authType==="bearer"?"🔑 Bearer":perfForm.authType==="basic"?"👤 Basic":"🔓 None"},
+                  {label:"Auth",val:perfForm.authType==="bearer"?"🔑 Bearer":perfForm.authType==="basic"?"👤 Basic":perfForm.authType==="csv"?("📋 CSV ("+(perfForm.csvUsers?.length||0)+" users)"):"🔓 None"},
                   null,
                   {label:"Virtual Users",val:isStress?perfForm.vus+" (max)":String(perfForm.vus)},
                   {label:"Duration",val:isStress?(durLabels[perfForm.duration]+" / step"):(durLabels[perfForm.duration]||perfForm.duration)},
