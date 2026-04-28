@@ -445,6 +445,44 @@ function AIChat({proj,sid,sdata,cases=[],gapText="",result=null,sessionBugs=[],c
   </div>;
 }
 
+/* ─── Perf AI Chat ────────────────────────────────────────────────────────── */
+function PerfAIChat({proj,perfForm,perfResult}) {
+  const [msgs,setMsgs]=useState([{role:"assistant",text:"Hi! I can see your performance test configuration and results. Ask me anything about the setup, metrics, thresholds, or how to improve API performance!"}]);
+  const [msg,setMsg]=useState(""); const [busy,setBusy]=useState(false);
+  const msgsRef=useRef(null);
+  useEffect(()=>{if(msgsRef.current)msgsRef.current.scrollTop=msgsRef.current.scrollHeight;},[msgs]);
+
+  const send=async()=>{
+    if(!msg.trim()||busy)return;
+    const u=msg.trim();setMsg("");setMsgs(m=>[...m,{role:"user",text:u}]);setBusy(true);
+    const hist=msgs.map(m=>({role:m.role==="assistant"?"assistant":"user",content:m.text}));
+    try{
+      const authDesc=perfForm.authType==="bearer"?"Bearer Token":perfForm.authType==="basic"?"Basic Auth":perfForm.authType==="csv"?`Dynamic/CSV (${perfForm.csvUsers?.length||0} users)`:"None";
+      const configCtx=`TEST CONFIGURATION:\n  Name: ${perfForm.testName||"—"}\n  Type: ${perfForm.testType==="stress"?"Stress Test":"Load Test"}\n  Method: ${perfForm.method} ${perfForm.apiUrl||"—"}\n  Auth: ${authDesc}\n  Virtual Users: ${perfForm.vus}${perfForm.testType==="stress"?" (max)":""}\n  Duration: ${perfForm.duration}${perfForm.testType==="stress"?" per step":""}\n  Ramp: ${perfForm.ramp}\n  p95 Threshold: ${perfForm.p95Threshold}ms`;
+      const resultCtx=perfResult?`\n\nTEST RESULTS:\n  Status: ${perfResult.passed?"PASSED ✅":"FAILED ❌"}\n  Total Requests: ${perfResult.metrics?.totalRequests||0}\n  RPS: ${perfResult.metrics?.rps||0}\n  Avg: ${perfResult.metrics?.avgDuration||0}ms | Min: ${perfResult.metrics?.minDuration||0}ms | Max: ${perfResult.metrics?.maxDuration||0}ms\n  p50: ${perfResult.metrics?.p50||0}ms | p90: ${perfResult.metrics?.p90||0}ms | p95: ${perfResult.metrics?.p95||0}ms | p99: ${perfResult.metrics?.p99||0}ms\n  Error Rate: ${perfResult.metrics?.errorRate||0}%`:"";
+      const sys=`You are a performance testing expert embedded in the QA AI Platform. Help the user understand and improve their API performance tests. Project: "${proj?.name||"—"}"\n\n=== CURRENT TEST ===\n${configCtx}${resultCtx}\n\nBe concise and practical. Focus on performance testing best practices, k6 insights, and actionable recommendations based on the data above.`;
+      const r=await callAI([...hist,{role:"user",content:u}],sys,2000);
+      setMsgs(m=>[...m,{role:"assistant",text:r}]);
+    }catch(e){setMsgs(m=>[...m,{role:"assistant",text:"Error: "+e.message}]);}
+    setBusy(false);
+  };
+
+  return <div style={{display:"flex",flexDirection:"column",height:"100%"}}>
+    <div ref={msgsRef} style={{flex:1,overflow:"auto",display:"flex",flexDirection:"column",gap:10,paddingBottom:8}}>
+      {msgs.map((m,i)=><div key={i} style={{display:"flex",justifyContent:m.role==="user"?"flex-end":"flex-start"}}>
+        <div style={{maxWidth:"85%",padding:"10px 14px",borderRadius:12,fontSize:13,lineHeight:1.65,background:m.role==="user"?"var(--color-text-info)":"var(--color-background-primary)",color:m.role==="user"?"#fff":"var(--color-text-primary)",border:m.role==="assistant"?"1px solid var(--color-border-tertiary)":"none"}}>
+          {m.role==="assistant"?renderMd(m.text):<span style={{whiteSpace:"pre-wrap"}}>{m.text}</span>}
+        </div>
+      </div>)}
+      {busy&&<div style={{alignSelf:"flex-start",padding:"10px 14px",borderRadius:12,background:"var(--color-background-primary)",border:"1px solid var(--color-border-tertiary)",fontSize:13,color:"var(--color-text-tertiary)"}}>Thinking…</div>}
+    </div>
+    <div style={{display:"flex",gap:8,paddingTop:10,borderTop:"1px solid var(--color-border-tertiary)"}}>
+      <input style={{...inp,flex:1,fontSize:13}} value={msg} onChange={e=>setMsg(e.target.value)} onKeyDown={e=>e.key==="Enter"&&!e.shiftKey&&send()} placeholder="Ask about results, thresholds, k6…"/>
+      <Btn v="primary" onClick={send} disabled={busy}>Send</Btn>
+    </div>
+  </div>;
+}
+
 /* ─── Admin Pages ─────────────────────────────────────────────────────────── */
 function MembersPage() {
   const [list,setList]=useState([...DB.members]);
@@ -690,6 +728,7 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
   const [perfForm,setPerfForm]=useState(PERF_FORM_DEFAULT);
   const [perfResult,setPerfResult]=useState(null);
   const [perfLoading,setPerfLoading]=useState(false);
+  const [perfChat,setPerfChat]=useState(false);
 
   // ── Step definitions (reactive: perf path gets its own shorter bar) ───────
   const WS_STEPS = testKind==="non-functional"
@@ -916,15 +955,30 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
   const editS=(id,si,v)=>setCases(cs=>cs.map(c=>{if(c.id!==id)return c;const s=[...c.steps];s[si]=v;return{...c,steps:s};}));
   const addStep=id=>setCases(cs=>cs.map(c=>c.id===id?{...c,steps:[...(c.steps||[]),"New step"]}:c));
   const delStep=(id,si)=>setCases(cs=>cs.map(c=>c.id===id?{...c,steps:(c.steps||[]).filter((_,i)=>i!==si)}:c));
-  const reset=()=>{localStorage.removeItem(WS_SNAP);setPhase(memberProjects.length>1?"project":"testType");setTestKind("functional");setPerfResult(null);setSid("");setSdata(null);setPlatform("web");setCtypes([]);setGapText("");setCases([]);setEditOn(false);setScripts({web:"",ios:"",android:""});setProjFiles(null);setExecLines([]);setResult(null);setJKey(null);setBugDone(null);setShowBugForm(false);setFixed(false);setChat(false);setShowAddCase(false);setSelectedForScripts([]);setCoverageText("");setSessionBugs([]);setHasSaved(false);setAppUrl("");};
+  const reset=()=>{localStorage.removeItem(WS_SNAP);setPhase(memberProjects.length>1?"project":"testType");setTestKind("functional");setPerfResult(null);setPerfForm(PERF_FORM_DEFAULT);setPerfChat(false);setSid("");setSdata(null);setPlatform("web");setCtypes([]);setGapText("");setCases([]);setEditOn(false);setScripts({web:"",ios:"",android:""});setProjFiles(null);setExecLines([]);setResult(null);setJKey(null);setBugDone(null);setShowBugForm(false);setFixed(false);setChat(false);setShowAddCase(false);setSelectedForScripts([]);setCoverageText("");setSessionBugs([]);setHasSaved(false);setAppUrl("");};
+  const resetPerf=()=>{setPerfForm(PERF_FORM_DEFAULT);setPerfResult(null);setPerfChat(false);setHasSaved(false);setPhase("perfTest");};
   const [saveModal,setSaveModal]=useState(null);
   // saveModal: null | {step:1,name:""} | {step:2,name:"",newCat:""}
   const openSaveModal=()=>{
+    if(testKind==="non-functional"){
+      const dflt=perfForm.testName||(perfResult?"Perf Test "+new Date().toLocaleDateString():"New Perf Test");
+      const existing=DB.savedStories.find(s=>s.testKind==="non-functional"&&s.perfForm?.testName===perfForm.testName&&perfForm.testName);
+      setSaveModal({step:1,name:existing?.name||dflt});
+      return;
+    }
     if(!sid||!sdata)return;
     const existing=DB.savedStories.find(s=>s.sid===sid);
     setSaveModal({step:1,name:existing?.name||sid});
   };
   const commitSave=(name,categoryId)=>{
+    if(testKind==="non-functional"){
+      const existing=DB.savedStories.find(s=>s.testKind==="non-functional"&&s.perfForm?.testName===perfForm.testName&&perfForm.testName);
+      const snap={id:existing?.id||uid(),name,testKind:"non-functional",categoryId:categoryId||null,perfForm:{...perfForm},perfResult:perfResult?{...perfResult}:null,savedAt:Date.now()};
+      if(existing){DB.savedStories=DB.savedStories.map(s=>s.id===existing.id?snap:s);}
+      else{DB.savedStories.unshift(snap);}
+      saveDB();if(refreshSaved)refreshSaved();setHasSaved(true);setSaveModal(null);showToast("Session saved successfully");
+      return;
+    }
     const existing=DB.savedStories.find(s=>s.sid===sid);
     const snap={id:existing?.id||uid(),name,categoryId:categoryId||null,phase,sid,sdata,cases:[...cases],gapText,platform,ctypes:[...ctypes],scripts:{...scripts},result,sessionBugs:[...sessionBugs],coverageText,savedAt:Date.now()};
     if(existing){DB.savedStories=DB.savedStories.map(s=>s.sid===sid?snap:s);}
@@ -1050,6 +1104,9 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
         {testKind==="functional"&&phase!=="input"&&sid&&<button onClick={openSaveModal} style={ghostBtn} title="Save current session to history">💾 Save</button>}
         {testKind==="functional"&&phase!=="input"&&sid&&<button onClick={phase==="coverage"?saveAndReset:reset} disabled={phase!=="coverage"&&!hasSaved} title={phase==="coverage"?"Start a new story":hasSaved?"Start a new story":"Save first to enable"} style={{...ghostBtn,opacity:(phase==="coverage"||hasSaved)?1:0.4,cursor:(phase==="coverage"||hasSaved)?"pointer":"not-allowed"}}>↩ New story</button>}
         {testKind==="functional"&&phase!=="input"&&<button onClick={()=>setChat(o=>!o)} style={ghostBtn}>{chat?"Hide chat":"🤖 AI Chat"}</button>}
+        {testKind==="non-functional"&&(phase==="perfTest"||phase==="perfResult")&&<button onClick={openSaveModal} disabled={!perfForm.testName.trim()} title="Save this test session to history" style={{...ghostBtn,opacity:perfForm.testName.trim()?1:0.4,cursor:perfForm.testName.trim()?"pointer":"not-allowed"}}>💾 Save</button>}
+        {testKind==="non-functional"&&(phase==="perfTest"||phase==="perfResult")&&<button onClick={resetPerf} style={ghostBtn} title="Start a new performance test">↩ New Test</button>}
+        {testKind==="non-functional"&&(phase==="perfTest"||phase==="perfResult")&&<button onClick={()=>setPerfChat(o=>!o)} style={ghostBtn}>{perfChat?"Hide chat":"🤖 AI Chat"}</button>}
       </div>
     </div>
     <StepBar steps={WS_STEPS} cur={WS_IDX[phase]??0} onStepClick={goToStep}/>
@@ -1730,10 +1787,16 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
         })()}
       </div>
 
-      {phase!=="input"&&<div style={{width:290,flexShrink:0,display:chat?"flex":"none",flexDirection:"column",height:"calc(100vh - 120px)",position:"sticky",top:0}}>
+      {phase!=="input"&&chat&&testKind==="functional"&&<div style={{width:290,flexShrink:0,display:"flex",flexDirection:"column",height:"calc(100vh - 120px)",position:"sticky",top:0}}>
         <div style={{...card,flex:1,display:"flex",flexDirection:"column",overflow:"hidden",padding:16}}>
           <div style={{fontWeight:500,fontSize:14,marginBottom:12,display:"flex",alignItems:"center",gap:8}}>🤖 QA Assistant <Tag c="blue">{sid}</Tag></div>
           <div style={{flex:1,overflow:"auto"}}><AIChat proj={proj} sid={sid} sdata={sdata} cases={cases} gapText={gapText} result={result} sessionBugs={sessionBugs} coverageText={coverageText} platform={platform}/></div>
+        </div>
+      </div>}
+      {(phase==="perfTest"||phase==="perfResult")&&perfChat&&testKind==="non-functional"&&<div style={{width:290,flexShrink:0,display:"flex",flexDirection:"column",height:"calc(100vh - 120px)",position:"sticky",top:0}}>
+        <div style={{...card,flex:1,display:"flex",flexDirection:"column",overflow:"hidden",padding:16}}>
+          <div style={{fontWeight:500,fontSize:14,marginBottom:12,display:"flex",alignItems:"center",gap:8}}>🤖 Perf Assistant <Tag c="amber">k6</Tag></div>
+          <div style={{flex:1,overflow:"auto"}}><PerfAIChat proj={proj} perfForm={perfForm} perfResult={perfResult}/></div>
         </div>
       </div>}
     </div>
