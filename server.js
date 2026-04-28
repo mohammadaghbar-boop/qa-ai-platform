@@ -15,36 +15,44 @@ const PORT = 3456;
 const EMPTY_MCP = path.join(os.tmpdir(), 'qa-platform-no-mcp.json');
 fs.writeFileSync(EMPTY_MCP, JSON.stringify({ mcpServers: {} }));
 
-/* ── Claude AI ──────────────────────────────────────────────────────────── */
-function callClaude(messages, system) {
+/* ── Claude AI (direct Anthropic API) ──────────────────────────────────── */
+function callClaude(messages, system, claudeApiKey) {
   return new Promise((resolve, reject) => {
-    const conversation = messages.map(m =>
-      (m.role === 'user' ? 'Human' : 'Assistant') + ': ' + m.content
-    ).join('\n\n');
-
-    const fullPrompt = system
-      ? `[System: ${system}]\n\n${conversation}`
-      : conversation;
-
-    const proc = spawn('claude', [
-      '-p', '--output-format', 'text',
-      '--tools', '',
-      '--strict-mcp-config', '--mcp-config', EMPTY_MCP
-    ], {
-      shell: true,
-      env: process.env
+    if (!claudeApiKey) {
+      reject(new Error('No Claude API key configured. Please add your API key in Settings.'));
+      return;
+    }
+    const payload = JSON.stringify({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 8192,
+      ...(system ? { system } : {}),
+      messages
     });
-
-    let output = '', error = '';
-    proc.stdin.write(fullPrompt);
-    proc.stdin.end();
-    proc.stdout.on('data', d => output += d.toString());
-    proc.stderr.on('data', d => error  += d.toString());
-    proc.on('close', code => {
-      if (code === 0 && output.trim()) resolve(output.trim());
-      else reject(new Error(error.trim() || 'claude CLI returned no output (exit ' + code + ')'));
+    const opts = {
+      hostname: 'api.anthropic.com',
+      path:     '/v1/messages',
+      method:   'POST',
+      headers:  {
+        'Content-Type':      'application/json',
+        'x-api-key':         claudeApiKey,
+        'anthropic-version': '2023-06-01',
+        'Content-Length':    Buffer.byteLength(payload)
+      }
+    };
+    const req = https.request(opts, res => {
+      let data = '';
+      res.on('data', d => data += d);
+      res.on('end', () => {
+        try {
+          const parsed = JSON.parse(data);
+          if (parsed.error) reject(new Error('Claude API: ' + (parsed.error.message || parsed.error.type)));
+          else resolve(parsed.content[0].text);
+        } catch (e) { reject(new Error('Failed to parse Claude API response: ' + data.slice(0, 120))); }
+      });
     });
-    proc.on('error', err => reject(new Error('Could not start claude CLI: ' + err.message)));
+    req.on('error', reject);
+    req.write(payload);
+    req.end();
   });
 }
 
@@ -168,15 +176,27 @@ const server = http.createServer((req, res) => {
 
   if (req.method === 'OPTIONS') { res.writeHead(200); res.end(); return; }
 
+  /* ── Serve app ── */
+  if (req.method === 'GET' && (req.url === '/' || req.url === '/index.html')) {
+    try {
+      const html = fs.readFileSync(path.join(__dirname, 'QA AI Platform.html'), 'utf8');
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end(html);
+    } catch (e) {
+      res.writeHead(500); res.end('Could not read app file: ' + e.message);
+    }
+    return;
+  }
+
   let body = '';
   req.on('data', chunk => body += chunk);
   req.on('end', async () => {
     /* ── /api/ai ── */
     if (req.method === 'POST' && req.url === '/api/ai') {
       try {
-        const { messages, system } = JSON.parse(body);
+        const { messages, system, claudeApiKey } = JSON.parse(body);
         console.log('[AI]   Request —', (messages.at(-1)?.content || '').slice(0, 80) + '…');
-        const text = await callClaude(messages, system);
+        const text = await callClaude(messages, system, claudeApiKey);
         console.log('[AI]   Done    —', text.slice(0, 60) + '…');
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ text }));
@@ -231,12 +251,13 @@ const server = http.createServer((req, res) => {
 
 server.listen(PORT, () => {
   console.log('');
-  console.log('  QA AI Platform proxy is running');
-  console.log('  AI   → http://localhost:' + PORT + '/api/ai');
+  console.log('  QA AI Platform is running');
+  console.log('  App  → http://localhost:' + PORT + '/');
+  console.log('  AI   → http://localhost:' + PORT + '/api/ai   (Anthropic direct)');
   console.log('  Jira → http://localhost:' + PORT + '/api/jira');
   console.log('  Perf → http://localhost:' + PORT + '/api/perf');
   console.log('');
-  console.log('  Keep this terminal open while using the app.');
+  console.log('  Open http://localhost:' + PORT + '/ in your browser.');
   console.log('  Press Ctrl+C to stop.');
   console.log('');
 });

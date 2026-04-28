@@ -48,7 +48,7 @@
 const { useState, useRef, useEffect } = React;
 
 /* ─── DB ─────────────────────────────────────────────────────────────────── */
-const DB = { members:[], projects:[], assignments:[], sessions:[], bugs:[], notifs:[], savedStories:[], categories:[] };
+const DB = { members:[], projects:[], assignments:[], sessions:[], bugs:[], notifs:[], savedStories:[], categories:[], memberSettings:[] };
 const STORAGE_KEY = "qa_platform_db";
 function loadDB() {
   try { const s=localStorage.getItem(STORAGE_KEY); if(s){ const p=JSON.parse(s); Object.keys(p).forEach(k=>{ if(Array.isArray(p[k])) DB[k]=p[k]; }); } } catch(e){}
@@ -65,14 +65,24 @@ const tcol = t => t==="happy"?"green":t==="edge"?"amber":"blue";
 const fwName = p => p==="mobile" ? "Appium" : "Playwright";
 const pushNotif = (to,msg) => { DB.notifs.push({id:uid(),to,msg,read:false,ts:ts()}); saveDB(); };
 
+/* ─── Deployment helpers ─────────────────────────────────────────────────── */
+// When opened as a local file use the local server; when served by server.js use relative paths.
+const API_BASE = window.location.protocol === "file:" ? "http://localhost:3456" : "";
+let _currentMemberId = ""; // set by App on login / page-load
+
+function _getMemberSettings() {
+  return DB.memberSettings.find(s => s.memberId === _currentMemberId) || null;
+}
+
 /* ─── Claude API ─────────────────────────────────────────────────────────── */
-async function callAI(messages, sys="", max=4000, key="") {
-  // 1 — Try local Claude Code proxy (node server.js)
+async function callAI(messages, sys="", max=4000, _legacy="") {
+  const settings = _getMemberSettings();
+  const claudeApiKey = settings?.claudeApiKey || "";
   try {
-    const r = await fetch("http://localhost:3456/api/ai", {
+    const r = await fetch(API_BASE + "/api/ai", {
       method:"POST",
       headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({ messages, system:sys })
+      body: JSON.stringify({ messages, system:sys, claudeApiKey })
     });
     if (r.ok) {
       const d = await r.json();
@@ -83,33 +93,34 @@ async function callAI(messages, sys="", max=4000, key="") {
       throw new Error(d.error || "Server error " + r.status);
     }
   } catch(proxyErr) {
-    if (!proxyErr.message.includes("fetch")) {
-      throw proxyErr; // real error from proxy, surface it
-    }
-    throw new Error("AI server is not running.\n\nPlease open a terminal and run:\n  node server.js\n\nKeep it open while using the app.");
+    if (!proxyErr.message.includes("fetch")) throw proxyErr;
+    throw new Error("AI server is not running. Please start it with: node server.js");
   }
 }
 
 /* ─── Jira API ───────────────────────────────────────────────────────────── */
 async function callJira(proj, method, path, body=null) {
-  if (!proj?.jiraUrl||!proj?.jiraToken||!proj?.jiraEmail) throw new Error("Jira not configured");
-  const auth = btoa(proj.jiraEmail+":"+proj.jiraToken);
-  // Route through local proxy to avoid CORS
+  const ms = _getMemberSettings();
+  const jiraUrl   = ms?.jiraUrl   || proj?.jiraUrl   || "";
+  const jiraToken = ms?.jiraToken || proj?.jiraToken || "";
+  const jiraEmail = ms?.jiraEmail || proj?.jiraEmail || "";
+  if (!jiraUrl||!jiraToken||!jiraEmail) throw new Error("Jira not configured. Please add your Jira credentials in Settings.");
+  const auth = btoa(jiraEmail+":"+jiraToken);
   try {
-    const r = await fetch("http://localhost:3456/api/jira", {
+    const r = await fetch(API_BASE + "/api/jira", {
       method:"POST",
       headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({ jiraUrl:proj.jiraUrl, path, method, auth, body })
+      body: JSON.stringify({ jiraUrl, path, method, auth, body })
     });
     const d = await r.json();
     if (d.error) throw new Error(d.error);
     return d;
   } catch(proxyErr) {
     if (!proxyErr.message.includes("fetch")) throw proxyErr;
-    // Proxy not running — try direct (may fail due to CORS)
+    // Fallback: direct fetch (works when server.js is not the intermediary)
     const opts = { method, headers:{"Authorization":"Basic "+auth,"Content-Type":"application/json","Accept":"application/json"} };
     if (body) opts.body = JSON.stringify(body);
-    const r = await fetch(proj.jiraUrl+"/rest/api/3"+path, opts);
+    const r = await fetch(jiraUrl+"/rest/api/3"+path, opts);
     if (!r.ok) { const t=await r.text(); throw new Error("Jira "+r.status+": "+t.slice(0,100)); }
     return r.json();
   }
@@ -449,34 +460,36 @@ function MembersPage() {
 
 function ProjectsPage() {
   const [list,setList]=useState([...DB.projects]);
-  const [f,setF]=useState({name:"",jiraUrl:"",jiraProjKey:"",jiraToken:"",jiraEmail:"",platform:"web"});
-  const [editing,setEditing]=useState(null); const [tm,setTm]=useState({});
-  const save=()=>{ if(!f.name) return; if(editing){Object.assign(DB.projects.find(x=>x.id===editing),f);setEditing(null);}else DB.projects.push({id:uid(),...f}); saveDB(); setList([...DB.projects]); setF({name:"",jiraUrl:"",jiraProjKey:"",jiraToken:"",jiraEmail:"",platform:"web"}); };
-  const edit=p=>{ setEditing(p.id); setF({name:p.name,jiraUrl:p.jiraUrl||"",jiraProjKey:p.jiraProjKey||"",jiraToken:p.jiraToken||"",jiraEmail:p.jiraEmail||"",platform:p.platform||"web"}); };
+  const [f,setF]=useState({name:"",jiraProjKey:"",platform:"web"});
+  const [editing,setEditing]=useState(null);
+  const save=()=>{ if(!f.name) return; if(editing){Object.assign(DB.projects.find(x=>x.id===editing),{name:f.name,jiraProjKey:f.jiraProjKey,platform:f.platform});setEditing(null);}else DB.projects.push({id:uid(),...f}); saveDB(); setList([...DB.projects]); setF({name:"",jiraProjKey:"",platform:"web"}); };
+  const edit=p=>{ setEditing(p.id); setF({name:p.name,jiraProjKey:p.jiraProjKey||"",platform:p.platform||"web"}); };
   const del=id=>{ DB.projects=DB.projects.filter(p=>p.id!==id); DB.assignments=DB.assignments.filter(a=>a.projectId!==id); saveDB(); setList([...DB.projects]); };
-  const testConn=async p=>{ setTm(m=>({...m,[p.id]:"Testing…"})); try{ const d=await callJira(p,"GET","/project/"+p.jiraProjKey); setTm(m=>({...m,[p.id]:"✓ "+d.name})); }catch(e){ setTm(m=>({...m,[p.id]:"✗ "+e.message.slice(0,60)})); } };
   const th={textAlign:"left",padding:"8px 12px",borderBottom:"1px solid var(--color-border-tertiary)",fontSize:12,fontWeight:500,color:"var(--color-text-secondary)"};
   const td={padding:"10px 12px",borderBottom:"1px solid var(--color-border-tertiary)"};
   return <div>
     <H1>Projects</H1>
+    <div style={{...card,marginBottom:12,padding:"12px 16px",background:"var(--color-background-info)",border:"1px solid var(--color-border-secondary)"}}>
+      <div style={{fontSize:13,color:"var(--color-text-secondary)"}}>ℹ️ Jira credentials (URL, email, API token) and Claude API key are now configured per member in their Settings — not stored on the project.</div>
+    </div>
     <div style={card}><H2>{editing?"Edit":"New"} project</H2>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
         <div><Lbl>Name</Lbl><input style={inp} value={f.name} onChange={e=>setF(p=>({...p,name:e.target.value}))} placeholder="App QA"/></div>
         <div><Lbl>Platform</Lbl><select style={sel} value={f.platform} onChange={e=>setF(p=>({...p,platform:e.target.value}))}><option value="web">Web</option><option value="mobile">Mobile</option><option value="both">Both</option></select></div>
-        <div><Lbl>Jira key</Lbl><input style={inp} value={f.jiraProjKey} onChange={e=>setF(p=>({...p,jiraProjKey:e.target.value}))} placeholder="PROJ"/></div>
-        <div><Lbl>Jira URL</Lbl><input style={inp} value={f.jiraUrl} onChange={e=>setF(p=>({...p,jiraUrl:e.target.value}))} placeholder="https://yourorg.atlassian.net"/></div>
-        <div><Lbl>Jira email</Lbl><input style={inp} value={f.jiraEmail} onChange={e=>setF(p=>({...p,jiraEmail:e.target.value}))} placeholder="you@co.com"/></div>
-        <div><Lbl>API token</Lbl><input type="password" style={inp} value={f.jiraToken} onChange={e=>setF(p=>({...p,jiraToken:e.target.value}))} placeholder="••••••"/></div>
+        <div><Lbl>Jira Project Key</Lbl><input style={inp} value={f.jiraProjKey} onChange={e=>setF(p=>({...p,jiraProjKey:e.target.value}))} placeholder="PROJ"/></div>
       </div>
-      <div style={{display:"flex",gap:8}}><Btn v="primary" onClick={save}>{editing?"Save":"Add"}</Btn>{editing&&<button onClick={()=>{setEditing(null);setF({name:"",jiraUrl:"",jiraProjKey:"",jiraToken:"",jiraEmail:"",platform:"web"});}} style={{padding:"8px 18px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:14,color:"var(--color-text-secondary)"}}>Cancel</button>}</div>
+      <div style={{display:"flex",gap:8}}><Btn v="primary" onClick={save}>{editing?"Save":"Add"}</Btn>{editing&&<button onClick={()=>{setEditing(null);setF({name:"",jiraProjKey:"",platform:"web"});}} style={{padding:"8px 18px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:14,color:"var(--color-text-secondary)"}}>Cancel</button>}</div>
     </div>
     <div style={card}>{list.length===0?<div style={{color:"var(--color-text-tertiary)",fontSize:14}}>No projects.</div>:
       <table style={{width:"100%",borderCollapse:"collapse",fontSize:14}}>
-        <thead><tr><th style={th}>Name</th><th style={th}>Key</th><th style={th}>Platform</th><th style={th}>Jira</th><th style={th}></th></tr></thead>
-        <tbody>{list.map(p=><tr key={p.id}><td style={td}><b>{p.name}</b></td><td style={td}><Tag c="blue">{p.jiraProjKey||"—"}</Tag></td><td style={td}><Tag c={p.platform==="mobile"?"amber":"blue"}>{p.platform}</Tag></td>
-          <td style={td}>{p.jiraToken?<><Tag c="green">✓ set</Tag><button onClick={()=>testConn(p)} style={{marginLeft:8,padding:"2px 8px",borderRadius:6,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:11,color:"var(--color-text-secondary)"}}>Test</button>{tm[p.id]&&<div style={{fontSize:11,marginTop:4,color:tm[p.id].startsWith("✓")?"var(--color-text-success)":"var(--color-text-danger)"}}>{tm[p.id]}</div>}</>:<span style={{color:"var(--color-text-warning)",fontSize:13}}>not set</span>}</td>
-          <td style={td}><div style={{display:"flex",gap:8}}><Btn v="ghost" onClick={()=>edit(p)}>Edit</Btn><Btn v="danger" onClick={()=>del(p.id)}>Remove</Btn></div></td>
-        </tr>)}</tbody>
+        <thead><tr><th style={th}>Name</th><th style={th}>Jira Key</th><th style={th}>Platform</th><th style={th}>Members</th><th style={th}></th></tr></thead>
+        <tbody>{list.map(p=>{
+          const memberCount=DB.assignments.filter(a=>a.projectId===p.id).length;
+          return <tr key={p.id}><td style={td}><b>{p.name}</b></td><td style={td}><Tag c="blue">{p.jiraProjKey||"—"}</Tag></td><td style={td}><Tag c={p.platform==="mobile"?"amber":"blue"}>{p.platform}</Tag></td>
+            <td style={td}><span style={{fontSize:13,color:"var(--color-text-secondary)"}}>{memberCount} assigned</span></td>
+            <td style={td}><div style={{display:"flex",gap:8}}><Btn v="ghost" onClick={()=>edit(p)}>Edit</Btn><Btn v="danger" onClick={()=>del(p.id)}>Remove</Btn></div></td>
+          </tr>;
+        })}</tbody>
       </table>}
     </div>
   </div>;
@@ -677,7 +690,7 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
     if(!perfForm.testName.trim()||!perfForm.apiUrl.trim())return;
     setPerfLoading(true);
     try{
-      const r=await fetch("http://localhost:3456/api/perf",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...perfForm,projectName:proj?.name||""})});
+      const r=await fetch(API_BASE+"/api/perf",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...perfForm,projectName:proj?.name||""})});
       const d=await r.json();
       if(d.error)throw new Error(d.error);
       setPerfResult({...d,testName:perfForm.testName,testType:perfForm.testType,vus:perfForm.vus,duration:perfForm.duration,p95Threshold:perfForm.p95Threshold});
@@ -708,6 +721,8 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
   },[phase,sid,sdata,platform,ctypes,gapText,cases,scripts,tab,result,execLines,coverageText,sessionBugs,selectedForScripts,appUrl]);
 
   const SYS=`You are an expert QA engineer. All story data is already provided in the user message — do NOT use any external tools, do NOT access Jira, Atlassian, or any other service. Work only with the text provided. Project:"${proj?.name}" Platform:${proj?.platform||"web"}.`;
+  const mSettings=DB.memberSettings.find(s=>s.memberId===member.id);
+  const jiraConfigured=!!(mSettings?.jiraUrl&&mSettings?.jiraToken&&mSettings?.jiraEmail);
   const approved=cases.filter(c=>c.status==="approved");
   const autoable=approved.filter(c=>c.automatable!==false);
   const manOnly=approved.filter(c=>c.automatable===false);
@@ -733,8 +748,10 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
       setSdata(sd); const pp=proj.platform||"web"; setPlatform(pp==="both"?"web":pp);
       setPhase("mode"); setLoading(false);
     } catch(e) {
-      if(proj?.jiraToken){
-        setFetchError("Story \""+sid+"\" was not found in Jira ("+proj.jiraProjKey+"). Please check the story ID and try again.");
+      if(jiraConfigured){
+        setFetchError(e.message.includes("not configured")||e.message.includes("server")||e.message.includes("fetch")
+          ? e.message
+          : "Story \""+sid+"\" was not found in Jira ("+proj.jiraProjKey+"). Please check the story ID and try again.");
         setLoading(false); return;
       }
       setSdata({key:sid,summary:"Story "+sid,description:"",labels:[],type:"Story",status:"In Progress",assignee:"—",priority:"Medium",sim:true});
@@ -1071,7 +1088,7 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
             <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>{hist.slice().reverse().slice(0,5).map((h,i)=><button key={i} onClick={()=>setSid(h.sid)} style={{...ghostBtn,padding:"4px 10px",fontSize:12}}>{h.sid} {h.passed}P/{h.failed}F</button>)}</div>
           </div>}
           <div style={card}><H2>Enter Jira story ID</H2>
-            <div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:12}}>{proj.jiraToken?<Tag c="green">✓ Jira configured</Tag>:<Tag c="amber">No token — AI simulation</Tag>}</div>
+            <div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:12}}>{jiraConfigured?<Tag c="green">✓ Jira configured</Tag>:<Tag c="amber">No Jira — AI simulation</Tag>}</div>
             <div style={{display:"flex",gap:12,alignItems:"flex-end"}}>
               <div style={{flex:1}}><Lbl>Story ID</Lbl><input style={inp} value={sid} onChange={e=>{setSid(e.target.value);setFetchError("");}} placeholder={proj.jiraProjKey+"-123"} onKeyDown={e=>e.key==="Enter"&&sid&&doFetch()}/></div>
               <Btn v="primary" onClick={()=>sid&&doFetch()}>Fetch story →</Btn>
@@ -1726,6 +1743,88 @@ function LoginPage({onLogin}) {
 }
 
 /* ─── Root App ────────────────────────────────────────────────────────────── */
+/* ─── Member Config Dialog ────────────────────────────────────────────────── */
+function MemberConfigDialog({memberId, onClose}) {
+  const existing=DB.memberSettings.find(s=>s.memberId===memberId);
+  const [step,setStep]=useState(1);
+  const [f,setF]=useState({jiraUrl:existing?.jiraUrl||"",jiraEmail:existing?.jiraEmail||"",jiraToken:existing?.jiraToken||"",claudeApiKey:existing?.claudeApiKey||""});
+  const [testing,setTesting]=useState(false);
+  const [testMsg,setTestMsg]=useState("");
+  const sf=v=>setF(p=>({...p,...v}));
+
+  const testJira=async()=>{
+    if(!f.jiraUrl||!f.jiraToken||!f.jiraEmail){setTestMsg("Fill in all three fields first.");return;}
+    setTesting(true);setTestMsg("");
+    try{
+      const auth=btoa(f.jiraEmail+":"+f.jiraToken);
+      const r=await fetch(API_BASE+"/api/jira",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({jiraUrl:f.jiraUrl,path:"/myself",method:"GET",auth})});
+      const d=await r.json();
+      if(d.error)throw new Error(d.error);
+      setTestMsg("✓ Connected as "+d.displayName);
+    }catch(e){setTestMsg("✗ "+e.message.slice(0,80));}
+    setTesting(false);
+  };
+
+  const save=()=>{
+    if(!f.claudeApiKey.trim())return;
+    const entry={memberId,jiraUrl:f.jiraUrl.trim(),jiraEmail:f.jiraEmail.trim(),jiraToken:f.jiraToken.trim(),claudeApiKey:f.claudeApiKey.trim(),configuredAt:Date.now()};
+    if(existing){DB.memberSettings=DB.memberSettings.map(s=>s.memberId===memberId?entry:s);}
+    else{DB.memberSettings.push(entry);}
+    saveDB();
+    onClose();
+  };
+
+  const overlay={position:"fixed",inset:0,background:"rgba(0,0,0,0.55)",zIndex:3000,display:"flex",alignItems:"center",justifyContent:"center"};
+  const box={background:"var(--color-background-primary)",borderRadius:16,padding:32,width:480,maxWidth:"90vw",boxShadow:"0 16px 48px rgba(0,0,0,0.22)"};
+
+  return <div style={overlay}>
+    <div style={box}>
+      {/* Header */}
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:20}}>
+        <div>
+          <div style={{fontWeight:600,fontSize:17,marginBottom:2}}>{step===1?"🔗 Jira Configuration":"🤖 Claude AI Configuration"}</div>
+          <div style={{fontSize:12,color:"var(--color-text-tertiary)"}}>Step {step} of 2 — your settings are stored locally in your browser</div>
+        </div>
+        {existing&&<button onClick={onClose} style={{background:"none",border:"none",cursor:"pointer",color:"var(--color-text-tertiary)",fontSize:20,padding:"0 4px",lineHeight:1}}>✕</button>}
+      </div>
+      {/* Progress bar */}
+      <div style={{display:"flex",gap:6,marginBottom:24}}>
+        {[1,2].map(n=><div key={n} style={{flex:1,height:4,borderRadius:2,background:n<=step?"var(--color-text-info)":"var(--color-border-secondary)",transition:"background 0.2s"}}/>)}
+      </div>
+
+      {step===1&&<div style={{display:"flex",flexDirection:"column",gap:14}}>
+        <div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:2}}>Connect to your Jira instance to fetch user stories and link bugs. Skip if you don't use Jira.</div>
+        <div><Lbl>Jira URL</Lbl><input style={inp} value={f.jiraUrl} onChange={e=>sf({jiraUrl:e.target.value})} placeholder="https://yourorg.atlassian.net"/></div>
+        <div><Lbl>Email</Lbl><input style={inp} value={f.jiraEmail} onChange={e=>sf({jiraEmail:e.target.value})} placeholder="you@company.com"/></div>
+        <div><Lbl>API Token</Lbl><input type="password" style={inp} value={f.jiraToken} onChange={e=>sf({jiraToken:e.target.value})} placeholder="••••••"/><div style={{fontSize:11,color:"var(--color-text-tertiary)",marginTop:3}}>Get yours at id.atlassian.com → Security → API Tokens</div></div>
+        {f.jiraUrl&&f.jiraEmail&&f.jiraToken&&<div>
+          <button onClick={testJira} disabled={testing} style={{padding:"6px 16px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:13,color:"var(--color-text-secondary)"}}>
+            {testing?"Testing…":"Test Connection"}
+          </button>
+          {testMsg&&<div style={{marginTop:6,fontSize:12,color:testMsg.startsWith("✓")?"var(--color-text-success)":"var(--color-text-danger)"}}>{testMsg}</div>}
+        </div>}
+        <div style={{display:"flex",gap:10,marginTop:4}}>
+          <Btn v="primary" onClick={()=>{setTestMsg("");setStep(2);}}>Next →</Btn>
+          <button onClick={()=>{setTestMsg("");setStep(2);}} style={{padding:"8px 18px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:14,color:"var(--color-text-secondary)"}}>Skip Jira</button>
+        </div>
+      </div>}
+
+      {step===2&&<div style={{display:"flex",flexDirection:"column",gap:14}}>
+        <div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:2}}>Your Claude API key powers all AI features. It is stored only in your browser's local storage and never sent anywhere except the Anthropic API.</div>
+        <div>
+          <Lbl>Claude API Key *</Lbl>
+          <input type="password" style={inp} value={f.claudeApiKey} onChange={e=>sf({claudeApiKey:e.target.value})} placeholder="sk-ant-api03-…" autoFocus/>
+          <div style={{fontSize:11,color:"var(--color-text-tertiary)",marginTop:3}}>Get yours at console.anthropic.com → API Keys</div>
+        </div>
+        <div style={{display:"flex",gap:10,marginTop:4}}>
+          <button onClick={()=>setStep(1)} style={{padding:"8px 18px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:14,color:"var(--color-text-secondary)"}}>← Back</button>
+          <Btn v="primary" onClick={save} disabled={!f.claudeApiKey.trim()}>Save & Continue</Btn>
+        </div>
+      </div>}
+    </div>
+  </div>;
+}
+
 const SESSION_KEY="qa_session";
 function loadSession(){
   try{
@@ -1750,7 +1849,8 @@ function loadSession(){
   }catch{return null;}
 }
 function App() {
-  const [user,setUser]=useState(loadSession); const [page,setPage]=useState(()=>{const u=loadSession();return u?.role==="admin"?"dashboard":"workspace";}); const [,tick]=useState(0);
+  const [user,setUser]=useState(()=>{const u=loadSession();if(u?.role==="member")_currentMemberId=u.id;return u;}); const [page,setPage]=useState(()=>{const u=loadSession();return u?.role==="admin"?"dashboard":"workspace";}); const [,tick]=useState(0);
+  const [showConfig,setShowConfig]=useState(false);
   const [savedStories,setSavedStories]=useState(()=>[...DB.savedStories]);
   const [restoreTarget,setRestoreTarget]=useState(null);
   const [activeSid,setActiveSid]=useState(""); const [activeProj,setActiveProj]=useState(null);
@@ -1779,14 +1879,20 @@ function App() {
     localStorage.removeItem(SESSION_KEY); sessionStorage.removeItem(SESSION_KEY);
     if(remember){localStorage.setItem(SESSION_KEY,JSON.stringify(data));}
     else{sessionStorage.setItem(SESSION_KEY,JSON.stringify(data));}
+    if(u.role==="member"){_currentMemberId=u.id;}else{_currentMemberId="";}
     setUser(u); setPage(u.role==="admin"?"dashboard":"workspace");
+    if(u.role==="member"){
+      const ms=DB.memberSettings.find(s=>s.memberId===u.id);
+      if(!ms?.claudeApiKey)setShowConfig(true);
+    }
   };
-  const handleLogout=()=>{localStorage.removeItem(SESSION_KEY);sessionStorage.removeItem(SESSION_KEY);setUser(null);setPage("workspace");};
+  const handleLogout=()=>{_currentMemberId="";localStorage.removeItem(SESSION_KEY);sessionStorage.removeItem(SESSION_KEY);setUser(null);setPage("workspace");setShowConfig(false);};
   if(!user) return <LoginPage onLogin={handleLogin}/>;
   const adminNav=[{sec:"Overview",items:[{id:"dashboard",label:"Dashboard",icon:"📊"}]},{sec:"Manage",items:[{id:"members",label:"Members",icon:"👥"},{id:"projects",label:"Projects",icon:"📁"},{id:"assign",label:"Assignments",icon:"🔗"}]},{sec:"Reports",items:[{id:"bugs",label:"Bug tracker",icon:"🐛"}]}];
   const memberNav=[{sec:"Work",items:[{id:"workspace",label:"Workspace",icon:"🖥"}]}];
   const nav=user.role==="admin"?adminNav:memberNav;
   return <div style={{fontFamily:"-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif",color:"var(--color-text-primary)",minHeight:"100vh",background:"var(--color-background-tertiary)",display:"flex"}}>
+    {showConfig&&user?.role==="member"&&<MemberConfigDialog memberId={user.id} onClose={()=>setShowConfig(false)}/>}
     <div style={{width:220,minHeight:"100vh",background:"var(--color-background-secondary)",borderRight:"1px solid var(--color-border-tertiary)",display:"flex",flexDirection:"column",flexShrink:0}}>
       <div style={{padding:"16px 20px 12px",borderBottom:"1px solid var(--color-border-tertiary)"}}>
         <div style={{fontWeight:500,fontSize:15}}>QA AI Platform</div>
@@ -1862,6 +1968,9 @@ function App() {
           <div><div style={{fontSize:13,fontWeight:500}}>{user.role==="admin"?"Admin":user.member?.name}</div><div style={{fontSize:11,color:"var(--color-text-tertiary)"}}>{user.role==="admin"?"QA Lead":user.member?.role}</div></div>
           <NotifBell userId={user.role==="admin"?"admin":user.id}/>
         </div>
+        {user.role==="member"&&<button onClick={()=>setShowConfig(true)} style={{width:"100%",padding:"7px 0",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:13,color:"var(--color-text-secondary)",marginBottom:8,display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>
+          {(()=>{const ms=DB.memberSettings.find(s=>s.memberId===user.id);return ms?.claudeApiKey?<><span style={{color:"var(--color-text-success)"}}>●</span> Settings</>:<><span style={{color:"var(--color-text-warning)"}}>●</span> Settings</>})()}
+        </button>}
         <button onClick={handleLogout} style={{width:"100%",padding:"8px 0",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:13,color:"var(--color-text-secondary)"}}>Sign out</button>
       </div>
     </div>
