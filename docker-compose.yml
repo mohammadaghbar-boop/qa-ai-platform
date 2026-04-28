@@ -1,0 +1,6 @@
+services:
+  qa-platform:
+    build: .
+    ports:
+      - "3456:3456"
+    restart: unless-stopped
