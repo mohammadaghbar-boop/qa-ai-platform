@@ -82,6 +82,84 @@ function proxyJira(jiraUrl, path, method, auth, body) {
   });
 }
 
+/* ── Performance Test (k6) ─────────────────────────────────────────────── */
+function generateK6Script({ testType, method, apiUrl, vus, duration, ramp, p95Threshold, authType, token, basicUsername, basicPassword, requestBody, expectedStatus }) {
+  const m    = (method || 'GET').toLowerCase();
+  const vusN = parseInt(vus) || 100;
+  const p95N = parseInt(p95Threshold) || 2000;
+  const exp  = parseInt(expectedStatus) || 200;
+
+  const headers = { 'Content-Type': 'application/json', 'Accept': 'application/json' };
+  if (authType === 'bearer' && token)
+    headers['Authorization'] = 'Bearer ' + token;
+  if (authType === 'basic' && basicUsername)
+    headers['Authorization'] = 'Basic ' + Buffer.from(basicUsername + ':' + (basicPassword || '')).toString('base64');
+
+  const bodyArg = ['post', 'put', 'patch'].includes(m) && requestBody
+    ? ', `' + (requestBody || '').replace(/`/g, '\\`') + '`'
+    : '';
+
+  let stages;
+  if (testType === 'stress') {
+    const s25 = Math.ceil(vusN * 0.25), s50 = Math.ceil(vusN * 0.5), s75 = Math.ceil(vusN * 0.75);
+    stages = `[{duration:'${ramp}',target:${s25}},{duration:'${duration}',target:${s25}},{duration:'${ramp}',target:${s50}},{duration:'${duration}',target:${s50}},{duration:'${ramp}',target:${s75}},{duration:'${duration}',target:${s75}},{duration:'${ramp}',target:${vusN}},{duration:'${duration}',target:${vusN}},{duration:'${ramp}',target:0}]`;
+  } else {
+    stages = `[{duration:'${ramp}',target:${vusN}},{duration:'${duration}',target:${vusN}},{duration:'${ramp}',target:0}]`;
+  }
+
+  return `import http from 'k6/http';
+import { check, sleep } from 'k6';
+export let options = {
+  stages: ${stages},
+  thresholds: { 'http_req_duration': ['p(95)<${p95N}'], 'http_req_failed': ['rate<0.05'] }
+};
+export default function () {
+  const res = http.${m}('${apiUrl}'${bodyArg}, { headers: ${JSON.stringify(headers)} });
+  check(res, { 'status ${exp}': r => r.status === ${exp} });
+  sleep(1);
+}`;
+}
+
+function runK6(scriptPath) {
+  return new Promise((resolve, reject) => {
+    const summaryPath = scriptPath + '.summary.json';
+    const proc = spawn('k6', ['run', '--summary-export', summaryPath, '--no-color', scriptPath], { shell: true });
+    let stderr = '';
+    proc.stderr.on('data', d => stderr += d.toString());
+    proc.on('close', code => {
+      try {
+        if (!fs.existsSync(summaryPath))
+          throw new Error(stderr.slice(0, 300) || 'k6 produced no output (exit ' + code + ')');
+        const sum = JSON.parse(fs.readFileSync(summaryPath, 'utf8'));
+        try { fs.unlinkSync(summaryPath); } catch {}
+        const dur  = sum.metrics?.http_req_duration?.values || {};
+        const req  = sum.metrics?.http_reqs?.values         || {};
+        const fail = sum.metrics?.http_req_failed?.values   || {};
+        resolve({
+          passed: code === 0,
+          metrics: {
+            totalRequests: Math.round(req.count  || 0),
+            rps:           parseFloat((req.rate  || 0).toFixed(2)),
+            avgDuration:   parseFloat((dur.avg   || 0).toFixed(2)),
+            minDuration:   parseFloat((dur.min   || 0).toFixed(2)),
+            maxDuration:   parseFloat((dur.max   || 0).toFixed(2)),
+            p50:           parseFloat((dur['p(50)'] || 0).toFixed(2)),
+            p90:           parseFloat((dur['p(90)'] || 0).toFixed(2)),
+            p95:           parseFloat((dur['p(95)'] || 0).toFixed(2)),
+            p99:           parseFloat((dur['p(99)'] || 0).toFixed(2)),
+            errorRate:     parseFloat(((fail.rate || 0) * 100).toFixed(2))
+          }
+        });
+      } catch (e) { reject(new Error(e.message)); }
+    });
+    proc.on('error', e => reject(new Error(
+      e.code === 'ENOENT'
+        ? 'k6 is not installed. Install it from https://k6.io/docs/get-started/installation/'
+        : 'Failed to start k6: ' + e.message
+    )));
+  });
+}
+
 /* ── HTTP Server ────────────────────────────────────────────────────────── */
 const server = http.createServer((req, res) => {
   res.setHeader('Access-Control-Allow-Origin',  '*');
@@ -127,6 +205,26 @@ const server = http.createServer((req, res) => {
       return;
     }
 
+    /* ── /api/perf ── */
+    if (req.method === 'POST' && req.url === '/api/perf') {
+      try {
+        const params    = JSON.parse(body);
+        const tmpScript = path.join(os.tmpdir(), 'qa_k6_' + Date.now() + '.js');
+        fs.writeFileSync(tmpScript, generateK6Script(params));
+        console.log('[Perf] Running k6 —', params.testName);
+        const result = await runK6(tmpScript);
+        try { fs.unlinkSync(tmpScript); } catch {}
+        console.log('[Perf] Done — passed:', result.passed);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(result));
+      } catch (e) {
+        console.error('[Perf] Error:', e.message);
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: e.message }));
+      }
+      return;
+    }
+
     res.writeHead(404); res.end();
   });
 });
@@ -136,6 +234,7 @@ server.listen(PORT, () => {
   console.log('  QA AI Platform proxy is running');
   console.log('  AI   → http://localhost:' + PORT + '/api/ai');
   console.log('  Jira → http://localhost:' + PORT + '/api/jira');
+  console.log('  Perf → http://localhost:' + PORT + '/api/perf');
   console.log('');
   console.log('  Keep this terminal open while using the app.');
   console.log('  Press Ctrl+C to stop.');

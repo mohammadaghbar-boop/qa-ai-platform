@@ -631,14 +631,13 @@ function BarChart({data,title}) {
 }
 
 /* ─── Workspace ───────────────────────────────────────────────────────────── */
-const WS_STEPS = ["Project","User Story","Analysis","Generate","Review","Export","Scripts","Execute","Bug Report","Coverage"];
-const WS_IDX = {project:0,input:1,mode:2,gap:2,ctype:3,ready:3,review:4,jira:5,urlPrompt:6,scriptSelect:6,autoReady:6,runAsk:7,running:7,result:7,bugReport:8,coverage:9};
+// WS_STEPS and WS_IDX are defined inside Workspace (reactive on testKind)
 
 function Workspace({member,refreshSaved,restoreTarget,clearRestore,onActiveSid,onProjChange,resetTrigger}) {
   const memberProjects=DB.assignments.filter(x=>x.memberId===member.id).map(a=>DB.projects.find(x=>x.id===a.projectId)).filter(Boolean);
   const [selectedProjId,setSelectedProjId]=React.useState(memberProjects[0]?.id||"");
   const proj=memberProjects.find(x=>x.id===selectedProjId)||memberProjects[0]||null;
-const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.memberId===member.id); return ps.length>1?"project":"input"; }); const [sid,setSid]=useState(""); const [sdata,setSdata]=useState(null);
+const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.memberId===member.id); return ps.length>1?"project":"testType"; }); const [sid,setSid]=useState(""); const [sdata,setSdata]=useState(null);
   const [platform,setPlatform]=useState("web"); const [ctypes,setCtypes]=useState([]);
   const [gapText,setGapText]=useState(""); const [cases,setCases]=useState([]);
   const [editOn,setEditOn]=useState(false); const [scripts,setScripts]=useState({web:"",ios:"",android:""});
@@ -655,24 +654,57 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
   const [toast,setToast]=useState(null);
   const showToast=(msg)=>{setToast(msg);setTimeout(()=>setToast(null),3000);};
 
+  // ── Non-functional / performance test state ──────────────────────────────
+  const PERF_FORM_DEFAULT={testType:"load",testName:"",method:"GET",apiUrl:"",expectedStatus:200,authType:"none",token:"",basicUsername:"",basicPassword:"",requestBody:"",vus:100,duration:"60s",ramp:"10s",p95Threshold:2000};
+  const [testKind,setTestKind]=useState("functional");
+  const [perfForm,setPerfForm]=useState(PERF_FORM_DEFAULT);
+  const [perfResult,setPerfResult]=useState(null);
+  const [perfLoading,setPerfLoading]=useState(false);
+
+  // ── Step definitions (reactive: perf path gets its own shorter bar) ───────
+  const WS_STEPS = testKind==="non-functional"
+    ? ["Project","Test Type","Run Test","Results"]
+    : ["Project","Test Type","User Story","Analysis","Generate","Review","Export","Scripts","Execute","Bug Report","Coverage"];
+  const WS_IDX = {
+    project:0, testType:1,
+    input:2, mode:3, gap:3, ctype:4, ready:4,
+    review:5, jira:6, urlPrompt:7, scriptSelect:7, autoReady:7,
+    runAsk:8, running:8, result:8, bugReport:9, coverage:10,
+    perfTest:2, perfResult:3
+  };
+
+  const doRunPerfTest=async()=>{
+    if(!perfForm.testName.trim()||!perfForm.apiUrl.trim())return;
+    setPerfLoading(true);
+    try{
+      const r=await fetch("http://localhost:3456/api/perf",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...perfForm,projectName:proj?.name||""})});
+      const d=await r.json();
+      if(d.error)throw new Error(d.error);
+      setPerfResult({...d,testName:perfForm.testName,testType:perfForm.testType,vus:perfForm.vus,duration:perfForm.duration,p95Threshold:perfForm.p95Threshold});
+      setPhase("perfResult");
+    }catch(e){alert("Performance test error: "+e.message);}
+    setPerfLoading(false);
+  };
+
   const WS_SNAP=`qa_ws_${member.id}`;
   // Restore workspace state on mount (survives logout/login and page refresh)
   useEffect(()=>{
     try{
       const s=JSON.parse(localStorage.getItem(WS_SNAP));
-      if(!s||s.phase==="input")return;
-      setPhase(s.phase);setSid(s.sid||"");setSdata(s.sdata||null);setPlatform(s.platform||"web");
+      if(!s||s.phase==="input"||s.phase==="testType")return;
+      setPhase(s.phase);setTestKind(s.testKind||"functional");setSid(s.sid||"");setSdata(s.sdata||null);setPlatform(s.platform||"web");
       setCtypes(s.ctypes||[]);setGapText(s.gapText||"");setCases(s.cases||[]);
       setScripts(s.scripts||{web:"",ios:"",android:""});setTab(s.tab||"web");
       setResult(s.result||null);setExecLines(s.execLines||[]);
       setCoverageText(s.coverageText||"");setSessionBugs(s.sessionBugs||[]);
       setSelectedForScripts(s.selectedForScripts||[]);setAppUrl(s.appUrl||"");
+      if(s.perfForm)setPerfForm(s.perfForm);if(s.perfResult)setPerfResult(s.perfResult);
     }catch{}
   },[]);
   // Save workspace state on every change
   useEffect(()=>{
-    if(phase==="input"){localStorage.removeItem(WS_SNAP);return;}
-    try{localStorage.setItem(WS_SNAP,JSON.stringify({phase,sid,sdata,platform,ctypes,gapText,cases,scripts,tab,result,execLines,coverageText,sessionBugs,selectedForScripts,appUrl}));}catch{}
+    if(phase==="input"||phase==="testType"){localStorage.removeItem(WS_SNAP);return;}
+    try{localStorage.setItem(WS_SNAP,JSON.stringify({phase,testKind,sid,sdata,platform,ctypes,gapText,cases,scripts,tab,result,execLines,coverageText,sessionBugs,selectedForScripts,appUrl,perfForm,perfResult}));}catch{}
   },[phase,sid,sdata,platform,ctypes,gapText,cases,scripts,tab,result,execLines,coverageText,sessionBugs,selectedForScripts,appUrl]);
 
   const SYS=`You are an expert QA engineer. All story data is already provided in the user message — do NOT use any external tools, do NOT access Jira, Atlassian, or any other service. Work only with the text provided. Project:"${proj?.name}" Platform:${proj?.platform||"web"}.`;
@@ -682,7 +714,7 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
   const allDone=cases.length>0&&cases.every(c=>c.status!=="pending");
 
   if (!proj) return <div style={card}><div style={{color:"var(--color-text-warning)",fontWeight:500}}>No project assigned. Contact your QA lead.</div></div>;
-  const switchProj=(id)=>{if(id===selectedProjId)return;setSelectedProjId(id);setPhase("input");setSid("");setSdata(null);setCases([]);setResult(null);setExecLines([]);setScripts({web:"",ios:"",android:""});setHasSaved(false);};
+  const switchProj=(id)=>{if(id===selectedProjId)return;setSelectedProjId(id);setPhase("testType");setTestKind("functional");setPerfResult(null);setSid("");setSdata(null);setCases([]);setResult(null);setExecLines([]);setScripts({web:"",ios:"",android:""});setHasSaved(false);};
   const projPicker=memberProjects.length>1&&phase!=="project"&&<div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12}}><span style={{fontSize:13,color:"var(--color-text-secondary)",fontWeight:500}}>Project:</span>{memberProjects.map(p=><button key={p.id} onClick={()=>switchProj(p.id)} style={{padding:"4px 14px",borderRadius:20,border:"1px solid",fontSize:13,cursor:"pointer",fontWeight:p.id===selectedProjId?600:400,background:p.id===selectedProjId?"var(--color-background-info)":"var(--color-background-secondary)",color:p.id===selectedProjId?"var(--color-text-info)":"var(--color-text-secondary)",borderColor:p.id===selectedProjId?"var(--color-text-info)":"var(--color-border-secondary)"}}>{p.name}</button>)}</div>;
 
   const doFetch=async()=>{
@@ -850,7 +882,7 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
   const editS=(id,si,v)=>setCases(cs=>cs.map(c=>{if(c.id!==id)return c;const s=[...c.steps];s[si]=v;return{...c,steps:s};}));
   const addStep=id=>setCases(cs=>cs.map(c=>c.id===id?{...c,steps:[...(c.steps||[]),"New step"]}:c));
   const delStep=(id,si)=>setCases(cs=>cs.map(c=>c.id===id?{...c,steps:(c.steps||[]).filter((_,i)=>i!==si)}:c));
-  const reset=()=>{localStorage.removeItem(WS_SNAP);setPhase(memberProjects.length>1?"project":"input");setSid("");setSdata(null);setPlatform("web");setCtypes([]);setGapText("");setCases([]);setEditOn(false);setScripts({web:"",ios:"",android:""});setProjFiles(null);setExecLines([]);setResult(null);setJKey(null);setBugDone(null);setShowBugForm(false);setFixed(false);setChat(false);setShowAddCase(false);setSelectedForScripts([]);setCoverageText("");setSessionBugs([]);setHasSaved(false);setAppUrl("");};
+  const reset=()=>{localStorage.removeItem(WS_SNAP);setPhase(memberProjects.length>1?"project":"testType");setTestKind("functional");setPerfResult(null);setSid("");setSdata(null);setPlatform("web");setCtypes([]);setGapText("");setCases([]);setEditOn(false);setScripts({web:"",ios:"",android:""});setProjFiles(null);setExecLines([]);setResult(null);setJKey(null);setBugDone(null);setShowBugForm(false);setFixed(false);setChat(false);setShowAddCase(false);setSelectedForScripts([]);setCoverageText("");setSessionBugs([]);setHasSaved(false);setAppUrl("");};
   const [saveModal,setSaveModal]=useState(null);
   // saveModal: null | {step:1,name:""} | {step:2,name:"",newCat:""}
   const openSaveModal=()=>{
@@ -895,15 +927,17 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
   const goToStep=i=>{
     const cur=WS_IDX[phase]??0; if(i>=cur||phase==="running") return;
     if(i===0){setPhase("project");return;}
-    if(i===1){setPhase("input");return;}
-    if(i===2&&sdata){setPhase("mode");return;}
-    if(i===3&&sdata){const et=[...new Set(cases.map(c=>c.type))];setCtypes(et.length>0?et:[]);setPhase("ctype");return;}
-    if(i===4&&cases.length>0){setPhase("review");return;}
-    if(i===5&&approved.length>0){setPhase("jira");return;}
-    if(i===6){setPhase(result?"result":"urlPrompt");return;}
-    if(i===7&&result){setPhase("result");return;}
-    if(i===8){setPhase("bugReport");return;}
-    if(i===9){setPhase("coverage");return;}
+    if(i===1){setPhase("testType");return;}
+    if(testKind==="non-functional"){if(i===2){setPhase("perfTest");return;}return;}
+    if(i===2){setPhase("input");return;}
+    if(i===3&&sdata){setPhase("mode");return;}
+    if(i===4&&sdata){const et=[...new Set(cases.map(c=>c.type))];setCtypes(et.length>0?et:[]);setPhase("ctype");return;}
+    if(i===5&&cases.length>0){setPhase("review");return;}
+    if(i===6&&approved.length>0){setPhase("jira");return;}
+    if(i===7){setPhase(result?"result":"urlPrompt");return;}
+    if(i===8&&result){setPhase("result");return;}
+    if(i===9){setPhase("bugReport");return;}
+    if(i===10){setPhase("coverage");return;}
   };
   const addManualCase=()=>{
     if(!newCase.title.trim()) return;
@@ -973,14 +1007,15 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
       <div><div style={{fontSize:20,fontWeight:500,marginBottom:4}}>QA Workspace</div>
         <div style={{fontSize:13,color:"var(--color-text-secondary)",display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
           <span>Project: <b>{proj.name}</b></span><Tag c="blue">{proj.jiraProjKey}</Tag>
-          {phase!=="input"&&<Tag c={platform==="mobile"?"amber":"blue"}>{platform}</Tag>}
-          {sdata&&<Tag c={sdata.sim?"":"green"}>{sdata.sim?"AI simulation":"Jira ✓"}</Tag>}
+          {testKind==="functional"&&phase!=="input"&&<Tag c={platform==="mobile"?"amber":"blue"}>{platform}</Tag>}
+          {testKind==="functional"&&sdata&&<Tag c={sdata.sim?"":"green"}>{sdata.sim?"AI simulation":"Jira ✓"}</Tag>}
+          {testKind==="non-functional"&&(phase==="perfTest"||phase==="perfResult")&&<Tag c="amber">Performance</Tag>}
         </div>
       </div>
       <div style={{display:"flex",gap:8}}>
-        {phase!=="input"&&sid&&<button onClick={openSaveModal} style={ghostBtn} title="Save current session to history">💾 Save</button>}
-        {phase!=="input"&&sid&&<button onClick={phase==="coverage"?saveAndReset:reset} disabled={phase!=="coverage"&&!hasSaved} title={phase==="coverage"?"Start a new story":hasSaved?"Start a new story":"Save first to enable"} style={{...ghostBtn,opacity:(phase==="coverage"||hasSaved)?1:0.4,cursor:(phase==="coverage"||hasSaved)?"pointer":"not-allowed"}}>↩ New story</button>}
-        {phase!=="input"&&<button onClick={()=>setChat(o=>!o)} style={ghostBtn}>{chat?"Hide chat":"🤖 AI Chat"}</button>}
+        {testKind==="functional"&&phase!=="input"&&sid&&<button onClick={openSaveModal} style={ghostBtn} title="Save current session to history">💾 Save</button>}
+        {testKind==="functional"&&phase!=="input"&&sid&&<button onClick={phase==="coverage"?saveAndReset:reset} disabled={phase!=="coverage"&&!hasSaved} title={phase==="coverage"?"Start a new story":hasSaved?"Start a new story":"Save first to enable"} style={{...ghostBtn,opacity:(phase==="coverage"||hasSaved)?1:0.4,cursor:(phase==="coverage"||hasSaved)?"pointer":"not-allowed"}}>↩ New story</button>}
+        {testKind==="functional"&&phase!=="input"&&<button onClick={()=>setChat(o=>!o)} style={ghostBtn}>{chat?"Hide chat":"🤖 AI Chat"}</button>}
       </div>
     </div>
     <StepBar steps={WS_STEPS} cur={WS_IDX[phase]??0} onStepClick={goToStep}/>
@@ -994,7 +1029,7 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))",gap:16}}>
             {memberProjects.map(p=>{
               const projStories=DB.savedStories.filter(s=>s.sid&&s.sid.startsWith(p.jiraProjKey+"-"));
-              return <div key={p.id} style={{...card,cursor:"pointer",border:selectedProjId===p.id?"2px solid var(--color-text-info)":"1px solid var(--color-border-secondary)",marginBottom:0,transition:"box-shadow 0.15s"}} onClick={()=>{if(p.id===selectedProjId){setPhase("input");}else{switchProj(p.id);}}}>
+              return <div key={p.id} style={{...card,cursor:"pointer",border:selectedProjId===p.id?"2px solid var(--color-text-info)":"1px solid var(--color-border-secondary)",marginBottom:0,transition:"box-shadow 0.15s"}} onClick={()=>{if(p.id===selectedProjId){setPhase("testType");}else{switchProj(p.id);}}}>
                 <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10}}>
                   <div style={{width:40,height:40,borderRadius:10,background:"var(--color-background-info)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:20}}>📁</div>
                   <div><div style={{fontWeight:600,fontSize:15}}>{p.name}</div><div style={{fontSize:12,color:"var(--color-text-tertiary)"}}>{p.jiraProjKey} · {p.platform||"web"}</div></div>
@@ -1012,6 +1047,24 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
           </div>
         </div>}
 
+        {!loading&&phase==="testType"&&<div>
+          <H2 style={{marginBottom:16}}>Choose Test Type</H2>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))",gap:16}}>
+            {[{kind:"functional",icon:"✅",label:"Functional Test",sub:"User stories · Test cases · Execution",desc:"Generate and execute functional test cases from Jira user stories using AI.",bg:"var(--color-background-success)"},{kind:"non-functional",icon:"⚡",label:"Performance Test",sub:"Load · Stress · k6",desc:"Run k6 load and stress tests against your APIs with real-time metrics.",bg:"var(--color-background-warning)"}].map(o=>(
+              <div key={o.kind} style={{...card,cursor:"pointer",border:"2px solid var(--color-border-secondary)",marginBottom:0,transition:"box-shadow 0.15s"}}
+                onMouseEnter={e=>e.currentTarget.style.borderColor="var(--color-text-info)"}
+                onMouseLeave={e=>e.currentTarget.style.borderColor="var(--color-border-secondary)"}
+                onClick={()=>{setTestKind(o.kind);setPhase(o.kind==="functional"?"input":"perfTest");}}>
+                <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10}}>
+                  <div style={{width:44,height:44,borderRadius:10,background:o.bg,display:"flex",alignItems:"center",justifyContent:"center",fontSize:22}}>{o.icon}</div>
+                  <div><div style={{fontWeight:600,fontSize:15}}>{o.label}</div><div style={{fontSize:12,color:"var(--color-text-tertiary)",marginTop:2}}>{o.sub}</div></div>
+                </div>
+                <div style={{fontSize:13,color:"var(--color-text-secondary)"}}>{o.desc}</div>
+              </div>
+            ))}
+          </div>
+        </div>}
+
         {!loading&&phase==="input"&&<div>
           {hist.length>0&&<div style={{...card,padding:"12px 16px",marginBottom:12}}>
             <div style={{fontSize:12,fontWeight:500,color:"var(--color-text-secondary)",marginBottom:8}}>Recent stories</div>
@@ -1026,6 +1079,184 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
             {fetchError&&<div style={{marginTop:12,padding:"10px 14px",borderRadius:8,background:"var(--color-background-danger)",border:"1px solid var(--color-text-danger)",color:"var(--color-text-danger)",fontSize:13}}>⚠ {fetchError}</div>}
           </div>
         </div>}
+
+        {perfLoading&&<Loader msg="Running k6 performance test…"/>}
+
+        {!loading&&!perfLoading&&phase==="perfTest"&&(()=>{
+          const durLabels={'30s':'30 seconds','60s':'1 minute','2m':'2 minutes','5m':'5 minutes'};
+          const durSecs={'30s':30,'60s':60,'2m':120,'5m':300};
+          const rampSecs={'5s':5,'10s':10,'30s':30};
+          const isStress=perfForm.testType==='stress';
+          const totalSec=isStress?durSecs[perfForm.duration]*4+rampSecs[perfForm.ramp]*5:(durSecs[perfForm.duration]||60)+(rampSecs[perfForm.ramp]||10)*2;
+          const s_=v=>setPerfForm(f=>({...f,...v}));
+          const inpN={...inp,maxWidth:130};
+          return <div style={{display:"flex",gap:20,alignItems:"flex-start"}}>
+            {/* ── LEFT: form ── */}
+            <div style={{flex:1,minWidth:0,display:"flex",flexDirection:"column",gap:0}}>
+
+              {/* Test type */}
+              <div style={card}>
+                <H2 style={{marginBottom:12}}>Test Type</H2>
+                <div style={{display:"flex",gap:12}}>
+                  {[{v:"load",icon:"🏋",label:"Load Test",desc:"Steady traffic at a fixed VU count."},{v:"stress",icon:"🔥",label:"Stress Test",desc:"Steps up users (25→50→75→100%) to find the breaking point."}].map(o=>(
+                    <button key={o.v} onClick={()=>s_({testType:o.v})} style={{flex:1,padding:14,borderRadius:12,border:"2px solid "+(perfForm.testType===o.v?"var(--color-text-info)":"var(--color-border-secondary)"),background:perfForm.testType===o.v?"var(--color-background-info)":"var(--color-background-primary)",cursor:"pointer",textAlign:"left"}}>
+                      <div style={{fontSize:20,marginBottom:4}}>{o.icon}</div>
+                      <div style={{fontWeight:500,fontSize:14}}>{o.label}</div>
+                      <div style={{fontSize:12,color:"var(--color-text-secondary)",marginTop:2}}>{o.desc}</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* API Details */}
+              <div style={card}>
+                <H2 style={{marginBottom:12}}>API Details</H2>
+                <div style={{display:"flex",flexDirection:"column",gap:12}}>
+                  <div><Lbl>Test Name *</Lbl><input style={inp} value={perfForm.testName} onChange={e=>s_({testName:e.target.value})} placeholder="e.g. Login API — Load Test"/></div>
+                  <div style={{display:"flex",gap:12}}>
+                    <div style={{width:130}}>
+                      <Lbl>Method</Lbl>
+                      <select style={{...inp,width:"100%"}} value={perfForm.method} onChange={e=>s_({method:e.target.value})}>
+                        {["GET","POST","PUT","PATCH","DELETE"].map(m=><option key={m}>{m}</option>)}
+                      </select>
+                    </div>
+                    <div style={{flex:1}}><Lbl>API Endpoint URL *</Lbl><input style={inp} value={perfForm.apiUrl} onChange={e=>s_({apiUrl:e.target.value})} placeholder="https://api.example.com/endpoint"/></div>
+                  </div>
+                  <div style={{maxWidth:200}}><Lbl>Expected Status Code</Lbl><input style={inpN} type="number" value={perfForm.expectedStatus} onChange={e=>s_({expectedStatus:parseInt(e.target.value)||200})}/></div>
+                  <div>
+                    <Lbl>Authentication</Lbl>
+                    <div style={{display:"flex",gap:8,marginTop:6}}>
+                      {[{v:"none",label:"🔓 None"},{v:"bearer",label:"🔑 Bearer"},{v:"basic",label:"👤 Basic"}].map(o=>(
+                        <button key={o.v} onClick={()=>s_({authType:o.v})} style={{padding:"6px 14px",borderRadius:8,border:"1px solid "+(perfForm.authType===o.v?"var(--color-text-info)":"var(--color-border-secondary)"),background:perfForm.authType===o.v?"var(--color-background-info)":"transparent",cursor:"pointer",fontSize:13,fontWeight:perfForm.authType===o.v?600:400,color:perfForm.authType===o.v?"var(--color-text-info)":"var(--color-text-secondary)"}}>
+                          {o.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  {perfForm.authType==="bearer"&&<div><Lbl>Bearer Token *</Lbl><input style={inp} value={perfForm.token} onChange={e=>s_({token:e.target.value})} placeholder="eyJhbGci…"/></div>}
+                  {perfForm.authType==="basic"&&<div style={{display:"flex",gap:12}}>
+                    <div style={{flex:1}}><Lbl>Username *</Lbl><input style={inp} value={perfForm.basicUsername} onChange={e=>s_({basicUsername:e.target.value})} placeholder="admin"/></div>
+                    <div style={{flex:1}}><Lbl>Password *</Lbl><input style={{...inp}} type="password" value={perfForm.basicPassword} onChange={e=>s_({basicPassword:e.target.value})} placeholder="••••••"/></div>
+                  </div>}
+                  {["POST","PUT","PATCH"].includes(perfForm.method)&&<div><Lbl>Request Body (JSON)</Lbl><textarea style={{...inp,height:76,fontFamily:"monospace",resize:"vertical"}} value={perfForm.requestBody} onChange={e=>s_({requestBody:e.target.value})} placeholder='{"key":"value"}'/></div>}
+                </div>
+              </div>
+
+              {/* Load Profile */}
+              <div style={card}>
+                <H2 style={{marginBottom:12}}>Load Profile</H2>
+                <div style={{display:"flex",gap:12,flexWrap:"wrap"}}>
+                  <div><Lbl>{isStress?"Max Virtual Users":"Virtual Users"}</Lbl><input style={inpN} type="number" min="1" max="1000" value={perfForm.vus} onChange={e=>s_({vus:parseInt(e.target.value)||1})}/></div>
+                  <div>
+                    <Lbl>{isStress?"Duration / Step":"Duration"}</Lbl>
+                    <select style={{...inp}} value={perfForm.duration} onChange={e=>s_({duration:e.target.value})}>
+                      <option value="30s">30 seconds</option><option value="60s">1 minute</option><option value="2m">2 minutes</option><option value="5m">5 minutes</option>
+                    </select>
+                  </div>
+                  {!isStress&&<div>
+                    <Lbl>Ramp Up/Down</Lbl>
+                    <select style={{...inp}} value={perfForm.ramp} onChange={e=>s_({ramp:e.target.value})}>
+                      <option value="5s">5 seconds</option><option value="10s">10 seconds</option><option value="30s">30 seconds</option>
+                    </select>
+                  </div>}
+                </div>
+              </div>
+
+              {/* Thresholds */}
+              <div style={card}>
+                <H2 style={{marginBottom:12}}>Thresholds</H2>
+                <div style={{maxWidth:260}}>
+                  <Lbl>p95 Response Time (ms)</Lbl>
+                  <input style={inpN} type="number" value={perfForm.p95Threshold} onChange={e=>s_({p95Threshold:parseInt(e.target.value)||2000})}/>
+                  <div style={{fontSize:12,color:"var(--color-text-tertiary)",marginTop:4}}>Test fails if 95% of requests exceed this limit. Industry standard ≤ 2000 ms.</div>
+                </div>
+              </div>
+
+              <div style={{display:"flex",gap:12,alignItems:"center"}}>
+                <Btn v="primary" onClick={doRunPerfTest} disabled={!perfForm.testName.trim()||!perfForm.apiUrl.trim()}>▶ Start Test</Btn>
+                <button onClick={()=>setPhase("testType")} style={{...ghostBtn,fontSize:13}}>← Back</button>
+              </div>
+            </div>
+
+            {/* ── RIGHT: live summary ── */}
+            <div style={{width:230,flexShrink:0}}>
+              <div style={{...card,position:"sticky",top:0}}>
+                <H2 style={{marginBottom:12}}>Test Summary</H2>
+                {[
+                  {label:"Type",val:<Tag c={isStress?"red":"blue"}>{isStress?"Stress":"Load"}</Tag>},
+                  {label:"Name",val:perfForm.testName||"—"},
+                  {label:"Method",val:<Tag c="blue">{perfForm.method}</Tag>},
+                  {label:"URL",val:<span style={{fontSize:11,wordBreak:"break-all"}}>{perfForm.apiUrl||"—"}</span>},
+                  {label:"Auth",val:perfForm.authType==="bearer"?"🔑 Bearer":perfForm.authType==="basic"?"👤 Basic":"🔓 None"},
+                  null,
+                  {label:"Virtual Users",val:isStress?perfForm.vus+" (max)":String(perfForm.vus)},
+                  {label:"Duration",val:isStress?(durLabels[perfForm.duration]+" / step"):(durLabels[perfForm.duration]||perfForm.duration)},
+                  {label:"Est. Total",val:`~${Math.floor(totalSec/60)}m ${totalSec%60}s`},
+                  {label:"p95 Threshold",val:perfForm.p95Threshold+" ms"},
+                ].map((row,i)=>row===null
+                  ?<div key={i} style={{borderTop:"1px solid var(--color-border-tertiary)",margin:"8px 0"}}/>
+                  :<div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:6,gap:8}}>
+                    <span style={{fontSize:12,color:"var(--color-text-tertiary)",flexShrink:0}}>{row.label}</span>
+                    <span style={{fontSize:12,fontWeight:500,textAlign:"right"}}>{row.val}</span>
+                  </div>
+                )}
+                {isStress&&<div style={{marginTop:8,fontSize:12,color:"var(--color-text-secondary)",background:"var(--color-background-warning)",padding:"8px 10px",borderRadius:8}}>
+                  🔥 Steps: {Math.ceil(perfForm.vus*.25)} → {Math.ceil(perfForm.vus*.5)} → {Math.ceil(perfForm.vus*.75)} → {perfForm.vus} VUs
+                </div>}
+              </div>
+            </div>
+          </div>;
+        })()}
+
+        {!loading&&!perfLoading&&phase==="perfResult"&&perfResult&&(()=>{
+          const pass=perfResult.passed;
+          const m=perfResult.metrics||{};
+          const over=m.p95>perfResult.p95Threshold;
+          return <div>
+            {/* Banner */}
+            <div style={{...card,background:pass?"var(--color-background-success)":"var(--color-background-danger)",border:"1px solid "+(pass?"var(--color-text-success)":"var(--color-text-danger)"),marginBottom:16}}>
+              <div style={{display:"flex",alignItems:"center",gap:12}}>
+                <span style={{fontSize:32}}>{pass?"✅":"❌"}</span>
+                <div>
+                  <div style={{fontWeight:600,fontSize:16}}>{pass?"All thresholds passed":"Test failed — thresholds exceeded"}</div>
+                  <div style={{fontSize:13,color:"var(--color-text-secondary)",marginTop:2}}>{perfResult.testName} · {perfResult.testType==="stress"?"Stress":"Load"} Test · {perfResult.vus} VUs</div>
+                </div>
+              </div>
+            </div>
+            {/* Metrics grid */}
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(150px,1fr))",gap:12,marginBottom:16}}>
+              {[
+                {icon:"📊",label:"Total Requests",val:(m.totalRequests||0).toLocaleString()},
+                {icon:"⚡",label:"Requests / sec",val:m.rps},
+                {icon:"⏱",label:"p95 Latency",val:`${m.p95} ms`,warn:over},
+                {icon:"⚠️",label:"Error Rate",val:`${m.errorRate}%`,warn:m.errorRate>5},
+                {icon:"📈",label:"Avg Latency",val:`${m.avgDuration} ms`},
+                {icon:"📈",label:"Max Latency",val:`${m.maxDuration} ms`},
+              ].map((x,i)=><div key={i} style={{...card,marginBottom:0,textAlign:"center",border:x.warn?"1px solid var(--color-text-danger)":"1px solid var(--color-border-tertiary)"}}>
+                <div style={{fontSize:18,marginBottom:4}}>{x.icon}</div>
+                <div style={{fontSize:20,fontWeight:700,color:x.warn?"var(--color-text-danger)":undefined}}>{x.val}</div>
+                <div style={{fontSize:11,color:"var(--color-text-tertiary)",marginTop:2}}>{x.label}</div>
+              </div>)}
+            </div>
+            {/* Latency breakdown */}
+            <div style={card}>
+              <H2 style={{marginBottom:12}}>Response Time Breakdown</H2>
+              <div style={{display:"flex",gap:24,flexWrap:"wrap"}}>
+                {[["Min",m.minDuration],["Avg",m.avgDuration],["p50",m.p50],["p90",m.p90],["p95",m.p95],["p99",m.p99],["Max",m.maxDuration]].map(([lbl,val])=>(
+                  <div key={lbl} style={{textAlign:"center"}}>
+                    <div style={{fontSize:16,fontWeight:600,color:lbl==="p95"&&over?"var(--color-text-danger)":undefined}}>{val} ms</div>
+                    <div style={{fontSize:11,color:"var(--color-text-tertiary)"}}>{lbl}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+            {/* Actions */}
+            <div style={{display:"flex",gap:12,marginTop:4}}>
+              <Btn v="primary" onClick={()=>setPhase("perfTest")}>↩ Run Again</Btn>
+              <Btn onClick={()=>setPhase("testType")}>← Change Test Type</Btn>
+            </div>
+          </div>;
+        })()}
 
         {!loading&&phase==="mode"&&<div>
           {sdata&&!sdata.sim&&<div style={{...card,background:"var(--color-background-success)",marginBottom:12}}>
