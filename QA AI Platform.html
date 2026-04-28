@@ -1160,7 +1160,7 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
                   <div>
                     <Lbl>Authentication</Lbl>
                     <div style={{display:"flex",gap:8,marginTop:6}}>
-                      {[{v:"none",label:"🔓 None"},{v:"bearer",label:"🔑 Bearer"},{v:"basic",label:"👤 Basic"},{v:"csv",label:"📋 CSV Users"}].map(o=>(
+                      {[{v:"none",label:"🔓 None"},{v:"bearer",label:"🔑 Bearer"},{v:"basic",label:"👤 Basic"},{v:"csv",label:"🔄 Dynamic"}].map(o=>(
                         <button key={o.v} onClick={()=>s_({authType:o.v})} style={{padding:"6px 14px",borderRadius:8,border:"1px solid "+(perfForm.authType===o.v?"var(--color-text-info)":"var(--color-border-secondary)"),background:perfForm.authType===o.v?"var(--color-background-info)":"transparent",cursor:"pointer",fontSize:13,fontWeight:perfForm.authType===o.v?600:400,color:perfForm.authType===o.v?"var(--color-text-info)":"var(--color-text-secondary)"}}>
                           {o.label}
                         </button>
@@ -1249,7 +1249,7 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
                   {label:"Name",val:perfForm.testName||"—"},
                   {label:"Method",val:<Tag c="blue">{perfForm.method}</Tag>},
                   {label:"URL",val:<span style={{fontSize:11,wordBreak:"break-all"}}>{perfForm.apiUrl||"—"}</span>},
-                  {label:"Auth",val:perfForm.authType==="bearer"?"🔑 Bearer":perfForm.authType==="basic"?"👤 Basic":perfForm.authType==="csv"?("📋 CSV ("+(perfForm.csvUsers?.length||0)+" users)"):"🔓 None"},
+                  {label:"Auth",val:perfForm.authType==="bearer"?"🔑 Bearer":perfForm.authType==="basic"?"👤 Basic":perfForm.authType==="csv"?("🔄 Dynamic ("+(perfForm.csvUsers?.length||0)+" users)"):"🔓 None"},
                   null,
                   {label:"Virtual Users",val:isStress?perfForm.vus+" (max)":String(perfForm.vus)},
                   {label:"Duration",val:isStress?(durLabels[perfForm.duration]+" / step"):(durLabels[perfForm.duration]||perfForm.duration)},
