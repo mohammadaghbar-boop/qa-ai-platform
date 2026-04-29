@@ -168,6 +168,49 @@ function proxyJira(jiraUrl, path, method, auth, body) {
   });
 }
 
+/* ── Jira Attachment Upload ─────────────────────────────────────────────── */
+function attachToJira(jiraUrl, issueKey, auth, files) {
+  return new Promise((resolve, reject) => {
+    const boundary = '----QAPlatformBoundary' + Date.now().toString(16);
+    const parts = [];
+    for (const file of files) {
+      const m = file.dataUrl.match(/^data:([^;]+);base64,(.+)$/);
+      if (!m) continue;
+      const fileData = Buffer.from(m[2], 'base64');
+      parts.push(
+        Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${file.name}"\r\nContent-Type: ${m[1]}\r\n\r\n`, 'utf8'),
+        fileData,
+        Buffer.from('\r\n', 'utf8')
+      );
+    }
+    if (parts.length === 0) { resolve(false); return; }
+    parts.push(Buffer.from(`--${boundary}--\r\n`, 'utf8'));
+    const body = Buffer.concat(parts);
+    const url = new URL(jiraUrl + '/rest/api/3/issue/' + issueKey + '/attachments');
+    const opts = {
+      hostname: url.hostname,
+      path:     url.pathname + url.search,
+      method:   'POST',
+      headers: {
+        'Authorization':      'Basic ' + auth,
+        'X-Atlassian-Token':  'no-check',
+        'Content-Type':       `multipart/form-data; boundary=${boundary}`,
+        'Content-Length':     body.length
+      }
+    };
+    const req = https.request(opts, res => {
+      let data = ''; res.on('data', d => data += d);
+      res.on('end', () => {
+        if (res.statusCode >= 400) reject(new Error('Jira attach ' + res.statusCode + ': ' + data.slice(0, 200)));
+        else resolve(true);
+      });
+    });
+    req.on('error', reject);
+    req.write(body);
+    req.end();
+  });
+}
+
 /* ── Performance Test (k6) ─────────────────────────────────────────────── */
 function generateK6Script({ testType, method, apiUrl, vus, duration, ramp, p95Threshold, authType, token, basicUsername, basicPassword, requestBody, expectedStatus, csvUsers }) {
   const m    = (method || 'GET').toLowerCase();
@@ -498,6 +541,31 @@ const server = http.createServer((req, res) => {
         res.end(JSON.stringify(data));
       } catch (e) {
         console.error('[Jira] Error:', e.message);
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: e.message }));
+      }
+      return;
+    }
+
+    /* ── /api/jira/attach ── */
+    if (req.method === 'POST' && req.url === '/api/jira/attach') {
+      try {
+        const session = getSession(req);
+        const parsed  = JSON.parse(body);
+        const jiraUrl = session?.jiraUrl  || parsed.jiraUrl;
+        const auth    = session?.jiraAuth || parsed.auth;
+        const { issueKey, files } = parsed;
+        if (!issueKey || !Array.isArray(files) || files.length === 0) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'issueKey and files are required' })); return;
+        }
+        console.log('[Jira] Attaching', files.length, 'file(s) to', issueKey);
+        await attachToJira(jiraUrl, issueKey, auth, files);
+        console.log('[Jira] Attachments uploaded to', issueKey);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true }));
+      } catch (e) {
+        console.error('[Jira] Attach error:', e.message);
         res.writeHead(500, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: e.message }));
       }
