@@ -4,3 +4,8 @@ services:
     ports:
       - "3456:3456"
     restart: unless-stopped
+    volumes:
+      - qa-data:/app/data
+
+volumes:
+  qa-data:

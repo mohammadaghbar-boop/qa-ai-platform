@@ -168,6 +168,18 @@ async function callJira(proj, method, path, body=null) {
   return d;
 }
 
+/* ─── Admin sync (best-effort, never blocks UI) ─────────────────────────── */
+async function syncToServer(type, payload) {
+  try {
+    const token = sessionStorage.getItem(SESSION_TOKEN_KEY);
+    await fetch(API_BASE + "/api/sync", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Session-Token": token || "" },
+      body: JSON.stringify({ type, ...payload })
+    });
+  } catch {}
+}
+
 /* ─── File helpers ───────────────────────────────────────────────────────── */
 function dlFile(content, name, mime="text/plain") {
   const a = document.createElement("a");
@@ -620,31 +632,115 @@ function AssignmentsPage() {
 }
 
 function DashboardPage() {
-  const s=DB.sessions; const b=DB.bugs;
-  const tp=s.reduce((a,x)=>a+(x.passed||0),0), tf=s.reduce((a,x)=>a+(x.failed||0),0);
+  const [sd,setSd]=useState(null);
+  const [tab,setTab]=useState("sessions");
+  const [loading,setLoading]=useState(true);
+  useEffect(()=>{
+    fetch(API_BASE+"/api/admin/data")
+      .then(r=>r.json()).then(d=>{setSd(d);setLoading(false);})
+      .catch(()=>setLoading(false));
+  },[]);
+  const sessions=sd?.sessions||[]; const bugs=sd?.bugs||[]; const perfs=sd?.perfResults||[]; const cov=sd?.coverage||[];
+  const tp=sessions.reduce((a,x)=>a+(x.passed||0),0), tf=sessions.reduce((a,x)=>a+(x.failed||0),0);
   const pr=tp+tf>0?Math.round(tp/(tp+tf)*100):0;
-  const cards=[{l:"Members",v:DB.members.length,c:"info"},{l:"Projects",v:DB.projects.length,c:"success"},{l:"Sessions",v:s.length,c:"warning"},{l:"Bugs",v:b.length,c:"danger"},{l:"Passed",v:tp,c:"success"},{l:"Pass rate",v:pr+"%",c:pr>=80?"success":pr>=50?"warning":"danger"}];
+  const perfPassed=perfs.filter(x=>x.passed).length;
+  const cards=[
+    {l:"Members",v:DB.members.length,c:"info"},
+    {l:"Projects",v:DB.projects.length,c:"success"},
+    {l:"Test Sessions",v:sessions.length,c:"warning"},
+    {l:"Bugs Filed",v:bugs.length,c:"danger"},
+    {l:"Pass Rate",v:pr+"%",c:pr>=80?"success":pr>=50?"warning":"danger"},
+    {l:"Perf Tests",v:perfs.length,c:"info"},
+  ];
   const th={textAlign:"left",padding:"8px 10px",borderBottom:"1px solid var(--color-border-tertiary)",fontSize:12,fontWeight:500,color:"var(--color-text-secondary)"};
-  const td={padding:"8px 10px",borderBottom:"1px solid var(--color-border-tertiary)"};
+  const td={padding:"8px 10px",borderBottom:"1px solid var(--color-border-tertiary)",fontSize:13};
+  const tabBtn=(t,label)=><button onClick={()=>setTab(t)} style={{padding:"6px 16px",borderRadius:8,border:"1px solid "+(tab===t?"var(--color-text-info)":"var(--color-border-secondary)"),background:tab===t?"var(--color-background-info)":"transparent",cursor:"pointer",fontSize:13,fontWeight:tab===t?600:400,color:tab===t?"var(--color-text-info)":"var(--color-text-secondary)"}}>{label}</button>;
   return <div>
-    <H1>Dashboard</H1>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+      <H1 style={{marginBottom:0}}>Dashboard</H1>
+      {loading&&<span style={{fontSize:12,color:"var(--color-text-tertiary)"}}>Loading server data…</span>}
+      {!loading&&!sd&&<span style={{fontSize:12,color:"var(--color-text-warning)"}}>⚠ Server data unavailable — start node server.js</span>}
+      {!loading&&sd&&<button onClick={()=>{setLoading(true);fetch(API_BASE+"/api/admin/data").then(r=>r.json()).then(d=>{setSd(d);setLoading(false);}).catch(()=>setLoading(false));}} style={{fontSize:12,padding:"4px 12px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",color:"var(--color-text-secondary)"}}>↻ Refresh</button>}
+    </div>
     <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12,marginBottom:20}}>
       {cards.map(x=><div key={x.l} style={{...card,marginBottom:0,padding:18}}><div style={{fontSize:28,fontWeight:500,color:`var(--color-text-${x.c})`}}>{x.v}</div><div style={{fontSize:13,color:"var(--color-text-secondary)",marginTop:2}}>{x.l}</div></div>)}
     </div>
-    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
-      <div style={card}><H2>Recent sessions</H2>
-        {s.length===0?<div style={{color:"var(--color-text-tertiary)",fontSize:14}}>None yet.</div>:
-        <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}><thead><tr><th style={th}>Member</th><th style={th}>Story</th><th style={th}>Result</th></tr></thead>
-          <tbody>{[...s].reverse().slice(0,8).map((x,i)=><tr key={i}><td style={td}>{x.name}</td><td style={td}><Tag c="blue">{x.sid}</Tag></td><td style={td}><Tag c="green">{x.passed}P</Tag> <Tag c="red">{x.failed}F</Tag></td></tr>)}</tbody>
-        </table>}
-      </div>
-      <div style={card}><H2>Recent bugs</H2>
-        {b.length===0?<div style={{color:"var(--color-text-tertiary)",fontSize:14}}>None yet.</div>:
-        <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}><thead><tr><th style={th}>Bug</th><th style={th}>Story</th><th style={th}>Sev</th><th style={th}>Status</th></tr></thead>
-          <tbody>{[...b].reverse().slice(0,8).map((x,i)=><tr key={i}><td style={td}><Tag c="red">{x.bid}</Tag></td><td style={td}><Tag c="blue">{x.sid}</Tag></td><td style={td}><Tag c={x.sev==="High"||x.sev==="Critical"?"red":"amber"}>{x.sev}</Tag></td><td style={td}><span style={{fontSize:12}}>{x.status}</span></td></tr>)}</tbody>
-        </table>}
-      </div>
-    </div>
+    <div style={{display:"flex",gap:8,marginBottom:16}}>{tabBtn("sessions","📋 Sessions")}{tabBtn("bugs","🐛 Bugs")}{tabBtn("perf","⚡ Performance")}{tabBtn("coverage","📊 Coverage")}</div>
+
+    {tab==="sessions"&&<div style={card}>
+      <H2>Test Sessions — all members</H2>
+      {sessions.length===0?<div style={{color:"var(--color-text-tertiary)",fontSize:14}}>No sessions synced yet. Sessions appear here after members complete test execution.</div>:
+      <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+        <thead><tr><th style={th}>Member</th><th style={th}>Project</th><th style={th}>Story</th><th style={th}>Summary</th><th style={th}>Platform</th><th style={th}>Passed</th><th style={th}>Failed</th><th style={th}>Date</th></tr></thead>
+        <tbody>{sessions.slice(0,50).map((x,i)=><tr key={i}>
+          <td style={td}><b>{x.memberName}</b></td>
+          <td style={td}><Tag c="blue">{x.projectName||"—"}</Tag></td>
+          <td style={td}><Tag c="blue">{x.sid}</Tag></td>
+          <td style={td}><span style={{fontSize:12,color:"var(--color-text-secondary)"}}>{(x.summary||"").slice(0,40)}{x.summary?.length>40?"…":""}</span></td>
+          <td style={td}><span style={{fontSize:12}}>{x.platform||"—"}</span></td>
+          <td style={td}><Tag c="green">{x.passed}</Tag></td>
+          <td style={td}><Tag c={x.failed>0?"red":"green"}>{x.failed}</Tag></td>
+          <td style={{...td,fontSize:11,color:"var(--color-text-tertiary)"}}>{x.syncedAt?new Date(x.syncedAt).toLocaleDateString():""}</td>
+        </tr>)}</tbody>
+      </table>}
+    </div>}
+
+    {tab==="bugs"&&<div style={card}>
+      <H2>Bugs Filed — all members</H2>
+      {bugs.length===0?<div style={{color:"var(--color-text-tertiary)",fontSize:14}}>No bugs synced yet. Bugs appear here after members file them.</div>:
+      <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+        <thead><tr><th style={th}>Bug ID</th><th style={th}>Filed by</th><th style={th}>Project</th><th style={th}>Story</th><th style={th}>Summary</th><th style={th}>Severity</th><th style={th}>Jira</th><th style={th}>Date</th></tr></thead>
+        <tbody>{bugs.slice(0,50).map((x,i)=><tr key={i}>
+          <td style={td}><Tag c="red">{x.bid}</Tag></td>
+          <td style={td}><b>{x.memberName}</b></td>
+          <td style={td}><span style={{fontSize:12}}>{x.projectName||"—"}</span></td>
+          <td style={td}><Tag c="blue">{x.sid}</Tag></td>
+          <td style={td}><span style={{fontSize:12,color:"var(--color-text-secondary)"}}>{(x.summary||"").slice(0,40)}{x.summary?.length>40?"…":""}</span></td>
+          <td style={td}><Tag c={x.severity==="Critical"||x.severity==="High"?"red":"amber"}>{x.severity}</Tag></td>
+          <td style={td}><span style={{fontSize:12,fontFamily:"monospace"}}>{x.jiraKey||"—"}</span></td>
+          <td style={{...td,fontSize:11,color:"var(--color-text-tertiary)"}}>{x.syncedAt?new Date(x.syncedAt).toLocaleDateString():""}</td>
+        </tr>)}</tbody>
+      </table>}
+    </div>}
+
+    {tab==="perf"&&<div style={card}>
+      <H2>Performance Tests — all members</H2>
+      {perfs.length===0?<div style={{color:"var(--color-text-tertiary)",fontSize:14}}>No performance tests synced yet.</div>:
+      <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+        <thead><tr><th style={th}>Test Name</th><th style={th}>Member</th><th style={th}>Project</th><th style={th}>Type</th><th style={th}>VUs</th><th style={th}>p95</th><th style={th}>Threshold</th><th style={th}>Result</th><th style={th}>Date</th></tr></thead>
+        <tbody>{perfs.slice(0,50).map((x,i)=><tr key={i}>
+          <td style={td}><b>{x.testName}</b></td>
+          <td style={td}>{x.memberName}</td>
+          <td style={td}><span style={{fontSize:12}}>{x.projectName||"—"}</span></td>
+          <td style={td}><Tag c={x.testType==="stress"?"red":"blue"}>{x.testType}</Tag></td>
+          <td style={td}>{x.vus}</td>
+          <td style={td}><span style={{fontFamily:"monospace",fontSize:12}}>{x.metrics?.p95||0}ms</span></td>
+          <td style={td}><span style={{fontFamily:"monospace",fontSize:12}}>{x.p95Threshold}ms</span></td>
+          <td style={td}><Tag c={x.passed?"green":"red"}>{x.passed?"✓ Pass":"✗ Fail"}</Tag></td>
+          <td style={{...td,fontSize:11,color:"var(--color-text-tertiary)"}}>{x.syncedAt?new Date(x.syncedAt).toLocaleDateString():""}</td>
+        </tr>)}</tbody>
+      </table>}
+    </div>}
+
+    {tab==="coverage"&&<div style={card}>
+      <H2>Coverage Reports — all members</H2>
+      {cov.length===0?<div style={{color:"var(--color-text-tertiary)",fontSize:14}}>No coverage reports synced yet.</div>:
+      <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+        <thead><tr><th style={th}>Member</th><th style={th}>Project</th><th style={th}>Story</th><th style={th}>Summary</th><th style={th}>Platform</th><th style={th}>Approved Cases</th><th style={th}>Passed</th><th style={th}>Failed</th><th style={th}>Bugs</th><th style={th}>Date</th></tr></thead>
+        <tbody>{cov.slice(0,50).map((x,i)=><tr key={i}>
+          <td style={td}><b>{x.memberName}</b></td>
+          <td style={td}><span style={{fontSize:12}}>{x.projectName||"—"}</span></td>
+          <td style={td}><Tag c="blue">{x.sid}</Tag></td>
+          <td style={td}><span style={{fontSize:12,color:"var(--color-text-secondary)"}}>{(x.summary||"").slice(0,35)}{x.summary?.length>35?"…":""}</span></td>
+          <td style={td}><span style={{fontSize:12}}>{x.platform||"—"}</span></td>
+          <td style={td}><b>{x.approvedCases}</b></td>
+          <td style={td}><Tag c="green">{x.passed}</Tag></td>
+          <td style={td}><Tag c={x.failed>0?"red":"green"}>{x.failed}</Tag></td>
+          <td style={td}><Tag c={x.bugs>0?"red":"green"}>{x.bugs}</Tag></td>
+          <td style={{...td,fontSize:11,color:"var(--color-text-tertiary)"}}>{x.syncedAt?new Date(x.syncedAt).toLocaleDateString():""}</td>
+        </tr>)}</tbody>
+      </table>}
+    </div>}
   </div>;
 }
 
@@ -793,6 +889,7 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
       if(d.error)throw new Error(d.error);
       setPerfResult({...d,testName:perfForm.testName,testType:perfForm.testType,vus:perfForm.vus,duration:perfForm.duration,p95Threshold:perfForm.p95Threshold});
       setPhase("perfResult");
+      syncToServer("perf",{memberId:member.id,memberName:member.name,projectId:proj?.id||"",projectName:proj?.name||"",testName:perfForm.testName,testType:perfForm.testType,passed:d.passed,metrics:d.metrics,vus:perfForm.vus,duration:perfForm.duration,p95Threshold:perfForm.p95Threshold});
     }catch(e){alert("Performance test error: "+e.message);}
     setPerfLoading(false);
   };
@@ -968,6 +1065,7 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
     const bug={bid:"BUG-"+uid().toUpperCase(),sid,summary:bf.summary||"Failure in "+sid,sev:bf.sev,who:member.name,jKey:jRef,status:"Open"};
     DB.bugs.push(bug); saveDB(); pushNotif("admin","🐛 "+bug.bid+(jRef?" ("+jRef+")":"")+" filed for "+sid);
     setBugDone(bug); setShowBugForm(false); setLoading(false);
+    syncToServer("bug",{memberId:member.id,memberName:member.name,projectId:proj?.id||"",projectName:proj?.name||"",bid:bug.bid,sid,summary:bug.summary,severity:bug.sev,jiraKey:bug.jKey||null,status:"Open"});
   };
 
   const doRun=async()=>{
@@ -990,6 +1088,7 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
     else pushNotif("admin","✓ All tests passed for "+sid+" — "+member.name);
     setHist(h=>[...h,{sid,passed:pass.length,failed:fail.length}]);
     setResult({pass,fail,failedCases:fail,total:pool.length}); setPhase("result");
+    syncToServer("session",{memberId:member.id,memberName:member.name,projectId:proj?.id||"",projectName:proj?.name||"",sid,summary:sdata?.summary||sid,platform,passed:pass.length,failed:fail.length,total:pool.length});
   };
 
   const approve=id=>setCases(cs=>cs.map(c=>c.id===id?{...c,status:"approved"}:c));
@@ -1598,7 +1697,7 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
           <div style={{display:"flex",gap:10,marginTop:12}}>
             {result.fail.length>0
               ?<Btn v="primary" onClick={()=>setPhase("bugReport")}>Bug Report →</Btn>
-              :<Btn v="primary" onClick={()=>{setCoverageText(t=>t||"1");setPhase("coverage");}}>Coverage Report →</Btn>}
+              :<Btn v="primary" onClick={()=>{setCoverageText(t=>t||"1");setPhase("coverage");syncToServer("coverage",{memberId:member.id,memberName:member.name,projectId:proj?.id||"",projectName:proj?.name||"",sid,summary:sdata?.summary||sid,platform,approvedCases:approved.length,passed:result?.pass?.length||0,failed:result?.fail?.length||0,bugs:sessionBugs.length});}}>Coverage Report →</Btn>}
           </div>
         </div>}
 
@@ -1763,7 +1862,7 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
             </div>;
           })()}
           <div style={{display:"flex",gap:10,marginTop:12}}>
-            <Btn v="primary" onClick={()=>{setCoverageText(t=>t||"1");setPhase("coverage");}}>Coverage Report →</Btn>
+            <Btn v="primary" onClick={()=>{setCoverageText(t=>t||"1");setPhase("coverage");syncToServer("coverage",{memberId:member.id,memberName:member.name,projectId:proj?.id||"",projectName:proj?.name||"",sid,summary:sdata?.summary||sid,platform,approvedCases:approved.length,passed:result?.pass?.length||0,failed:result?.fail?.length||0,bugs:sessionBugs.length});}}>Coverage Report →</Btn>
           </div>
         </div>}
 

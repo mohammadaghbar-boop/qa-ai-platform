@@ -50,6 +50,22 @@ const PORT = 3456;
 const EMPTY_MCP = path.join(os.tmpdir(), 'qa-platform-no-mcp.json');
 fs.writeFileSync(EMPTY_MCP, JSON.stringify({ mcpServers: {} }));
 
+/* ── File-based data store (admin dashboard sync) ───────────────────────── */
+// Mount /data as a Docker volume so data survives container restarts.
+const DATA_DIR  = path.join(__dirname, 'data');
+const DATA_FILE = path.join(DATA_DIR, 'qa-platform-db.json');
+if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+function loadServerDB() {
+  try { if (fs.existsSync(DATA_FILE)) return JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')); } catch {}
+  return { sessions: [], bugs: [], perfResults: [], coverage: [] };
+}
+function saveServerDB(db) {
+  const tmp = DATA_FILE + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(db));
+  fs.renameSync(tmp, DATA_FILE);
+}
+let serverDB = loadServerDB();
+
 /* ── Claude AI (direct Anthropic API) ──────────────────────────────────── */
 function callClaude(messages, system, claudeApiKey) {
   return new Promise((resolve, reject) => {
@@ -228,10 +244,17 @@ function runK6(scriptPath) {
 /* ── HTTP Server ────────────────────────────────────────────────────────── */
 const server = http.createServer((req, res) => {
   res.setHeader('Access-Control-Allow-Origin',  '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Session-Token');
 
   if (req.method === 'OPTIONS') { res.writeHead(200); res.end(); return; }
+
+  /* ── Admin data (GET) ── */
+  if (req.method === 'GET' && req.url === '/api/admin/data') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(serverDB));
+    return;
+  }
 
   /* ── Serve app ── */
   if (req.method === 'GET' && (req.url === '/' || req.url === '/index.html')) {
@@ -329,9 +352,34 @@ const server = http.createServer((req, res) => {
       return;
     }
 
+    /* ── /api/sync ── */
+    if (req.method === 'POST' && req.url === '/api/sync') {
+      try {
+        const payload = JSON.parse(body);
+        const { type } = payload;
+        const item = { id: crypto.randomBytes(8).toString('hex'), ...payload, syncedAt: Date.now() };
+        if      (type === 'session')  serverDB.sessions.unshift(item);
+        else if (type === 'bug')      serverDB.bugs.unshift(item);
+        else if (type === 'perf')     serverDB.perfResults.unshift(item);
+        else if (type === 'coverage') serverDB.coverage.unshift(item);
+        ['sessions','bugs','perfResults','coverage'].forEach(k => {
+          if (serverDB[k].length > 500) serverDB[k] = serverDB[k].slice(0, 500);
+        });
+        saveServerDB(serverDB);
+        console.log('[Sync]', type, '-', payload.memberName, '/', payload.projectName);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true }));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: e.message }));
+      }
+      return;
+    }
+
     res.writeHead(404); res.end();
   });
 });
+
 
 server.listen(PORT, () => {
   console.log('');
