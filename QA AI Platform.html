@@ -76,6 +76,7 @@ function _getMemberSettings() {
 
 /* ─── Session management ─────────────────────────────────────────────────── */
 const SESSION_TOKEN_KEY = "qa_api_session_token";
+const ADMIN_TOKEN_KEY   = "qa_admin_token";
 
 async function establishSession(memberId) {
   const settings = DB.memberSettings.find(s => s.memberId === memberId);
@@ -635,11 +636,14 @@ function DashboardPage() {
   const [sd,setSd]=useState(null);
   const [tab,setTab]=useState("sessions");
   const [loading,setLoading]=useState(true);
-  useEffect(()=>{
-    fetch(API_BASE+"/api/admin/data")
+  const fetchData=()=>{
+    setLoading(true);
+    const adminToken=sessionStorage.getItem(ADMIN_TOKEN_KEY)||"";
+    fetch(API_BASE+"/api/admin/data",{headers:{"X-Admin-Token":adminToken}})
       .then(r=>r.json()).then(d=>{setSd(d);setLoading(false);})
       .catch(()=>setLoading(false));
-  },[]);
+  };
+  useEffect(()=>{fetchData();},[]);
   const sessions=sd?.sessions||[]; const bugs=sd?.bugs||[]; const perfs=sd?.perfResults||[]; const cov=sd?.coverage||[];
   const tp=sessions.reduce((a,x)=>a+(x.passed||0),0), tf=sessions.reduce((a,x)=>a+(x.failed||0),0);
   const pr=tp+tf>0?Math.round(tp/(tp+tf)*100):0;
@@ -660,7 +664,7 @@ function DashboardPage() {
       <H1 style={{marginBottom:0}}>Dashboard</H1>
       {loading&&<span style={{fontSize:12,color:"var(--color-text-tertiary)"}}>Loading server data…</span>}
       {!loading&&!sd&&<span style={{fontSize:12,color:"var(--color-text-warning)"}}>⚠ Server data unavailable — start node server.js</span>}
-      {!loading&&sd&&<button onClick={()=>{setLoading(true);fetch(API_BASE+"/api/admin/data").then(r=>r.json()).then(d=>{setSd(d);setLoading(false);}).catch(()=>setLoading(false));}} style={{fontSize:12,padding:"4px 12px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",color:"var(--color-text-secondary)"}}>↻ Refresh</button>}
+      {!loading&&sd&&<button onClick={fetchData} style={{fontSize:12,padding:"4px 12px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",color:"var(--color-text-secondary)"}}>↻ Refresh</button>}
     </div>
     <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12,marginBottom:20}}>
       {cards.map(x=><div key={x.l} style={{...card,marginBottom:0,padding:18}}><div style={{fontSize:28,fontWeight:500,color:`var(--color-text-${x.c})`}}>{x.v}</div><div style={{fontSize:13,color:"var(--color-text-secondary)",marginTop:2}}>{x.l}</div></div>)}
@@ -1954,14 +1958,21 @@ function LoginPage({onLogin}) {
   const [pass,setPass]=useState(saved?.pass||"");
   const [err,setErr]=useState("");
   const [remember,setRemember]=useState(!!saved);
-  const login=()=>{
+  const [busy,setBusy]=useState(false);
+  const login=async()=>{
     if(mode==="admin"){
-      if(email==="admin"&&pass==="admin"){
+      if(email!=="admin"){setErr("Username must be 'admin'");return;}
+      setBusy(true);
+      try{
+        const r=await fetch(API_BASE+"/api/admin/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({password:pass})});
+        const d=await r.json();
+        if(!r.ok){setErr(d.error||"Invalid password");setBusy(false);return;}
+        sessionStorage.setItem(ADMIN_TOKEN_KEY,d.token);
         if(remember){localStorage.setItem(CREDS_KEY,JSON.stringify({mode,email,pass}));}
         else{localStorage.removeItem(CREDS_KEY);}
-        onLogin({role:"admin",id:"admin"},remember);return;
-      }
-      setErr("Use admin / admin");return;
+        onLogin({role:"admin",id:"admin"},remember);
+      }catch{setErr("Cannot reach server. Make sure node server.js is running.");}
+      setBusy(false);return;
     }
     const m=DB.members.find(x=>x.email===email&&x.password===pass);
     if(m){
@@ -1986,8 +1997,48 @@ function LoginPage({onLogin}) {
         <input type="checkbox" checked={remember} onChange={e=>setRemember(e.target.checked)}/> Remember me
       </label>
       {err&&<div style={{color:"var(--color-text-danger)",fontSize:13,marginBottom:12}}>{err}</div>}
-      <button onClick={login} style={{width:"100%",padding:"8px 0",borderRadius:8,border:"none",background:"var(--color-text-info)",color:"#fff",cursor:"pointer",fontSize:14,fontWeight:500}}>Sign in</button>
-      {mode==="admin"&&<div style={{fontSize:12,color:"var(--color-text-tertiary)",marginTop:10,textAlign:"center"}}>Demo: admin / admin</div>}
+      <button onClick={login} disabled={busy} style={{width:"100%",padding:"8px 0",borderRadius:8,border:"none",background:"var(--color-text-info)",color:"#fff",cursor:busy?"not-allowed":"pointer",fontSize:14,fontWeight:500,opacity:busy?0.7:1}}>{busy?"Signing in…":"Sign in"}</button>
+    </div>
+  </div>;
+}
+
+/* ─── Admin Change Password Modal ────────────────────────────────────────── */
+function AdminChangePasswordModal({onClose}) {
+  const [f,setF]=useState({current:"",next:"",confirm:""});
+  const [err,setErr]=useState(""); const [ok,setOk]=useState(false); const [busy,setBusy]=useState(false);
+  const submit=async()=>{
+    if(!f.current||!f.next||!f.confirm){setErr("All fields are required.");return;}
+    if(f.next!==f.confirm){setErr("New passwords do not match.");return;}
+    if(f.next.length<6){setErr("New password must be at least 6 characters.");return;}
+    setBusy(true); setErr("");
+    try{
+      const adminToken=sessionStorage.getItem(ADMIN_TOKEN_KEY)||"";
+      const r=await fetch(API_BASE+"/api/admin/change-password",{method:"POST",headers:{"Content-Type":"application/json","X-Admin-Token":adminToken},body:JSON.stringify({currentPassword:f.current,newPassword:f.next})});
+      const d=await r.json();
+      if(!r.ok){setErr(d.error||"Failed to change password.");setBusy(false);return;}
+      setOk(true);
+    }catch{setErr("Cannot reach server.");}
+    setBusy(false);
+  };
+  const ov={position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",zIndex:2000,display:"flex",alignItems:"center",justifyContent:"center"};
+  const bx={background:"var(--color-background-primary)",borderRadius:14,padding:28,width:380,maxWidth:"90vw",boxShadow:"0 8px 32px rgba(0,0,0,0.18)"};
+  const ghostBtn={padding:"8px 18px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:14,fontWeight:500,color:"var(--color-text-secondary)"};
+  return <div style={ov} onClick={onClose}>
+    <div style={bx} onClick={e=>e.stopPropagation()}>
+      <div style={{fontWeight:600,fontSize:16,marginBottom:16}}>🔒 Change Admin Password</div>
+      {ok?<div>
+        <div style={{color:"var(--color-text-success)",fontSize:14,marginBottom:16}}>✓ Password changed successfully. Use the new password next time you log in.</div>
+        <Btn v="primary" onClick={onClose}>Done</Btn>
+      </div>:<div style={{display:"flex",flexDirection:"column",gap:10}}>
+        <div><Lbl>Current Password</Lbl><input type="password" style={inp} value={f.current} onChange={e=>setF(p=>({...p,current:e.target.value}))} placeholder="Current password"/></div>
+        <div><Lbl>New Password</Lbl><input type="password" style={inp} value={f.next} onChange={e=>setF(p=>({...p,next:e.target.value}))} placeholder="Min. 6 characters"/></div>
+        <div><Lbl>Confirm New Password</Lbl><input type="password" style={inp} value={f.confirm} onChange={e=>setF(p=>({...p,confirm:e.target.value}))} placeholder="Repeat new password"/></div>
+        {err&&<div style={{color:"var(--color-text-danger)",fontSize:13}}>{err}</div>}
+        <div style={{display:"flex",gap:8,justifyContent:"flex-end",marginTop:4}}>
+          <button onClick={onClose} style={ghostBtn}>Cancel</button>
+          <Btn v="primary" onClick={submit} disabled={busy}>{busy?"Saving…":"Change Password"}</Btn>
+        </div>
+      </div>}
     </div>
   </div>;
 }
@@ -2102,6 +2153,7 @@ function loadSession(){
 function App() {
   const [user,setUser]=useState(()=>{const u=loadSession();if(u?.role==="member")_currentMemberId=u.id;return u;}); const [page,setPage]=useState(()=>{const u=loadSession();return u?.role==="admin"?"dashboard":"workspace";}); const [,tick]=useState(0);
   const [showConfig,setShowConfig]=useState(false);
+  const [showChangePwd,setShowChangePwd]=useState(false);
   const [savedStories,setSavedStories]=useState(()=>[...DB.savedStories]);
   const [restoreTarget,setRestoreTarget]=useState(null);
   const [activeSid,setActiveSid]=useState(""); const [activeProj,setActiveProj]=useState(null);
@@ -2138,13 +2190,14 @@ function App() {
       else{establishSession(u.id);}
     }
   };
-  const handleLogout=()=>{_currentMemberId="";localStorage.removeItem(SESSION_KEY);sessionStorage.removeItem(SESSION_KEY);sessionStorage.removeItem(SESSION_TOKEN_KEY);setUser(null);setPage("workspace");setShowConfig(false);};
+  const handleLogout=()=>{_currentMemberId="";localStorage.removeItem(SESSION_KEY);sessionStorage.removeItem(SESSION_KEY);sessionStorage.removeItem(SESSION_TOKEN_KEY);sessionStorage.removeItem(ADMIN_TOKEN_KEY);setUser(null);setPage("workspace");setShowConfig(false);setShowChangePwd(false);};
   if(!user) return <LoginPage onLogin={handleLogin}/>;
   const adminNav=[{sec:"Overview",items:[{id:"dashboard",label:"Dashboard",icon:"📊"}]},{sec:"Manage",items:[{id:"members",label:"Members",icon:"👥"},{id:"projects",label:"Projects",icon:"📁"},{id:"assign",label:"Assignments",icon:"🔗"}]},{sec:"Reports",items:[{id:"bugs",label:"Bug tracker",icon:"🐛"}]}];
   const memberNav=[{sec:"Work",items:[{id:"workspace",label:"Workspace",icon:"🖥"}]}];
   const nav=user.role==="admin"?adminNav:memberNav;
   return <div style={{fontFamily:"-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif",color:"var(--color-text-primary)",minHeight:"100vh",background:"var(--color-background-tertiary)",display:"flex"}}>
     {showConfig&&user?.role==="member"&&<MemberConfigDialog memberId={user.id} onClose={()=>setShowConfig(false)}/>}
+    {showChangePwd&&user?.role==="admin"&&<AdminChangePasswordModal onClose={()=>setShowChangePwd(false)}/>}
     <div style={{width:220,minHeight:"100vh",background:"var(--color-background-secondary)",borderRight:"1px solid var(--color-border-tertiary)",display:"flex",flexDirection:"column",flexShrink:0}}>
       <div style={{padding:"16px 20px 12px",borderBottom:"1px solid var(--color-border-tertiary)"}}>
         <div style={{fontWeight:500,fontSize:15}}>QA AI Platform</div>
@@ -2223,6 +2276,7 @@ function App() {
         {user.role==="member"&&<button onClick={()=>setShowConfig(true)} style={{width:"100%",padding:"7px 0",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:13,color:"var(--color-text-secondary)",marginBottom:8,display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>
           {(()=>{const ms=DB.memberSettings.find(s=>s.memberId===user.id);return ms?.claudeApiKey?<><span style={{color:"var(--color-text-success)"}}>●</span> Settings</>:<><span style={{color:"var(--color-text-warning)"}}>●</span> Settings</>})()}
         </button>}
+        {user.role==="admin"&&<button onClick={()=>setShowChangePwd(true)} style={{width:"100%",padding:"7px 0",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:13,color:"var(--color-text-secondary)",marginBottom:8}}>🔒 Change Password</button>}
         <button onClick={handleLogout} style={{width:"100%",padding:"8px 0",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:13,color:"var(--color-text-secondary)"}}>Sign out</button>
       </div>
     </div>

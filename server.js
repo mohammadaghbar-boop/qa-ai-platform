@@ -57,7 +57,7 @@ const DATA_FILE = path.join(DATA_DIR, 'qa-platform-db.json');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 function loadServerDB() {
   try { if (fs.existsSync(DATA_FILE)) return JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')); } catch {}
-  return { sessions: [], bugs: [], perfResults: [], coverage: [] };
+  return { sessions: [], bugs: [], perfResults: [], coverage: [], adminPasswordHash: null };
 }
 function saveServerDB(db) {
   const tmp = DATA_FILE + '.tmp';
@@ -65,6 +65,22 @@ function saveServerDB(db) {
   fs.renameSync(tmp, DATA_FILE);
 }
 let serverDB = loadServerDB();
+
+function hashPassword(p) { return crypto.createHash('sha256').update(p).digest('hex'); }
+
+// Generate a random admin password on first run
+if (!serverDB.adminPasswordHash) {
+  const firstRunPass = crypto.randomBytes(8).toString('hex');
+  serverDB.adminPasswordHash = hashPassword(firstRunPass);
+  saveServerDB(serverDB);
+  console.log('');
+  console.log('  ⚠️  First run — admin password: ' + firstRunPass);
+  console.log('  Log in and change it via Settings → Change Password.');
+  console.log('');
+}
+
+// In-memory admin sessions (cleared on server restart — admin re-logs in)
+const adminSessions = new Map();
 
 /* ── Claude AI (direct Anthropic API) ──────────────────────────────────── */
 function callClaude(messages, system, claudeApiKey) {
@@ -249,8 +265,14 @@ const server = http.createServer((req, res) => {
 
   if (req.method === 'OPTIONS') { res.writeHead(200); res.end(); return; }
 
-  /* ── Admin data (GET) ── */
+  /* ── Admin data (GET — requires admin token) ── */
   if (req.method === 'GET' && req.url === '/api/admin/data') {
+    const adminToken = req.headers['x-admin-token'];
+    if (!adminToken || !adminSessions.has(adminToken)) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Unauthorized' }));
+      return;
+    }
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(serverDB));
     return;
@@ -271,6 +293,56 @@ const server = http.createServer((req, res) => {
   let body = '';
   req.on('data', chunk => body += chunk);
   req.on('end', async () => {
+    /* ── /api/admin/login ── */
+    if (req.method === 'POST' && req.url === '/api/admin/login') {
+      try {
+        const { password } = JSON.parse(body);
+        if (hashPassword(password || '') !== serverDB.adminPasswordHash) {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Invalid password' }));
+          return;
+        }
+        const token = crypto.randomBytes(32).toString('hex');
+        adminSessions.set(token, { createdAt: Date.now() });
+        console.log('[Admin] Login successful');
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ token }));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: e.message }));
+      }
+      return;
+    }
+
+    /* ── /api/admin/change-password ── */
+    if (req.method === 'POST' && req.url === '/api/admin/change-password') {
+      try {
+        const adminToken = req.headers['x-admin-token'];
+        if (!adminToken || !adminSessions.has(adminToken)) {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Unauthorized' })); return;
+        }
+        const { currentPassword, newPassword } = JSON.parse(body);
+        if (hashPassword(currentPassword || '') !== serverDB.adminPasswordHash) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Current password is incorrect' })); return;
+        }
+        if (!newPassword || newPassword.length < 6) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'New password must be at least 6 characters' })); return;
+        }
+        serverDB.adminPasswordHash = hashPassword(newPassword);
+        saveServerDB(serverDB);
+        console.log('[Admin] Password changed');
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true }));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: e.message }));
+      }
+      return;
+    }
+
     /* ── /api/auth/session ── */
     if (req.method === 'POST' && req.url === '/api/auth/session') {
       try {
