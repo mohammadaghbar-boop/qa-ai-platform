@@ -92,6 +92,8 @@ if (serverDB.adminPasswordIsDefault === undefined) {
 const adminSessions = new Map();
 // In-memory member sessions
 const memberSessions = new Map();
+// Playwright codegen sessions
+const codegenSessions = new Map();
 
 /* ── Claude AI (direct Anthropic API) ──────────────────────────────────── */
 function callClaude(messages, system, claudeApiKey) {
@@ -319,6 +321,15 @@ const server = http.createServer((req, res) => {
 
   if (req.method === 'OPTIONS') { res.writeHead(200); res.end(); return; }
 
+  /* ── Codegen status (GET) ── */
+  if (req.method === 'GET' && req.url.startsWith('/api/codegen/status/')) {
+    const sessionId = req.url.split('/api/codegen/status/')[1];
+    const s = codegenSessions.get(sessionId);
+    if (!s) { res.writeHead(404, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ status: 'not_found' })); return; }
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ status: s.status, script: s.script || null })); return;
+  }
+
   /* ── Members list (GET — requires admin token) ── */
   if (req.method === 'GET' && req.url === '/api/members') {
     const adminToken = req.headers['x-admin-token'];
@@ -359,6 +370,52 @@ const server = http.createServer((req, res) => {
   let body = '';
   req.on('data', chunk => body += chunk);
   req.on('end', async () => {
+    /* ── /api/codegen/start ── */
+    if (req.method === 'POST' && req.url === '/api/codegen/start') {
+      try {
+        const { url } = JSON.parse(body);
+        if (!url) { res.writeHead(400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'url is required' })); return; }
+        const sessionId  = crypto.randomBytes(8).toString('hex');
+        const outputFile = path.join(os.tmpdir(), `qa_codegen_${sessionId}.js`);
+        const proc = spawn('npx', ['playwright', 'codegen', url, '--output', outputFile], { shell: true });
+        const session = { proc, outputFile, status: 'running', script: null };
+        codegenSessions.set(sessionId, session);
+        proc.on('close', () => {
+          try {
+            if (fs.existsSync(outputFile)) {
+              const src = fs.readFileSync(outputFile, 'utf8').trim();
+              try { fs.unlinkSync(outputFile); } catch {}
+              session.script = src || null;
+              session.status = src ? 'done' : 'empty';
+            } else {
+              session.status = 'empty';
+            }
+          } catch { session.status = 'error'; }
+          console.log('[Codegen] Session', sessionId, '→', session.status);
+        });
+        proc.on('error', e => {
+          session.status = e.code === 'ENOENT' ? 'not_installed' : 'error';
+          console.error('[Codegen] Error:', e.message);
+        });
+        console.log('[Codegen] Started session', sessionId, 'for', url);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ sessionId }));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: e.message }));
+      }
+      return;
+    }
+
+    /* ── /api/codegen/:id (DELETE — cancel) ── */
+    if (req.method === 'DELETE' && req.url.startsWith('/api/codegen/')) {
+      const sessionId = req.url.split('/api/codegen/')[1];
+      const s = codegenSessions.get(sessionId);
+      if (s) { try { s.proc.kill(); } catch {} codegenSessions.delete(sessionId); }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: true })); return;
+    }
+
     /* ── /api/members/login ── */
     if (req.method === 'POST' && req.url === '/api/members/login') {
       try {
