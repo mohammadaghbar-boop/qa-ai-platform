@@ -52,6 +52,8 @@ const DB = { members:[], projects:[], assignments:[], sessions:[], bugs:[], noti
 const STORAGE_KEY = "qa_platform_db";
 function loadDB() {
   try { const s=localStorage.getItem(STORAGE_KEY); if(s){ const p=JSON.parse(s); Object.keys(p).forEach(k=>{ if(Array.isArray(p[k])) DB[k]=p[k]; }); } } catch(e){}
+  // Strip any cached passwords — members are now auth'd server-side
+  DB.members=DB.members.map(({password,...m})=>m);
 }
 function saveDB() {
   try { localStorage.setItem(STORAGE_KEY,JSON.stringify(DB)); } catch(e){}
@@ -178,6 +180,15 @@ async function syncToServer(type, payload) {
       headers: { "Content-Type": "application/json", "X-Session-Token": token || "" },
       body: JSON.stringify({ type, ...payload })
     });
+  } catch {}
+}
+
+/* ─── Member helpers ─────────────────────────────────────────────────────── */
+async function loadMembersFromServer() {
+  try {
+    const adminToken=sessionStorage.getItem(ADMIN_TOKEN_KEY)||"";
+    const r=await fetch(API_BASE+"/api/members",{headers:{"X-Admin-Token":adminToken}});
+    if(r.ok){ const list=await r.json(); DB.members=list; saveDB(); }
   } catch {}
 }
 
@@ -542,8 +553,32 @@ function PerfAIChat({proj,perfForm,perfResult}) {
 function MembersPage() {
   const [list,setList]=useState([...DB.members]);
   const [f,setF]=useState({name:"",email:"",password:"",role:"QA Engineer"});
-  const add=()=>{ if(!f.name||!f.email||!f.password) return; const m={id:uid(),...f}; DB.members.push(m); pushNotif(m.id,"Welcome to QA AI Platform!"); saveDB(); setList([...DB.members]); setF({name:"",email:"",password:"",role:"QA Engineer"}); };
-  const del=id=>{ DB.members=DB.members.filter(m=>m.id!==id); DB.assignments=DB.assignments.filter(a=>a.memberId!==id); saveDB(); setList([...DB.members]); };
+  const [err,setErr]=useState(""); const [busy,setBusy]=useState(false);
+  useEffect(()=>{ loadMembersFromServer().then(()=>setList([...DB.members])); },[]);
+  const adminToken=()=>sessionStorage.getItem(ADMIN_TOKEN_KEY)||"";
+  const add=async()=>{
+    if(!f.name||!f.email||!f.password){setErr("All fields are required.");return;}
+    setBusy(true); setErr("");
+    try{
+      const r=await fetch(API_BASE+"/api/members",{method:"POST",headers:{"Content-Type":"application/json","X-Admin-Token":adminToken()},body:JSON.stringify(f)});
+      const d=await r.json();
+      if(!r.ok){setErr(d.error||"Failed to add member.");setBusy(false);return;}
+      DB.members.push(d); saveDB();
+      pushNotif(d.id,"Welcome to QA AI Platform!");
+      setList([...DB.members]); setF({name:"",email:"",password:"",role:"QA Engineer"});
+    }catch{setErr("Cannot reach server.");}
+    setBusy(false);
+  };
+  const del=async id=>{
+    setBusy(true);
+    try{
+      await fetch(API_BASE+"/api/members/"+id,{method:"DELETE",headers:{"X-Admin-Token":adminToken()}});
+      DB.members=DB.members.filter(m=>m.id!==id);
+      DB.assignments=DB.assignments.filter(a=>a.memberId!==id);
+      saveDB(); setList([...DB.members]);
+    }catch{setErr("Cannot reach server.");}
+    setBusy(false);
+  };
   const th={textAlign:"left",padding:"8px 12px",borderBottom:"1px solid var(--color-border-tertiary)",fontSize:12,fontWeight:500,color:"var(--color-text-secondary)"};
   const td={padding:"10px 12px",borderBottom:"1px solid var(--color-border-tertiary)"};
   return <div>
@@ -553,15 +588,16 @@ function MembersPage() {
         <div><Lbl>Full name</Lbl><input style={inp} value={f.name} onChange={e=>setF(p=>({...p,name:e.target.value}))} placeholder="Jane Smith"/></div>
         <div><Lbl>Role</Lbl><select style={sel} value={f.role} onChange={e=>setF(p=>({...p,role:e.target.value}))}>{["QA Engineer","Senior QA Engineer","QA Automation Engineer","Lead QA"].map(r=><option key={r}>{r}</option>)}</select></div>
         <div><Lbl>Email</Lbl><input style={inp} value={f.email} onChange={e=>setF(p=>({...p,email:e.target.value}))} placeholder="jane@co.com"/></div>
-        <div><Lbl>Password</Lbl><input type="password" style={inp} value={f.password} onChange={e=>setF(p=>({...p,password:e.target.value}))} placeholder="••••••"/></div>
+        <div><Lbl>Password</Lbl><input type="password" style={inp} value={f.password} onChange={e=>setF(p=>({...p,password:e.target.value}))} placeholder="Min. 6 characters"/></div>
       </div>
-      <Btn v="primary" onClick={add}>Add member</Btn>
+      {err&&<div style={{color:"var(--color-text-danger)",fontSize:13,marginBottom:10}}>{err}</div>}
+      <Btn v="primary" onClick={add} disabled={busy}>{busy?"Adding…":"Add member"}</Btn>
     </div>
     <div style={card}>{list.length===0?<div style={{color:"var(--color-text-tertiary)",fontSize:14}}>No members yet.</div>:
       <table style={{width:"100%",borderCollapse:"collapse",fontSize:14}}>
         <thead><tr><th style={th}>Name</th><th style={th}>Role</th><th style={th}>Email</th><th style={th}>Project</th><th style={th}></th></tr></thead>
         <tbody>{list.map(m=>{ const ps=DB.assignments.filter(x=>x.memberId===m.id).map(a=>DB.projects.find(x=>x.id===a.projectId)).filter(Boolean);
-          return <tr key={m.id}><td style={td}><b>{m.name}</b></td><td style={td}><span style={{fontSize:13,color:"var(--color-text-secondary)"}}>{m.role}</span></td><td style={td}>{m.email}</td><td style={td}>{ps.length>0?ps.map(p=><Tag key={p.id} c="blue">{p.name}</Tag>):<span style={{color:"var(--color-text-tertiary)",fontSize:13}}>—</span>}</td><td style={td}><Btn v="danger" onClick={()=>del(m.id)}>Remove</Btn></td></tr>;
+          return <tr key={m.id}><td style={td}><b>{m.name}</b></td><td style={td}><span style={{fontSize:13,color:"var(--color-text-secondary)"}}>{m.role}</span></td><td style={td}>{m.email}</td><td style={td}>{ps.length>0?ps.map(p=><Tag key={p.id} c="blue">{p.name}</Tag>):<span style={{color:"var(--color-text-tertiary)",fontSize:13}}>—</span>}</td><td style={td}><Btn v="danger" onClick={()=>del(m.id)} disabled={busy}>Remove</Btn></td></tr>;
         })}</tbody>
       </table>}
     </div>
@@ -1993,13 +2029,16 @@ function LoginPage({onLogin}) {
       }catch{setErr("Cannot reach server. Make sure node server.js is running.");}
       setBusy(false);return;
     }
-    const m=DB.members.find(x=>x.email===email&&x.password===pass);
-    if(m){
+    setBusy(true);
+    try{
+      const r=await fetch(API_BASE+"/api/members/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({email,password:pass})});
+      const d=await r.json();
+      if(!r.ok){setErr(d.error||"Invalid credentials");setBusy(false);return;}
       if(remember){localStorage.setItem(CREDS_KEY,JSON.stringify({mode,email,pass}));}
       else{localStorage.removeItem(CREDS_KEY);}
-      onLogin({role:"member",member:m,id:m.id},remember);return;
-    }
-    setErr("Invalid credentials");
+      onLogin({role:"member",member:d.member,id:d.member.id},remember);
+    }catch{setErr("Cannot reach server. Make sure node server.js is running.");}
+    setBusy(false); return;
   };
   return <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"var(--color-background-tertiary)"}}>
     <div style={{...card,width:380,padding:36}}>
@@ -2158,16 +2197,16 @@ function loadSession(){
       const s=JSON.parse(persisted);
       if(s?.remember===true){
         if(s.role==="admin")return s;
-        if(s.role==="member"){const m=DB.members.find(x=>x.id===s.id);return m?{role:"member",member:m,id:m.id}:null;}
+        if(s.role==="member"&&s.member)return s;
       }
-      localStorage.removeItem(SESSION_KEY); // stale/old entry without remember=true — clear it
+      localStorage.removeItem(SESSION_KEY); // stale/old entry — clear it
     }
     // sessionStorage = Remember Me NOT checked (expires when browser closes)
     const session=sessionStorage.getItem(SESSION_KEY);
     if(session){
       const s=JSON.parse(session);
       if(s?.role==="admin")return s;
-      if(s?.role==="member"){const m=DB.members.find(x=>x.id===s.id);return m?{role:"member",member:m,id:m.id}:null;}
+      if(s?.role==="member"&&s.member)return s;
     }
     return null;
   }catch{return null;}
@@ -2200,13 +2239,16 @@ function App() {
   };
   const renameSnap=(id,name)=>{DB.savedStories=DB.savedStories.map(s=>s.id===id?{...s,name}:s);saveDB();refreshSaved();setRenamingId(null);};
   const handleLogin=(u,remember)=>{
-    const data=u.role==="admin"?{role:"admin",id:"admin",remember}:{role:"member",id:u.id,remember};
+    const data=u.role==="admin"
+      ?{role:"admin",id:"admin",remember,forceChangePwd:u.forceChangePwd}
+      :{role:"member",id:u.id,member:u.member,remember};
     localStorage.removeItem(SESSION_KEY); sessionStorage.removeItem(SESSION_KEY);
     if(remember){localStorage.setItem(SESSION_KEY,JSON.stringify(data));}
     else{sessionStorage.setItem(SESSION_KEY,JSON.stringify(data));}
     if(u.role==="member"){_currentMemberId=u.id;}else{_currentMemberId="";}
     setUser(u); setPage(u.role==="admin"?"dashboard":"workspace");
     if(u.role==="admin"&&u.forceChangePwd){setShowChangePwd(true);}
+    if(u.role==="admin"){loadMembersFromServer();}
     if(u.role==="member"){
       const ms=DB.memberSettings.find(s=>s.memberId===u.id);
       if(!ms?.claudeApiKey){setShowConfig(true);}

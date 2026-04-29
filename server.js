@@ -57,7 +57,7 @@ const DATA_FILE = path.join(DATA_DIR, 'qa-platform-db.json');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 function loadServerDB() {
   try { if (fs.existsSync(DATA_FILE)) return JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')); } catch {}
-  return { sessions: [], bugs: [], perfResults: [], coverage: [], adminPasswordHash: null, adminPasswordIsDefault: true };
+  return { sessions: [], bugs: [], perfResults: [], coverage: [], members: [], adminPasswordHash: null, adminPasswordIsDefault: true };
 }
 function saveServerDB(db) {
   const tmp = DATA_FILE + '.tmp';
@@ -90,6 +90,8 @@ if (serverDB.adminPasswordIsDefault === undefined) {
 
 // In-memory admin sessions (cleared on server restart — admin re-logs in)
 const adminSessions = new Map();
+// In-memory member sessions
+const memberSessions = new Map();
 
 /* ── Claude AI (direct Anthropic API) ──────────────────────────────────── */
 function callClaude(messages, system, claudeApiKey) {
@@ -269,10 +271,22 @@ function runK6(scriptPath) {
 /* ── HTTP Server ────────────────────────────────────────────────────────── */
 const server = http.createServer((req, res) => {
   res.setHeader('Access-Control-Allow-Origin',  '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Session-Token');
 
   if (req.method === 'OPTIONS') { res.writeHead(200); res.end(); return; }
+
+  /* ── Members list (GET — requires admin token) ── */
+  if (req.method === 'GET' && req.url === '/api/members') {
+    const adminToken = req.headers['x-admin-token'];
+    if (!adminToken || !adminSessions.has(adminToken)) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Unauthorized' })); return;
+    }
+    const safe = (serverDB.members || []).map(({ passwordHash, ...m }) => m);
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(safe)); return;
+  }
 
   /* ── Admin data (GET — requires admin token) ── */
   if (req.method === 'GET' && req.url === '/api/admin/data') {
@@ -302,6 +316,82 @@ const server = http.createServer((req, res) => {
   let body = '';
   req.on('data', chunk => body += chunk);
   req.on('end', async () => {
+    /* ── /api/members/login ── */
+    if (req.method === 'POST' && req.url === '/api/members/login') {
+      try {
+        const { email, password } = JSON.parse(body);
+        if (!serverDB.members) serverDB.members = [];
+        const member = serverDB.members.find(m => m.email === email);
+        if (!member || hashPassword(password || '') !== member.passwordHash) {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Invalid email or password' })); return;
+        }
+        const token = crypto.randomBytes(32).toString('hex');
+        memberSessions.set(token, { memberId: member.id });
+        console.log('[Member] Login:', member.name);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ token, member: { id: member.id, name: member.name, email: member.email, role: member.role } }));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: e.message }));
+      }
+      return;
+    }
+
+    /* ── /api/members (POST — admin creates member) ── */
+    if (req.method === 'POST' && req.url === '/api/members') {
+      try {
+        const adminToken = req.headers['x-admin-token'];
+        if (!adminToken || !adminSessions.has(adminToken)) {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Unauthorized' })); return;
+        }
+        const { name, email, password, role } = JSON.parse(body);
+        if (!name || !email || !password) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'name, email and password are required' })); return;
+        }
+        if (!serverDB.members) serverDB.members = [];
+        if (serverDB.members.find(m => m.email === email)) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'A member with this email already exists' })); return;
+        }
+        const member = { id: crypto.randomBytes(6).toString('hex'), name, email, role: role || 'QA Engineer', passwordHash: hashPassword(password), createdAt: Date.now() };
+        serverDB.members.push(member);
+        saveServerDB(serverDB);
+        console.log('[Member] Created:', name);
+        const { passwordHash, ...safe } = member;
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(safe));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: e.message }));
+      }
+      return;
+    }
+
+    /* ── /api/members/:id (DELETE — admin removes member) ── */
+    if (req.method === 'DELETE' && req.url.startsWith('/api/members/')) {
+      try {
+        const adminToken = req.headers['x-admin-token'];
+        if (!adminToken || !adminSessions.has(adminToken)) {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Unauthorized' })); return;
+        }
+        const memberId = req.url.split('/api/members/')[1];
+        if (!serverDB.members) serverDB.members = [];
+        serverDB.members = serverDB.members.filter(m => m.id !== memberId);
+        saveServerDB(serverDB);
+        console.log('[Member] Deleted:', memberId);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true }));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: e.message }));
+      }
+      return;
+    }
+
     /* ── /api/admin/login ── */
     if (req.method === 'POST' && req.url === '/api/admin/login') {
       try {
