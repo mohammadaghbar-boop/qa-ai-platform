@@ -912,7 +912,7 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
   const [jKey,setJKey]=useState(null); const [bugDone,setBugDone]=useState(null);
   const [showBugForm,setShowBugForm]=useState(false); const [bf,setBf]=useState({summary:"",sev:"High",steps:[""],expected:"",actual:"",attachments:[]});
   const [fixed,setFixed]=useState(false); const [hist,setHist]=useState([]); const [chat,setChat]=useState(false); const [hasSaved,setHasSaved]=useState(false);
-  const [showAddCase,setShowAddCase]=useState(false); const [newCase,setNewCase]=useState({title:"",type:"happy",platform:"web",preconditions:"",steps:[""],expected:"",automatable:true});
+  const [showAddCase,setShowAddCase]=useState(false); const [newCase,setNewCase]=useState({title:"",type:"happy",platform:"web",preconditions:"",steps:[""],expected:"",automatable:true}); const [newCaseErr,setNewCaseErr]=useState("");
   const [selectedForScripts,setSelectedForScripts]=useState([]); const [coverageText,setCoverageText]=useState(""); const [sessionBugs,setSessionBugs]=useState([]); const [appUrl,setAppUrl]=useState("");
   const [codegenSessionId,setCodegenSessionId]=useState(null); const [codegenScript,setCodegenScript]=useState(""); const [codegenStatus,setCodegenStatus]=useState("idle");
   const [scriptCache,setScriptCache]=useState({});
@@ -1068,8 +1068,13 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
     if(newTypes.length===0){setCases(keptCases);setPhase("ready");setLoading(false);return;}
     setLmsg("Generating "+newTypes.map(t=>t+" flow").join(", ")+" in parallel…");
     const ctx=sdata&&!sdata.sim?`Story: "${sdata.summary}"\nAcceptance Criteria:\n${sdata.description?.slice(0,2500)||"No description provided."}`:"Simulate a realistic feature story with clear acceptance criteria.";
+    const typeGuide={
+      happy:"Focus on the MAIN SUCCESS paths — valid inputs, correct credentials, expected user journeys, normal operations where everything works.",
+      edge:"Focus ONLY on BOUNDARY and LIMIT conditions — min/max field lengths, zero/empty values, very long strings, special characters, date boundaries, maximum file sizes. Do NOT duplicate negative error scenarios.",
+      negative:"Focus ONLY on INVALID inputs and ERROR conditions — wrong passwords, unauthorized access, missing required fields, incorrect data formats, network errors, permission denied. Do NOT duplicate edge/boundary cases."
+    };
     try {
-      const requests=newTypes.map(type=>callAI([{role:"user",content:`You are a QA engineer. Generate ALL possible ${type} test cases for story "${sid}" (${proj.jiraProjKey}). Platform: ${platform}.\n\n${ctx}\n\nINSTRUCTIONS:\n1. Identify EVERY acceptance criterion (AC) from the description above.\n2. Generate at least 1-3 ${type} test cases per AC — do NOT skip or ignore any AC.\n3. There is NO limit on number of cases — cover everything explicitly stated in the ACs.\n4. Mark automatable:false ONLY for offline/camera/biometrics/hardware tests.\n\nReturn ONLY a valid JSON array (no markdown, no explanation):\n[{"id":"TC-001","title":"...","type":"${type}","platform":"${platform}","preconditions":"...","steps":["Step 1","Step 2"],"expected":"...","automatable":true}]`}],SYS,5000,proj.anthropicKey||""));
+      const requests=newTypes.map(type=>callAI([{role:"user",content:`You are a QA engineer. Generate ALL possible ${type} test cases for story "${sid}" (${proj.jiraProjKey}). Platform: ${platform}.\n\n${ctx}\n\nTYPE DEFINITION — ${type}: ${typeGuide[type]||""}\n\nINSTRUCTIONS:\n1. Identify EVERY acceptance criterion (AC) from the description above.\n2. Generate at least 1-3 ${type} test cases per AC — do NOT skip or ignore any AC.\n3. There is NO limit on number of cases — cover everything explicitly stated in the ACs.\n4. Mark automatable:false ONLY for offline/camera/biometrics/hardware tests.\n5. Each test case title must be unique and clearly different from others.\n\nReturn ONLY a valid JSON array (no markdown, no explanation):\n[{"id":"TC-001","title":"...","type":"${type}","platform":"${platform}","preconditions":"...","steps":["Step 1","Step 2"],"expected":"...","automatable":true}]`}],SYS,5000,proj.anthropicKey||""));
       const results=await Promise.all(requests);
       const rawNew=results.flatMap((r,i)=>{
         const match=r.replace(/```json|```/g,"").trim().match(/\[[\s\S]*\]/);
@@ -1077,7 +1082,10 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
         return JSON.parse(match[0]).map(c=>({...c,type:newTypes[i],status:"pending"}));
       });
       const merged=[...keptCases,...rawNew];
-      const finalCases=merged.map((c,i)=>({...c,id:"TC-"+String(i+1).padStart(3,"0")}));
+      const norm=t=>t.toLowerCase().replace(/[^a-z0-9]/g," ").replace(/\s+/g," ").trim();
+      const seen=new Set(keptCases.map(c=>norm(c.title)));
+      const deduped=merged.filter(c=>{const k=norm(c.title);if(seen.has(k))return false;seen.add(k);return true;});
+      const finalCases=deduped.map((c,i)=>({...c,id:"TC-"+String(i+1).padStart(3,"0")}));
       setCases(finalCases);
     } catch(e){setLoading(false);alert("Failed to generate test cases:\n\n"+e.message);return;}
     setPhase("ready");setLoading(false);
@@ -1256,7 +1264,7 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
   const saveAndReset=()=>{
     if(sid&&sdata){
       const existing=DB.savedStories.find(s=>s.sid===sid);
-      const snap={id:existing?.id||uid(),name:existing?.name||(sdata?.summary||sid),phase,sid,sdata,cases:[...cases],gapText,platform,ctypes:[...ctypes],scripts:{...scripts},result,sessionBugs:[...sessionBugs],coverageText,savedAt:Date.now()};
+      const snap={id:existing?.id||uid(),name:existing?.name||(sdata?.summary||sid),categoryId:existing?.categoryId||null,phase,sid,sdata,cases:[...cases],gapText,platform,ctypes:[...ctypes],scripts:{...scripts},result,sessionBugs:[...sessionBugs],coverageText,savedAt:Date.now()};
       if(existing){DB.savedStories=DB.savedStories.map(s=>s.sid===sid?snap:s);}
       else{DB.savedStories.unshift(snap);}
       saveDB(); if(refreshSaved)refreshSaved();
@@ -1290,13 +1298,15 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
     if(i===4&&sdata){const et=[...new Set(cases.map(c=>c.type))];setCtypes(et.length>0?et:[]);setPhase("ctype");return;}
     if(i===5&&cases.length>0){setPhase("review");return;}
     if(i===6&&approved.length>0){setPhase("jira");return;}
-    if(i===7){setPhase(result?"result":"urlPrompt");return;}
+    if(i===7){setPhase(projFiles?"autoReady":"urlPrompt");return;}
     if(i===8&&result){setPhase("result");return;}
     if(i===9){setPhase("bugReport");return;}
     if(i===10){setPhase("coverage");return;}
   };
   const addManualCase=()=>{
-    if(!newCase.title.trim()) return;
+    if(!newCase.title.trim()){setNewCaseErr("Title is required.");return;}
+    if(!newCase.expected.trim()){setNewCaseErr("Expected result is required.");return;}
+    setNewCaseErr("");
     const id="TC-M"+String(cases.filter(c=>c.id.startsWith("TC-M")).length+1).padStart(3,"0");
     setCases(cs=>[...cs,{...newCase,id,status:"pending",steps:newCase.steps.filter(s=>s.trim())}]);
     setNewCase({title:"",type:"happy",platform:"web",preconditions:"",steps:[""],expected:"",automatable:true});
@@ -1698,7 +1708,7 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
           {cases.map(c=><div key={c.id} style={{...card,borderLeft:"3px solid "+(c.status==="approved"?"var(--color-text-success)":c.status==="rejected"?"var(--color-text-danger)":"var(--color-border-secondary)")}}>
             <div style={{display:"flex",gap:12}}>
               <div style={{flex:1}}>
-                <div style={{display:"flex",gap:8,marginBottom:10,flexWrap:"wrap",alignItems:"center"}}><Tag c="blue">{c.id}</Tag><Tag c={tcol(c.type)}>{c.type}</Tag>{c.automatable===false&&<Tag>manual only</Tag>}{c.status==="approved"&&<Tag c="green">✓ approved</Tag>}{c.status==="rejected"&&<span style={{display:"inline-block",padding:"2px 9px",borderRadius:20,fontSize:12,fontWeight:500,background:"var(--color-background-danger)",color:"var(--color-text-danger)"}}>✗ rejected</span>}</div>
+                <div style={{display:"flex",gap:8,marginBottom:10,flexWrap:"wrap",alignItems:"center"}}><Tag c="blue">{c.id}</Tag>{editOn?<select style={{padding:"2px 8px",borderRadius:12,border:"1px solid var(--color-border-secondary)",background:"var(--color-background-secondary)",color:"var(--color-text-primary)",fontSize:12,fontWeight:500,cursor:"pointer"}} value={c.type} onChange={e=>editC(c.id,"type",e.target.value)}><option value="happy">happy</option><option value="edge">edge</option><option value="negative">negative</option></select>:<Tag c={tcol(c.type)}>{c.type}</Tag>}{c.automatable===false&&<Tag>manual only</Tag>}{c.status==="approved"&&<Tag c="green">✓ approved</Tag>}{c.status==="rejected"&&<span style={{display:"inline-block",padding:"2px 9px",borderRadius:20,fontSize:12,fontWeight:500,background:"var(--color-background-danger)",color:"var(--color-text-danger)"}}>✗ rejected</span>}</div>
                 <Lbl>Title</Lbl><input style={{...inp,marginBottom:8,fontWeight:500}} value={c.title} onChange={e=>editC(c.id,"title",e.target.value)} disabled={!editOn}/>
                 <Lbl>Preconditions</Lbl><input style={{...inp,marginBottom:8}} value={c.preconditions||""} onChange={e=>editC(c.id,"preconditions",e.target.value)} disabled={!editOn}/>
                 <Lbl>Test Data</Lbl><textarea style={{...ta,marginBottom:8,minHeight:50}} rows={2} value={c.testData||""} onChange={e=>editC(c.id,"testData",e.target.value)} disabled={!editOn} placeholder="e.g. username: admin / password: Test@123"/>
@@ -1723,7 +1733,7 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
           {showAddCase&&<div style={{...card,border:"2px dashed var(--color-border-secondary)",marginBottom:16}}>
             <div style={{fontWeight:500,marginBottom:12}}>New manual test case</div>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
-              <div style={{gridColumn:"1/-1"}}><Lbl>Title</Lbl><input style={inp} value={newCase.title} onChange={e=>setNewCase(p=>({...p,title:e.target.value}))} placeholder="e.g. Submit form with valid data"/></div>
+              <div style={{gridColumn:"1/-1"}}><Lbl>Title <span style={{color:"var(--color-text-danger)"}}>*</span></Lbl><input style={{...inp,borderColor:newCaseErr&&!newCase.title.trim()?"var(--color-text-danger)":undefined}} value={newCase.title} onChange={e=>{setNewCase(p=>({...p,title:e.target.value}));if(newCaseErr)setNewCaseErr("");}} placeholder="e.g. Submit form with valid data"/></div>
               <div><Lbl>Type</Lbl><select style={sel} value={newCase.type} onChange={e=>setNewCase(p=>({...p,type:e.target.value}))}><option value="happy">Happy flow</option><option value="edge">Edge case</option><option value="negative">Negative</option></select></div>
               <div><Lbl>Platform</Lbl><select style={sel} value={newCase.platform} onChange={e=>setNewCase(p=>({...p,platform:e.target.value}))}><option value="web">Web</option><option value="mobile">Mobile</option></select></div>
               <div style={{gridColumn:"1/-1"}}><Lbl>Preconditions</Lbl><input style={inp} value={newCase.preconditions} onChange={e=>setNewCase(p=>({...p,preconditions:e.target.value}))} placeholder="e.g. User is logged in"/></div>
@@ -1735,11 +1745,12 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
               {newCase.steps.length>1&&<button onClick={()=>setNewCase(p=>({...p,steps:p.steps.filter((_,j)=>j!==i)}))} style={{padding:"4px 8px",borderRadius:6,border:"none",background:"var(--color-background-danger)",color:"var(--color-text-danger)",cursor:"pointer",fontSize:12}}>✕</button>}
             </div>)}
             <button onClick={()=>setNewCase(p=>({...p,steps:[...p.steps,""]}))} style={{marginBottom:10,padding:"4px 10px",borderRadius:6,border:"1px dashed var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:12,color:"var(--color-text-secondary)"}}>+ Add step</button>
-            <div style={{marginBottom:12}}><Lbl>Expected result</Lbl><input style={inp} value={newCase.expected} onChange={e=>setNewCase(p=>({...p,expected:e.target.value}))} placeholder="e.g. Success message shown"/></div>
+            <div style={{marginBottom:12}}><Lbl>Expected result <span style={{color:"var(--color-text-danger)"}}>*</span></Lbl><input style={{...inp,borderColor:newCaseErr&&!newCase.expected.trim()?"var(--color-text-danger)":undefined}} value={newCase.expected} onChange={e=>{setNewCase(p=>({...p,expected:e.target.value}));if(newCaseErr)setNewCaseErr("");}} placeholder="e.g. Success message shown"/></div>
             <label style={{display:"flex",alignItems:"center",gap:8,fontSize:13,marginBottom:14,cursor:"pointer"}}>
               <input type="checkbox" checked={newCase.automatable} onChange={e=>setNewCase(p=>({...p,automatable:e.target.checked}))}/> Automatable
             </label>
-            <div style={{display:"flex",gap:8}}><Btn v="primary" onClick={addManualCase}>Add case</Btn><button onClick={()=>setShowAddCase(false)} style={ghostBtn}>Cancel</button></div>
+            {newCaseErr&&<div style={{marginBottom:10,padding:"8px 12px",borderRadius:8,background:"var(--color-background-danger)",border:"1px solid var(--color-text-danger)",color:"var(--color-text-danger)",fontSize:13}}>⚠ {newCaseErr}</div>}
+            <div style={{display:"flex",gap:8}}><Btn v="primary" onClick={addManualCase}>Add case</Btn><button onClick={()=>{setShowAddCase(false);setNewCaseErr("");}} style={ghostBtn}>Cancel</button></div>
           </div>}
           <div style={{display:"flex",gap:10,marginBottom:16}}>
             {cases.filter(c=>c.status==="pending").length>0
