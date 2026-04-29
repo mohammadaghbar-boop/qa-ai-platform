@@ -103,15 +103,33 @@ async function establishSession(memberId) {
   return null;
 }
 
+/* ─── Session helpers ────────────────────────────────────────────────────── */
+async function _ensureSession() {
+  let token = sessionStorage.getItem(SESSION_TOKEN_KEY);
+  if (!token && _currentMemberId) token = await establishSession(_currentMemberId);
+  return token || null;
+}
+// Re-establish session silently (server may have restarted, wiping in-memory sessions)
+async function _refreshSession() {
+  if (!_currentMemberId) return null;
+  return await establishSession(_currentMemberId);
+}
+
 /* ─── Claude API ─────────────────────────────────────────────────────────── */
 async function callAI(messages, sys="", max=4000, _legacy="") {
-  const sessionToken = sessionStorage.getItem(SESSION_TOKEN_KEY);
+  const doCall = (token) => fetch(API_BASE + "/api/ai", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Session-Token": token || "" },
+    body: JSON.stringify({ messages, system: sys })
+  });
   try {
-    const r = await fetch(API_BASE + "/api/ai", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Session-Token": sessionToken || "" },
-      body: JSON.stringify({ messages, system: sys })
-    });
+    let token = await _ensureSession();
+    let r = await doCall(token);
+    // Session stale (server restarted) — refresh once and retry
+    if (r.status === 500 || r.status === 401) {
+      const fresh = await _refreshSession();
+      if (fresh) r = await doCall(fresh);
+    }
     if (r.ok) {
       const d = await r.json();
       if (d.error) throw new Error(d.error);
@@ -128,13 +146,19 @@ async function callAI(messages, sys="", max=4000, _legacy="") {
 
 /* ─── Jira API ───────────────────────────────────────────────────────────── */
 async function callJira(proj, method, path, body=null) {
-  const sessionToken = sessionStorage.getItem(SESSION_TOKEN_KEY);
-  if (!sessionToken) throw new Error("No active session. Please log in again.");
-  const r = await fetch(API_BASE + "/api/jira", {
+  let token = await _ensureSession();
+  if (!token) throw new Error("No active session. Please log out and log back in.");
+  const doCall = (t) => fetch(API_BASE + "/api/jira", {
     method: "POST",
-    headers: { "Content-Type": "application/json", "X-Session-Token": sessionToken },
+    headers: { "Content-Type": "application/json", "X-Session-Token": t },
     body: JSON.stringify({ path, method, body })
   });
+  let r = await doCall(token);
+  // Session stale (server restarted) — refresh once and retry
+  if (r.status === 500 || r.status === 401) {
+    const fresh = await _refreshSession();
+    if (fresh) r = await doCall(fresh);
+  }
   if (!r.ok) {
     const d = await r.json().catch(()=>({}));
     throw new Error(d.error || "Server error " + r.status);
@@ -823,9 +847,10 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
       setPhase("mode"); setLoading(false);
     } catch(e) {
       if(jiraConfigured){
-        setFetchError(e.message.includes("not configured")||e.message.includes("server")||e.message.includes("fetch")
-          ? e.message
-          : "Story \""+sid+"\" was not found in Jira ("+proj.jiraProjKey+"). Please check the story ID and try again.");
+        const isNotFound=/404|not found/i.test(e.message);
+        setFetchError(isNotFound
+          ? "Story \""+sid+"\" was not found in Jira ("+proj.jiraProjKey+"). Please check the story ID and try again."
+          : e.message);
         setLoading(false); return;
       }
       setSdata({key:sid,summary:"Story "+sid,description:"",labels:[],type:"Story",status:"In Progress",assignee:"—",priority:"Medium",sim:true});
