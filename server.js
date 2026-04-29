@@ -2,12 +2,30 @@
 // Run with: node server.js
 // Keep this terminal open while using the app.
 
-const http  = require('http');
-const https = require('https');
-const fs    = require('fs');
-const os    = require('os');
-const path  = require('path');
+const http   = require('http');
+const https  = require('https');
+const fs     = require('fs');
+const os     = require('os');
+const path   = require('path');
+const crypto = require('crypto');
 const { spawn } = require('child_process');
+
+// In-memory session store: token -> { memberId, claudeApiKey, jiraUrl, jiraAuth }
+const sessions = new Map();
+function createSession(memberId, claudeApiKey, jiraUrl, jiraEmail, jiraToken) {
+  const token = crypto.randomBytes(32).toString('hex');
+  sessions.set(token, {
+    memberId,
+    claudeApiKey,
+    jiraUrl:  jiraUrl  || '',
+    jiraAuth: (jiraEmail && jiraToken) ? Buffer.from(jiraEmail + ':' + jiraToken).toString('base64') : ''
+  });
+  return token;
+}
+function getSession(req) {
+  const token = req.headers['x-session-token'];
+  return token ? sessions.get(token) || null : null;
+}
 
 const PORT = 3456;
 
@@ -194,7 +212,7 @@ function runK6(scriptPath) {
 const server = http.createServer((req, res) => {
   res.setHeader('Access-Control-Allow-Origin',  '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Session-Token');
 
   if (req.method === 'OPTIONS') { res.writeHead(200); res.end(); return; }
 
@@ -213,10 +231,33 @@ const server = http.createServer((req, res) => {
   let body = '';
   req.on('data', chunk => body += chunk);
   req.on('end', async () => {
+    /* ── /api/auth/session ── */
+    if (req.method === 'POST' && req.url === '/api/auth/session') {
+      try {
+        const { memberId, claudeApiKey, jiraUrl, jiraEmail, jiraToken } = JSON.parse(body);
+        if (!claudeApiKey) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'claudeApiKey is required' }));
+          return;
+        }
+        const sessionToken = createSession(memberId, claudeApiKey, jiraUrl, jiraEmail, jiraToken);
+        console.log('[Auth] Session created for member:', memberId);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ sessionToken }));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: e.message }));
+      }
+      return;
+    }
+
     /* ── /api/ai ── */
     if (req.method === 'POST' && req.url === '/api/ai') {
       try {
-        const { messages, system, claudeApiKey } = JSON.parse(body);
+        const session = getSession(req);
+        const parsed  = JSON.parse(body);
+        const claudeApiKey = session?.claudeApiKey || parsed.claudeApiKey;
+        const { messages, system } = parsed;
         console.log('[AI]   Request —', (messages.at(-1)?.content || '').slice(0, 80) + '…');
         const text = await callClaude(messages, system, claudeApiKey);
         console.log('[AI]   Done    —', text.slice(0, 60) + '…');
@@ -233,7 +274,11 @@ const server = http.createServer((req, res) => {
     /* ── /api/jira ── */
     if (req.method === 'POST' && req.url === '/api/jira') {
       try {
-        const { jiraUrl, path, method, auth, body: jiraBody } = JSON.parse(body);
+        const session  = getSession(req);
+        const parsed   = JSON.parse(body);
+        const jiraUrl  = session?.jiraUrl  || parsed.jiraUrl;
+        const auth     = session?.jiraAuth || parsed.auth;
+        const { path, method, body: jiraBody } = parsed;
         console.log('[Jira] Request —', method, path);
         const data = await proxyJira(jiraUrl, path, method, auth, jiraBody);
         console.log('[Jira] Done');

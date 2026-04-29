@@ -74,15 +74,43 @@ function _getMemberSettings() {
   return DB.memberSettings.find(s => s.memberId === _currentMemberId) || null;
 }
 
+/* ─── Session management ─────────────────────────────────────────────────── */
+const SESSION_TOKEN_KEY = "qa_api_session_token";
+
+async function establishSession(memberId) {
+  const settings = DB.memberSettings.find(s => s.memberId === memberId);
+  if (!settings?.claudeApiKey) return null;
+  try {
+    const r = await fetch(API_BASE + "/api/auth/session", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        memberId:     settings.memberId,
+        claudeApiKey: settings.claudeApiKey,
+        jiraUrl:      settings.jiraUrl,
+        jiraEmail:    settings.jiraEmail,
+        jiraToken:    settings.jiraToken
+      })
+    });
+    const d = await r.json();
+    if (d.sessionToken) {
+      sessionStorage.setItem(SESSION_TOKEN_KEY, d.sessionToken);
+      return d.sessionToken;
+    }
+  } catch (e) {
+    console.warn("Could not establish server session:", e.message);
+  }
+  return null;
+}
+
 /* ─── Claude API ─────────────────────────────────────────────────────────── */
 async function callAI(messages, sys="", max=4000, _legacy="") {
-  const settings = _getMemberSettings();
-  const claudeApiKey = settings?.claudeApiKey || "";
+  const sessionToken = sessionStorage.getItem(SESSION_TOKEN_KEY);
   try {
     const r = await fetch(API_BASE + "/api/ai", {
-      method:"POST",
-      headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({ messages, system:sys, claudeApiKey })
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Session-Token": sessionToken || "" },
+      body: JSON.stringify({ messages, system: sys })
     });
     if (r.ok) {
       const d = await r.json();
@@ -100,30 +128,20 @@ async function callAI(messages, sys="", max=4000, _legacy="") {
 
 /* ─── Jira API ───────────────────────────────────────────────────────────── */
 async function callJira(proj, method, path, body=null) {
-  const ms = _getMemberSettings();
-  const jiraUrl   = ms?.jiraUrl   || proj?.jiraUrl   || "";
-  const jiraToken = ms?.jiraToken || proj?.jiraToken || "";
-  const jiraEmail = ms?.jiraEmail || proj?.jiraEmail || "";
-  if (!jiraUrl||!jiraToken||!jiraEmail) throw new Error("Jira not configured. Please add your Jira credentials in Settings.");
-  const auth = btoa(jiraEmail+":"+jiraToken);
-  try {
-    const r = await fetch(API_BASE + "/api/jira", {
-      method:"POST",
-      headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({ jiraUrl, path, method, auth, body })
-    });
-    const d = await r.json();
-    if (d.error) throw new Error(d.error);
-    return d;
-  } catch(proxyErr) {
-    if (!proxyErr.message.includes("fetch")) throw proxyErr;
-    // Fallback: direct fetch (works when server.js is not the intermediary)
-    const opts = { method, headers:{"Authorization":"Basic "+auth,"Content-Type":"application/json","Accept":"application/json"} };
-    if (body) opts.body = JSON.stringify(body);
-    const r = await fetch(jiraUrl+"/rest/api/3"+path, opts);
-    if (!r.ok) { const t=await r.text(); throw new Error("Jira "+r.status+": "+t.slice(0,100)); }
-    return r.json();
+  const sessionToken = sessionStorage.getItem(SESSION_TOKEN_KEY);
+  if (!sessionToken) throw new Error("No active session. Please log in again.");
+  const r = await fetch(API_BASE + "/api/jira", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Session-Token": sessionToken },
+    body: JSON.stringify({ path, method, body })
+  });
+  if (!r.ok) {
+    const d = await r.json().catch(()=>({}));
+    throw new Error(d.error || "Server error " + r.status);
   }
+  const d = await r.json();
+  if (d.error) throw new Error(d.error);
+  return d;
 }
 
 /* ─── File helpers ───────────────────────────────────────────────────────── */
@@ -1873,12 +1891,13 @@ function MemberConfigDialog({memberId, onClose}) {
     setTesting(false);
   };
 
-  const save=()=>{
+  const save=async()=>{
     if(!f.claudeApiKey.trim())return;
     const entry={memberId,jiraUrl:f.jiraUrl.trim(),jiraEmail:f.jiraEmail.trim(),jiraToken:f.jiraToken.trim(),claudeApiKey:f.claudeApiKey.trim(),configuredAt:Date.now()};
     if(existing){DB.memberSettings=DB.memberSettings.map(s=>s.memberId===memberId?entry:s);}
     else{DB.memberSettings.push(entry);}
     saveDB();
+    await establishSession(memberId);
     onClose();
   };
 
@@ -1991,10 +2010,11 @@ function App() {
     setUser(u); setPage(u.role==="admin"?"dashboard":"workspace");
     if(u.role==="member"){
       const ms=DB.memberSettings.find(s=>s.memberId===u.id);
-      if(!ms?.claudeApiKey)setShowConfig(true);
+      if(!ms?.claudeApiKey){setShowConfig(true);}
+      else{establishSession(u.id);}
     }
   };
-  const handleLogout=()=>{_currentMemberId="";localStorage.removeItem(SESSION_KEY);sessionStorage.removeItem(SESSION_KEY);setUser(null);setPage("workspace");setShowConfig(false);};
+  const handleLogout=()=>{_currentMemberId="";localStorage.removeItem(SESSION_KEY);sessionStorage.removeItem(SESSION_KEY);sessionStorage.removeItem(SESSION_TOKEN_KEY);setUser(null);setPage("workspace");setShowConfig(false);};
   if(!user) return <LoginPage onLogin={handleLogin}/>;
   const adminNav=[{sec:"Overview",items:[{id:"dashboard",label:"Dashboard",icon:"📊"}]},{sec:"Manage",items:[{id:"members",label:"Members",icon:"👥"},{id:"projects",label:"Projects",icon:"📁"},{id:"assign",label:"Assignments",icon:"🔗"}]},{sec:"Reports",items:[{id:"bugs",label:"Bug tracker",icon:"🐛"}]}];
   const memberNav=[{sec:"Work",items:[{id:"workspace",label:"Workspace",icon:"🖥"}]}];
