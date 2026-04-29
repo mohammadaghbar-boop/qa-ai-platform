@@ -1,6 +1,23 @@
 // QA AI Platform — Local Proxy (Claude AI + Jira)
 // Run with: node server.js
 // Keep this terminal open while using the app.
+//
+// ── DevOps Deployment ────────────────────────────────────────────────────────
+// Branch  : platform_side
+// To run  :
+//   git clone https://github.com/mohammadaghbar-boop/qa-ai-platform.git
+//   cd qa-ai-platform
+//   git checkout platform_side
+//   docker compose up
+//
+// Access  : http://server-ip:3456
+//
+// Notes   :
+//   - Port 3456 (configured in docker-compose.yml)
+//   - k6 is bundled inside Docker — no separate install needed
+//   - Sessions are in-memory — if container restarts, members must log out and back in
+//   - No .env file needed — credentials are managed inside the app per member
+// ─────────────────────────────────────────────────────────────────────────────
 
 const http   = require('http');
 const https  = require('https');
