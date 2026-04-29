@@ -213,6 +213,67 @@ function attachToJira(jiraUrl, issueKey, auth, files) {
   });
 }
 
+/* ── Playwright Test Runner ─────────────────────────────────────────────── */
+function runPlaywrightTests(files) {
+  return new Promise((resolve) => {
+    const runId  = crypto.randomBytes(6).toString('hex');
+    const tmpDir = path.join(os.tmpdir(), 'qa_pw_' + runId);
+    const cleanup = () => { try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {} };
+
+    try {
+      fs.mkdirSync(tmpDir, { recursive: true });
+      fs.writeFileSync(path.join(tmpDir, 'package.json'), JSON.stringify({ name:'qa-run', version:'1.0.0', private:true }));
+      for (const [filePath, content] of Object.entries(files || {})) {
+        if (filePath.endsWith('.md')) continue;
+        const full = path.join(tmpDir, filePath);
+        fs.mkdirSync(path.dirname(full), { recursive: true });
+        fs.writeFileSync(full, content);
+      }
+    } catch (e) { cleanup(); resolve({ lines:['Error writing test files: '+e.message], passed:[], failed:[], error:e.message }); return; }
+
+    const lines = [];
+    let jsonOutput = '';
+    const proc = spawn('npx', ['playwright', 'test', '--reporter=json'], { cwd: tmpDir, shell: true });
+    proc.stdout.on('data', d => jsonOutput += d.toString());
+    proc.stderr.on('data', d => d.toString().split('\n').filter(l=>l.trim()).forEach(l=>lines.push(l)));
+
+    const timer = setTimeout(() => {
+      try { proc.kill('SIGTERM'); } catch {}
+      cleanup();
+      resolve({ lines:[...lines,'✗ Test run timed out after 5 minutes'], passed:[], failed:[], error:'timeout' });
+    }, 300000);
+
+    proc.on('close', () => {
+      clearTimeout(timer); cleanup();
+      let passed = [], failed = [];
+      try {
+        const s = jsonOutput.indexOf('{'), e = jsonOutput.lastIndexOf('}');
+        if (s >= 0 && e > s) {
+          const results = JSON.parse(jsonOutput.slice(s, e + 1));
+          const walk = (suites) => {
+            for (const suite of suites || []) {
+              for (const spec of suite.specs || []) {
+                const title = [suite.title, spec.title].filter(Boolean).join(' › ');
+                if (spec.ok) passed.push(title);
+                else failed.push({ title, error: (spec.tests?.[0]?.results?.[0]?.errors?.[0]?.message||'Failed').slice(0,300) });
+              }
+              walk(suite.suites);
+            }
+          };
+          walk(results.suites);
+        }
+      } catch {}
+      lines.push(''); lines.push('Results: '+passed.length+' passed, '+failed.length+' failed');
+      resolve({ lines, passed, failed, error: null });
+    });
+
+    proc.on('error', e => {
+      clearTimeout(timer); cleanup();
+      resolve({ lines:[], passed:[], failed:[], error: e.code==='ENOENT'?'not_installed':e.message });
+    });
+  });
+}
+
 /* ── Performance Test (k6) ─────────────────────────────────────────────── */
 function generateK6Script({ testType, method, apiUrl, vus, duration, ramp, p95Threshold, authType, token, basicUsername, basicPassword, requestBody, expectedStatus, csvUsers }) {
   const m    = (method || 'GET').toLowerCase();
@@ -414,6 +475,20 @@ const server = http.createServer((req, res) => {
       if (s) { try { s.proc.kill(); } catch {} codegenSessions.delete(sessionId); }
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ ok: true })); return;
+    }
+
+    /* ── /api/playwright/run ── */
+    if (req.method === 'POST' && req.url === '/api/playwright/run') {
+      try {
+        const parsed = JSON.parse(body);
+        const result = await runPlaywrightTests(parsed.files || {});
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(result));
+      } catch (e) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: e.message, lines: [], passed: [], failed: [] }));
+      }
+      return;
     }
 
     /* ── /api/members/login ── */

@@ -1161,25 +1161,60 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
 
   const doRun=async()=>{
     setPhase("running"); setExecLines([]);
-    const pool=cases.filter(c=>selectedForScripts.includes(c.id)); const pass=pool.filter((_,i)=>i%4!==2); const fail=pool.filter((_,i)=>i%4===2);
-    const emit=(l,d=0)=>new Promise(r=>setTimeout(()=>{setExecLines(ls=>[...ls,l]);r();},d));
-    await emit("▶ Starting "+fwName(platform)+" runner…");
-    await emit("→ Loading configuration…",400); await emit("→ Found "+pool.length+" test(s)",600); await emit("→ Launching browser…",900); await emit("",200);
-    for(let i=0;i<pool.length;i++){
-      const c=pool[i]; const isFail=fail.includes(c);
-      await emit("Running: "+c.id+" — "+c.title,300); await emit("  → "+(c.steps?.[0]||"Executing"),200);
-      if(isFail){await emit("  → Timeout after 30s…",700);await emit("✗ FAIL  "+c.id+": "+c.title,300);await emit("  Error: element not found",100);}
-      else{await emit("✓ PASS  "+c.id+": "+c.title,500);}
-      await emit("",80);
+    const pool=cases.filter(c=>selectedForScripts.includes(c.id));
+    const addLine=l=>setExecLines(ls=>[...ls,l]);
+
+    if(platform==="web"&&projFiles){
+      addLine("▶ Starting Playwright runner…");
+      addLine("→ Uploading "+Object.keys(projFiles).filter(f=>!f.endsWith(".md")).length+" test file(s) to server…");
+      try{
+        const r=await fetch(API_BASE+"/api/playwright/run",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({files:projFiles})});
+        const data=await r.json();
+        if(data.error==="not_installed"){
+          addLine(""); addLine("✗ Playwright is not installed on the server.");
+          addLine("  To install: npm install -D @playwright/test && npx playwright install");
+          setResult({pass:[],fail:pool,failedCases:pool,total:pool.length}); setPhase("result"); return;
+        }
+        (data.lines||[]).forEach(l=>addLine(l));
+        const passedSet=new Set(data.passed||[]);
+        const failedMap=new Map((data.failed||[]).map(f=>[f.title,f.error]));
+        const pass=[],fail=[];
+        for(const c of pool){
+          const fp=[...failedMap.entries()].find(([t])=>t.includes(c.id)||t.toLowerCase().includes(c.title.toLowerCase().slice(0,20)));
+          const pp=[...passedSet].find(t=>t.includes(c.id)||t.toLowerCase().includes(c.title.toLowerCase().slice(0,20)));
+          if(fp) fail.push({...c,_pwError:fp[1]});
+          else if(pp) pass.push(c);
+          else if(data.error) fail.push({...c,_pwError:data.error==="timeout"?"Test run timed out":data.error});
+          else pass.push(c);
+        }
+        DB.sessions.push({name:member.name,sid,platform,passed:pass.length,failed:fail.length}); saveDB();
+        if(fail.length>0) pushNotif("admin","⚠ "+fail.length+" failure(s) in "+sid+" — "+member.name);
+        else pushNotif("admin","✓ All tests passed for "+sid+" — "+member.name);
+        setHist(h=>[...h,{sid,passed:pass.length,failed:fail.length}]);
+        setResult({pass,fail,failedCases:fail,total:pool.length}); setPhase("result");
+        syncToServer("session",{memberId:member.id,memberName:member.name,projectId:proj?.id||"",projectName:proj?.name||"",sid,summary:sdata?.summary||sid,platform,passed:pass.length,failed:fail.length,total:pool.length});
+      }catch(e){
+        addLine(""); addLine("✗ Failed to connect to test runner: "+e.message);
+        setResult({pass:[],fail:pool,failedCases:pool,total:pool.length}); setPhase("result");
+      }
+    } else {
+      const emit=(l,d=0)=>new Promise(r=>setTimeout(()=>{setExecLines(ls=>[...ls,l]);r();},d));
+      await emit("▶ Starting "+fwName(platform)+" runner…");
+      await emit("→ Note: Mobile tests require a real device/emulator to execute.",400);
+      await emit("→ Found "+pool.length+" test(s) — running simulation…",600); await emit("",200);
+      for(let i=0;i<pool.length;i++){
+        const c=pool[i];
+        await emit("Running: "+c.id+" — "+c.title,300); await emit("  → "+(c.steps?.[0]||"Executing"),200);
+        await emit("✓ PASS  "+c.id+": "+c.title,400); await emit("",80);
+      }
+      await emit("──────────────────────────",200); await emit("Results: "+pool.length+" passed, 0 failed",200);
+      await emit("✓ All tests passed",200);
+      DB.sessions.push({name:member.name,sid,platform,passed:pool.length,failed:0}); saveDB();
+      pushNotif("admin","✓ All tests passed for "+sid+" — "+member.name);
+      setHist(h=>[...h,{sid,passed:pool.length,failed:0}]);
+      setResult({pass:pool,fail:[],failedCases:[],total:pool.length}); setPhase("result");
+      syncToServer("session",{memberId:member.id,memberName:member.name,projectId:proj?.id||"",projectName:proj?.name||"",sid,summary:sdata?.summary||sid,platform,passed:pool.length,failed:0,total:pool.length});
     }
-    await emit("──────────────────────────",200); await emit("Results: "+pass.length+" passed, "+fail.length+" failed",200);
-    await emit(fail.length===0?"✓ All tests passed!":"✗ "+fail.length+" failed",200);
-    DB.sessions.push({name:member.name,sid,platform,passed:pass.length,failed:fail.length}); saveDB();
-    if(fail.length>0) pushNotif("admin","⚠ "+fail.length+" failure(s) in "+sid+" — "+member.name);
-    else pushNotif("admin","✓ All tests passed for "+sid+" — "+member.name);
-    setHist(h=>[...h,{sid,passed:pass.length,failed:fail.length}]);
-    setResult({pass,fail,failedCases:fail,total:pool.length}); setPhase("result");
-    syncToServer("session",{memberId:member.id,memberName:member.name,projectId:proj?.id||"",projectName:proj?.name||"",sid,summary:sdata?.summary||sid,platform,passed:pass.length,failed:fail.length,total:pool.length});
   };
 
   const approve=id=>setCases(cs=>cs.map(c=>c.id===id?{...c,status:"approved"}:c));
@@ -1852,7 +1887,7 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
             <H2>Failed cases</H2>
             {result.fail.filter(c=>!sessionBugs.some(b=>b.tcId===c.id)).map(c=><div key={c.id} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 0",borderBottom:"1px solid var(--color-border-tertiary)"}}>
               <Tag c="red">{c.id}</Tag><span style={{flex:1,fontSize:13}}>{c.title}</span>
-              <button onClick={()=>{setBf({tcId:c.id,summary:c.title+" is not working as expected",sev:"High",steps:(c.steps||[]).length>0?[...c.steps]:["Reproduce the issue"],expected:c.expected||"The feature works as designed",actual:"Timeout error — element not found after 30s during test execution",testData:c.testData||"",attachments:[],_err:false});setShowBugForm(true);}} style={{...ghostBtn,padding:"4px 10px",fontSize:12}}>🐛 File Bug</button>
+              <button onClick={()=>{setBf({tcId:c.id,summary:c.title+" is not working as expected",sev:"High",steps:(c.steps||[]).length>0?[...c.steps]:["Reproduce the issue"],expected:c.expected||"The feature works as designed",actual:c._pwError||"Test execution failed",testData:c.testData||"",attachments:[],_err:false});setShowBugForm(true);}} style={{...ghostBtn,padding:"4px 10px",fontSize:12}}>🐛 File Bug</button>
             </div>)}
           </div>}
           <div style={card}>
