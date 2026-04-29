@@ -636,6 +636,8 @@ function DashboardPage() {
   const [sd,setSd]=useState(null);
   const [tab,setTab]=useState("sessions");
   const [loading,setLoading]=useState(true);
+  const [bugProjFilter,setBugProjFilter]=useState("All");
+  const [bugMemberFilter,setBugMemberFilter]=useState("All");
   const fetchData=()=>{
     setLoading(true);
     const adminToken=sessionStorage.getItem(ADMIN_TOKEN_KEY)||"";
@@ -645,6 +647,9 @@ function DashboardPage() {
   };
   useEffect(()=>{fetchData();},[]);
   const sessions=sd?.sessions||[]; const bugs=sd?.bugs||[]; const perfs=sd?.perfResults||[]; const cov=sd?.coverage||[];
+  const bugProjects=["All",...new Set(bugs.map(x=>x.projectName).filter(Boolean))];
+  const bugMembers=["All",...new Set(bugs.map(x=>x.memberName).filter(Boolean))];
+  const filteredBugs=bugs.filter(x=>(bugProjFilter==="All"||(x.projectName||"")=== bugProjFilter)&&(bugMemberFilter==="All"||x.memberName===bugMemberFilter));
   const tp=sessions.reduce((a,x)=>a+(x.passed||0),0), tf=sessions.reduce((a,x)=>a+(x.failed||0),0);
   const pr=tp+tf>0?Math.round(tp/(tp+tf)*100):0;
   const perfPassed=perfs.filter(x=>x.passed).length;
@@ -690,11 +695,25 @@ function DashboardPage() {
     </div>}
 
     {tab==="bugs"&&<div style={card}>
-      <H2>Bugs Filed — all members</H2>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,flexWrap:"wrap",gap:8}}>
+        <H2 style={{marginBottom:0}}>Bugs Filed — all members</H2>
+        <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+          <label style={{fontSize:12,color:"var(--color-text-secondary)"}}>Project:</label>
+          <select value={bugProjFilter} onChange={e=>{setBugProjFilter(e.target.value);}} style={{padding:"4px 10px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"var(--color-background-primary)",color:"var(--color-text-primary)",fontSize:13,cursor:"pointer"}}>
+            {bugProjects.map(p=><option key={p} value={p}>{p}</option>)}
+          </select>
+          <label style={{fontSize:12,color:"var(--color-text-secondary)"}}>Member:</label>
+          <select value={bugMemberFilter} onChange={e=>{setBugMemberFilter(e.target.value);}} style={{padding:"4px 10px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"var(--color-background-primary)",color:"var(--color-text-primary)",fontSize:13,cursor:"pointer"}}>
+            {bugMembers.map(m=><option key={m} value={m}>{m}</option>)}
+          </select>
+          {(bugProjFilter!=="All"||bugMemberFilter!=="All")&&<button onClick={()=>{setBugProjFilter("All");setBugMemberFilter("All");}} style={{padding:"4px 10px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:12,color:"var(--color-text-secondary)"}}>✕ Clear</button>}
+        </div>
+      </div>
       {bugs.length===0?<div style={{color:"var(--color-text-tertiary)",fontSize:14}}>No bugs synced yet. Bugs appear here after members file them.</div>:
+      filteredBugs.length===0?<div style={{color:"var(--color-text-tertiary)",fontSize:14}}>No bugs match the selected filters.</div>:
       <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
         <thead><tr><th style={th}>Bug ID</th><th style={th}>Filed by</th><th style={th}>Project</th><th style={th}>Story</th><th style={th}>Summary</th><th style={th}>Severity</th><th style={th}>Jira</th><th style={th}>Date</th></tr></thead>
-        <tbody>{bugs.slice(0,50).map((x,i)=><tr key={i}>
+        <tbody>{filteredBugs.slice(0,50).map((x,i)=><tr key={i}>
           <td style={td}><Tag c="red">{x.bid}</Tag></td>
           <td style={td}><b>{x.memberName}</b></td>
           <td style={td}><span style={{fontSize:12}}>{x.projectName||"—"}</span></td>
