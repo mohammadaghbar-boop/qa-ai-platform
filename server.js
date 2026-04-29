@@ -57,7 +57,7 @@ const DATA_FILE = path.join(DATA_DIR, 'qa-platform-db.json');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 function loadServerDB() {
   try { if (fs.existsSync(DATA_FILE)) return JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')); } catch {}
-  return { sessions: [], bugs: [], perfResults: [], coverage: [], adminPasswordHash: null };
+  return { sessions: [], bugs: [], perfResults: [], coverage: [], adminPasswordHash: null, adminPasswordIsDefault: true };
 }
 function saveServerDB(db) {
   const tmp = DATA_FILE + '.tmp';
@@ -68,14 +68,23 @@ let serverDB = loadServerDB();
 
 function hashPassword(p) { return crypto.createHash('sha256').update(p).digest('hex'); }
 
-// Generate a random admin password on first run
+// Set default admin password to 'admin' on first run
 if (!serverDB.adminPasswordHash) {
-  const firstRunPass = crypto.randomBytes(8).toString('hex');
-  serverDB.adminPasswordHash = hashPassword(firstRunPass);
+  serverDB.adminPasswordHash = hashPassword('admin');
+  serverDB.adminPasswordIsDefault = true;
   saveServerDB(serverDB);
   console.log('');
-  console.log('  ⚠️  First run — admin password: ' + firstRunPass);
-  console.log('  Log in and change it via Settings → Change Password.');
+  console.log('  ℹ  Default admin credentials: admin / admin');
+  console.log('  You will be prompted to change the password on first login.');
+  console.log('');
+}
+// Migration: existing db without the isDefault flag — reset to admin so forced change runs
+if (serverDB.adminPasswordIsDefault === undefined) {
+  serverDB.adminPasswordHash = hashPassword('admin');
+  serverDB.adminPasswordIsDefault = true;
+  saveServerDB(serverDB);
+  console.log('');
+  console.log('  ℹ  Admin password reset to default (admin). Change it on next login.');
   console.log('');
 }
 
@@ -306,7 +315,7 @@ const server = http.createServer((req, res) => {
         adminSessions.set(token, { createdAt: Date.now() });
         console.log('[Admin] Login successful');
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ token }));
+        res.end(JSON.stringify({ token, isDefaultPassword: !!serverDB.adminPasswordIsDefault }));
       } catch (e) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: e.message }));
@@ -332,6 +341,7 @@ const server = http.createServer((req, res) => {
           res.end(JSON.stringify({ error: 'New password must be at least 6 characters' })); return;
         }
         serverDB.adminPasswordHash = hashPassword(newPassword);
+        serverDB.adminPasswordIsDefault = false;
         saveServerDB(serverDB);
         console.log('[Admin] Password changed');
         res.writeHead(200, { 'Content-Type': 'application/json' });
