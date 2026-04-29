@@ -13,7 +13,7 @@
 // Access  : http://server-ip:3456
 //
 // Notes   :
-//   - Port 3456 (configured in docker-compose.yml)
+//   - Port 3456 (override with PORT env var)
 //   - k6 is bundled inside Docker — no separate install needed
 //   - Sessions are in-memory — if container restarts, members must log out and back in
 //   - No .env file needed — credentials are managed inside the app per member
@@ -27,7 +27,7 @@ const path   = require('path');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 
-// In-memory session store: token -> { memberId, claudeApiKey, jiraUrl, jiraAuth }
+// In-memory session store: token -> { memberId, claudeApiKey, jiraUrl, jiraAuth, createdAt }
 const sessions = new Map();
 function createSession(memberId, claudeApiKey, jiraUrl, jiraEmail, jiraToken) {
   const token = crypto.randomBytes(32).toString('hex');
@@ -35,7 +35,8 @@ function createSession(memberId, claudeApiKey, jiraUrl, jiraEmail, jiraToken) {
     memberId,
     claudeApiKey,
     jiraUrl:  jiraUrl  || '',
-    jiraAuth: (jiraEmail && jiraToken) ? Buffer.from(jiraEmail + ':' + jiraToken).toString('base64') : ''
+    jiraAuth: (jiraEmail && jiraToken) ? Buffer.from(jiraEmail + ':' + jiraToken).toString('base64') : '',
+    createdAt: Date.now()
   });
   return token;
 }
@@ -44,14 +45,52 @@ function getSession(req) {
   return token ? sessions.get(token) || null : null;
 }
 
-const PORT = 3456;
+/* ── Configuration ──────────────────────────────────────────────────────── */
+const PORT         = parseInt(process.env.PORT) || 3456;
+const MAX_BODY     = 20 * 1024 * 1024; // 20 MB per request
+const REQ_TIMEOUT  = 30000;            // 30 s for outgoing HTTP requests
 
 // Empty MCP config — prevents claude CLI from using MCP tools (e.g. Atlassian)
 const EMPTY_MCP = path.join(os.tmpdir(), 'qa-platform-no-mcp.json');
 fs.writeFileSync(EMPTY_MCP, JSON.stringify({ mcpServers: {} }));
 
+/* ── Rate limiter (login endpoints) ─────────────────────────────────────── */
+const loginAttempts = new Map(); // ip -> { count, resetAt }
+function checkRateLimit(ip) {
+  const now = Date.now();
+  let e = loginAttempts.get(ip);
+  if (!e || now > e.resetAt) e = { count: 0, resetAt: now + 15 * 60 * 1000 };
+  e.count++;
+  loginAttempts.set(ip, e);
+  return e.count <= 10; // 10 attempts per 15 min
+}
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, e] of loginAttempts) if (now > e.resetAt) loginAttempts.delete(ip);
+}, 5 * 60 * 1000);
+
+/* ── Input validators & sanitizers ──────────────────────────────────────── */
+function sanitizeFilename(name) {
+  return String(name || 'file').replace(/[^\w.\-]/g, '_').slice(0, 100);
+}
+function sanitizeK6Duration(d) {
+  return /^\d+[smh]$/.test(String(d || '')) ? String(d) : '30s';
+}
+function isValidHttpUrl(s) {
+  try { const u = new URL(s); return u.protocol === 'http:' || u.protocol === 'https:'; } catch { return false; }
+}
+// SSRF guard: only allow public HTTPS Jira URLs
+function isValidJiraUrl(s) {
+  try {
+    const u = new URL(s);
+    if (u.protocol !== 'https:') return false;
+    const h = u.hostname.toLowerCase();
+    if (/^(localhost|127\.|10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|0\.0\.0\.0|::1|169\.254\.)/.test(h)) return false;
+    return true;
+  } catch { return false; }
+}
+
 /* ── File-based data store (admin dashboard sync) ───────────────────────── */
-// Mount /data as a Docker volume so data survives container restarts.
 const DATA_DIR  = path.join(__dirname, 'data');
 const DATA_FILE = path.join(DATA_DIR, 'qa-platform-db.json');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -94,6 +133,16 @@ const adminSessions = new Map();
 const memberSessions = new Map();
 // Playwright codegen sessions
 const codegenSessions = new Map();
+// Expire codegen sessions older than 2 hours and kill any lingering processes
+setInterval(() => {
+  const cutoff = Date.now() - 2 * 60 * 60 * 1000;
+  for (const [id, s] of codegenSessions) {
+    if (s.startedAt < cutoff) {
+      if (s.status === 'running') { try { s.proc.kill(); } catch {} }
+      codegenSessions.delete(id);
+    }
+  }
+}, 30 * 60 * 1000);
 
 /* ── Claude AI (direct Anthropic API) ──────────────────────────────────── */
 function callClaude(messages, system, claudeApiKey) {
@@ -112,6 +161,7 @@ function callClaude(messages, system, claudeApiKey) {
       hostname: 'api.anthropic.com',
       path:     '/v1/messages',
       method:   'POST',
+      timeout:  REQ_TIMEOUT,
       headers:  {
         'Content-Type':      'application/json',
         'x-api-key':         claudeApiKey,
@@ -130,6 +180,7 @@ function callClaude(messages, system, claudeApiKey) {
         } catch (e) { reject(new Error('Failed to parse Claude API response: ' + data.slice(0, 120))); }
       });
     });
+    req.on('timeout', () => { req.destroy(new Error('Claude API request timed out')); });
     req.on('error', reject);
     req.write(payload);
     req.end();
@@ -137,20 +188,23 @@ function callClaude(messages, system, claudeApiKey) {
 }
 
 /* ── Jira Proxy ─────────────────────────────────────────────────────────── */
-function proxyJira(jiraUrl, path, method, auth, body) {
+function proxyJira(jiraUrl, jiraPath, method, auth, body) {
   return new Promise((resolve, reject) => {
-    const url    = new URL(jiraUrl + '/rest/api/3' + path);
-    const opts   = {
+    if (!jiraUrl || !isValidJiraUrl(jiraUrl)) {
+      reject(new Error('Invalid Jira URL. Must be a public HTTPS address.')); return;
+    }
+    const url  = new URL(jiraUrl + '/rest/api/3' + jiraPath);
+    const opts = {
       hostname: url.hostname,
       path:     url.pathname + url.search,
       method:   method,
+      timeout:  REQ_TIMEOUT,
       headers:  {
         'Authorization': 'Basic ' + auth,
         'Content-Type':  'application/json',
         'Accept':        'application/json'
       }
     };
-
     const req = https.request(opts, res => {
       let data = '';
       res.on('data', d => data += d);
@@ -163,7 +217,7 @@ function proxyJira(jiraUrl, path, method, auth, body) {
         }
       });
     });
-
+    req.on('timeout', () => { req.destroy(new Error('Jira request timed out')); });
     req.on('error', reject);
     if (body) req.write(JSON.stringify(body));
     req.end();
@@ -173,14 +227,18 @@ function proxyJira(jiraUrl, path, method, auth, body) {
 /* ── Jira Attachment Upload ─────────────────────────────────────────────── */
 function attachToJira(jiraUrl, issueKey, auth, files) {
   return new Promise((resolve, reject) => {
+    if (!jiraUrl || !isValidJiraUrl(jiraUrl)) {
+      reject(new Error('Invalid Jira URL.')); return;
+    }
     const boundary = '----QAPlatformBoundary' + Date.now().toString(16);
     const parts = [];
     for (const file of files) {
       const m = file.dataUrl.match(/^data:([^;]+);base64,(.+)$/);
       if (!m) continue;
+      const safeFilename = sanitizeFilename(file.name);
       const fileData = Buffer.from(m[2], 'base64');
       parts.push(
-        Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${file.name}"\r\nContent-Type: ${m[1]}\r\n\r\n`, 'utf8'),
+        Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${safeFilename}"\r\nContent-Type: ${m[1]}\r\n\r\n`, 'utf8'),
         fileData,
         Buffer.from('\r\n', 'utf8')
       );
@@ -193,6 +251,7 @@ function attachToJira(jiraUrl, issueKey, auth, files) {
       hostname: url.hostname,
       path:     url.pathname + url.search,
       method:   'POST',
+      timeout:  REQ_TIMEOUT,
       headers: {
         'Authorization':      'Basic ' + auth,
         'X-Atlassian-Token':  'no-check',
@@ -207,6 +266,7 @@ function attachToJira(jiraUrl, issueKey, auth, files) {
         else resolve(true);
       });
     });
+    req.on('timeout', () => { req.destroy(new Error('Jira attachment upload timed out')); });
     req.on('error', reject);
     req.write(body);
     req.end();
@@ -216,7 +276,7 @@ function attachToJira(jiraUrl, issueKey, auth, files) {
 /* ── Playwright Test Runner ─────────────────────────────────────────────── */
 function runPlaywrightTests(files) {
   return new Promise((resolve) => {
-    const runId  = crypto.randomBytes(6).toString('hex');
+    const runId  = crypto.randomBytes(16).toString('hex');
     const tmpDir = path.join(os.tmpdir(), 'qa_pw_' + runId);
     const cleanup = () => { try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {} };
 
@@ -276,10 +336,14 @@ function runPlaywrightTests(files) {
 
 /* ── Performance Test (k6) ─────────────────────────────────────────────── */
 function generateK6Script({ testType, method, apiUrl, vus, duration, ramp, p95Threshold, authType, token, basicUsername, basicPassword, requestBody, expectedStatus, csvUsers }) {
-  const m    = (method || 'GET').toLowerCase();
+  const m    = ['get','post','put','patch','delete'].includes((method||'').toLowerCase()) ? (method||'GET').toLowerCase() : 'get';
   const vusN = parseInt(vus) || 100;
   const p95N = parseInt(p95Threshold) || 2000;
   const exp  = parseInt(expectedStatus) || 200;
+  // Validate and sanitize URL and durations
+  const safeUrl  = isValidHttpUrl(apiUrl) ? apiUrl : 'http://localhost';
+  const safeDur  = sanitizeK6Duration(duration);
+  const safeRamp = sanitizeK6Duration(ramp);
 
   const baseHeaders = { 'Content-Type': 'application/json', 'Accept': 'application/json' };
   if (authType === 'bearer' && token)
@@ -294,13 +358,11 @@ function generateK6Script({ testType, method, apiUrl, vus, duration, ramp, p95Th
   let stages;
   if (testType === 'stress') {
     const s25 = Math.ceil(vusN * 0.25), s50 = Math.ceil(vusN * 0.5), s75 = Math.ceil(vusN * 0.75);
-    stages = `[{duration:'${ramp}',target:${s25}},{duration:'${duration}',target:${s25}},{duration:'${ramp}',target:${s50}},{duration:'${duration}',target:${s50}},{duration:'${ramp}',target:${s75}},{duration:'${duration}',target:${s75}},{duration:'${ramp}',target:${vusN}},{duration:'${duration}',target:${vusN}},{duration:'${ramp}',target:0}]`;
+    stages = `[{duration:'${safeRamp}',target:${s25}},{duration:'${safeDur}',target:${s25}},{duration:'${safeRamp}',target:${s50}},{duration:'${safeDur}',target:${s50}},{duration:'${safeRamp}',target:${s75}},{duration:'${safeDur}',target:${s75}},{duration:'${safeRamp}',target:${vusN}},{duration:'${safeDur}',target:${vusN}},{duration:'${safeRamp}',target:0}]`;
   } else {
-    stages = `[{duration:'${ramp}',target:${vusN}},{duration:'${duration}',target:${vusN}},{duration:'${ramp}',target:0}]`;
+    stages = `[{duration:'${safeRamp}',target:${vusN}},{duration:'${safeDur}',target:${vusN}},{duration:'${safeRamp}',target:0}]`;
   }
 
-  // CSV auth: pre-encode each username:password pair on the server side,
-  // then embed the array in the k6 script so each VU picks its credential by index.
   if (authType === 'csv' && Array.isArray(csvUsers) && csvUsers.length > 0) {
     const encodedCreds = csvUsers.map(u =>
       Buffer.from((u.username || '') + ':' + (u.password || '')).toString('base64')
@@ -315,7 +377,7 @@ export let options = {
 export default function () {
   const headers = ${JSON.stringify(baseHeaders)};
   headers['Authorization'] = 'Basic ' + __creds[(__VU - 1) % __creds.length];
-  const res = http.${m}('${apiUrl}'${bodyArg}, { headers });
+  const res = http.${m}('${safeUrl}'${bodyArg}, { headers });
   check(res, { 'status ${exp}': r => r.status === ${exp} });
   sleep(1);
 }`;
@@ -328,7 +390,7 @@ export let options = {
   thresholds: { 'http_req_duration': ['p(95)<${p95N}'], 'http_req_failed': ['rate<0.05'] }
 };
 export default function () {
-  const res = http.${m}('${apiUrl}'${bodyArg}, { headers: ${JSON.stringify(baseHeaders)} });
+  const res = http.${m}('${safeUrl}'${bodyArg}, { headers: ${JSON.stringify(baseHeaders)} });
   check(res, { 'status ${exp}': r => r.status === ${exp} });
   sleep(1);
 }`;
@@ -376,14 +438,26 @@ function runK6(scriptPath) {
 
 /* ── HTTP Server ────────────────────────────────────────────────────────── */
 const server = http.createServer((req, res) => {
-  res.setHeader('Access-Control-Allow-Origin',  '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Session-Token');
+  // Security headers on every response
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
 
-  if (req.method === 'OPTIONS') { res.writeHead(200); res.end(); return; }
+  // CORS: only allow same-origin requests (app and API share the same host:port)
+  const origin = req.headers['origin'];
+  const host   = req.headers['host'];
+  if (origin && host && origin.includes(host)) {
+    res.setHeader('Access-Control-Allow-Origin',  origin);
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Session-Token, X-Admin-Token');
+    res.setHeader('Vary', 'Origin');
+  }
 
-  /* ── Codegen status (GET) ── */
+  if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
+
+  /* ── Codegen status (GET — requires session) ── */
   if (req.method === 'GET' && req.url.startsWith('/api/codegen/status/')) {
+    if (!getSession(req)) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Authentication required' })); return; }
     const sessionId = req.url.split('/api/codegen/status/')[1];
     const s = codegenSessions.get(sessionId);
     if (!s) { res.writeHead(404, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ status: 'not_found' })); return; }
@@ -420,7 +494,11 @@ const server = http.createServer((req, res) => {
   if (req.method === 'GET' && (req.url === '/' || req.url === '/index.html')) {
     try {
       const html = fs.readFileSync(path.join(__dirname, 'QA AI Platform.html'), 'utf8');
-      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.writeHead(200, {
+        'Content-Type':  'text/html; charset=utf-8',
+        'Cache-Control': 'no-store, no-cache, must-revalidate',
+        'Pragma':        'no-cache'
+      });
       res.end(html);
     } catch (e) {
       res.writeHead(500); res.end('Could not read app file: ' + e.message);
@@ -428,18 +506,34 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  /* ── Read body (with size limit) ── */
   let body = '';
-  req.on('data', chunk => body += chunk);
+  let bodySize = 0;
+  req.on('data', chunk => {
+    bodySize += chunk.length;
+    if (bodySize > MAX_BODY) {
+      res.writeHead(413, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Request body too large' }));
+      req.destroy();
+      return;
+    }
+    body += chunk;
+  });
   req.on('end', async () => {
-    /* ── /api/codegen/start ── */
+    /* ── /api/codegen/start (requires session) ── */
     if (req.method === 'POST' && req.url === '/api/codegen/start') {
+      if (!getSession(req)) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Authentication required' })); return; }
       try {
-        const { url } = JSON.parse(body);
-        if (!url) { res.writeHead(400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'url is required' })); return; }
-        const sessionId  = crypto.randomBytes(8).toString('hex');
+        const parsed = JSON.parse(body);
+        const { url } = parsed;
+        if (!url || !isValidHttpUrl(url)) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'A valid http/https URL is required' })); return;
+        }
+        const sessionId  = crypto.randomBytes(16).toString('hex');
         const outputFile = path.join(os.tmpdir(), `qa_codegen_${sessionId}.js`);
         const proc = spawn('npx', ['playwright', 'codegen', url, '--output', outputFile], { shell: true });
-        const session = { proc, outputFile, status: 'running', script: null };
+        const session = { proc, outputFile, status: 'running', script: null, startedAt: Date.now() };
         codegenSessions.set(sessionId, session);
         proc.on('close', () => {
           try {
@@ -458,7 +552,7 @@ const server = http.createServer((req, res) => {
           session.status = e.code === 'ENOENT' ? 'not_installed' : 'error';
           console.error('[Codegen] Error:', e.message);
         });
-        console.log('[Codegen] Started session', sessionId, 'for', url);
+        console.log('[Codegen] Started session', sessionId);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ sessionId }));
       } catch (e) {
@@ -468,8 +562,9 @@ const server = http.createServer((req, res) => {
       return;
     }
 
-    /* ── /api/codegen/:id (DELETE — cancel) ── */
+    /* ── /api/codegen/:id (DELETE — cancel, requires session) ── */
     if (req.method === 'DELETE' && req.url.startsWith('/api/codegen/')) {
+      if (!getSession(req)) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Authentication required' })); return; }
       const sessionId = req.url.split('/api/codegen/')[1];
       const s = codegenSessions.get(sessionId);
       if (s) { try { s.proc.kill(); } catch {} codegenSessions.delete(sessionId); }
@@ -477,8 +572,9 @@ const server = http.createServer((req, res) => {
       res.end(JSON.stringify({ ok: true })); return;
     }
 
-    /* ── /api/playwright/run ── */
+    /* ── /api/playwright/run (requires session) ── */
     if (req.method === 'POST' && req.url === '/api/playwright/run') {
+      if (!getSession(req)) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Authentication required' })); return; }
       try {
         const parsed = JSON.parse(body);
         const result = await runPlaywrightTests(parsed.files || {});
@@ -493,13 +589,18 @@ const server = http.createServer((req, res) => {
 
     /* ── /api/members/login ── */
     if (req.method === 'POST' && req.url === '/api/members/login') {
+      const ip = req.socket.remoteAddress || 'unknown';
+      if (!checkRateLimit(ip)) {
+        res.writeHead(429, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Too many login attempts. Please wait 15 minutes.' })); return;
+      }
       try {
         const { email, password } = JSON.parse(body);
         if (!serverDB.members) serverDB.members = [];
         const member = serverDB.members.find(m => m.email === email);
         if (!member || hashPassword(password || '') !== member.passwordHash) {
           res.writeHead(401, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'Invalid email or password' })); return;
+          res.end(JSON.stringify({ error: 'Invalid credentials' })); return;
         }
         const token = crypto.randomBytes(32).toString('hex');
         memberSessions.set(token, { memberId: member.id });
@@ -508,7 +609,7 @@ const server = http.createServer((req, res) => {
         res.end(JSON.stringify({ token, member: { id: member.id, name: member.name, email: member.email, role: member.role } }));
       } catch (e) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: e.message }));
+        res.end(JSON.stringify({ error: 'Invalid request' }));
       }
       return;
     }
@@ -526,12 +627,16 @@ const server = http.createServer((req, res) => {
           res.writeHead(400, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'name, email and password are required' })); return;
         }
+        if (password.length < 8) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Password must be at least 8 characters' })); return;
+        }
         if (!serverDB.members) serverDB.members = [];
         if (serverDB.members.find(m => m.email === email)) {
           res.writeHead(400, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'A member with this email already exists' })); return;
         }
-        const member = { id: crypto.randomBytes(6).toString('hex'), name, email, role: role || 'QA Engineer', passwordHash: hashPassword(password), createdAt: Date.now() };
+        const member = { id: crypto.randomBytes(16).toString('hex'), name, email, role: role || 'QA Engineer', passwordHash: hashPassword(password), createdAt: Date.now() };
         serverDB.members.push(member);
         saveServerDB(serverDB);
         console.log('[Member] Created:', name);
@@ -540,7 +645,7 @@ const server = http.createServer((req, res) => {
         res.end(JSON.stringify(safe));
       } catch (e) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: e.message }));
+        res.end(JSON.stringify({ error: 'Invalid request' }));
       }
       return;
     }
@@ -562,18 +667,23 @@ const server = http.createServer((req, res) => {
         res.end(JSON.stringify({ ok: true }));
       } catch (e) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: e.message }));
+        res.end(JSON.stringify({ error: 'Invalid request' }));
       }
       return;
     }
 
     /* ── /api/admin/login ── */
     if (req.method === 'POST' && req.url === '/api/admin/login') {
+      const ip = req.socket.remoteAddress || 'unknown';
+      if (!checkRateLimit(ip)) {
+        res.writeHead(429, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Too many login attempts. Please wait 15 minutes.' })); return;
+      }
       try {
         const { password } = JSON.parse(body);
         if (hashPassword(password || '') !== serverDB.adminPasswordHash) {
           res.writeHead(401, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'Invalid password' }));
+          res.end(JSON.stringify({ error: 'Invalid credentials' }));
           return;
         }
         const token = crypto.randomBytes(32).toString('hex');
@@ -583,7 +693,7 @@ const server = http.createServer((req, res) => {
         res.end(JSON.stringify({ token, isDefaultPassword: !!serverDB.adminPasswordIsDefault }));
       } catch (e) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: e.message }));
+        res.end(JSON.stringify({ error: 'Invalid request' }));
       }
       return;
     }
@@ -601,9 +711,9 @@ const server = http.createServer((req, res) => {
           res.writeHead(400, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'Current password is incorrect' })); return;
         }
-        if (!newPassword || newPassword.length < 6) {
+        if (!newPassword || newPassword.length < 8) {
           res.writeHead(400, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'New password must be at least 6 characters' })); return;
+          res.end(JSON.stringify({ error: 'New password must be at least 8 characters' })); return;
         }
         serverDB.adminPasswordHash = hashPassword(newPassword);
         serverDB.adminPasswordIsDefault = false;
@@ -613,7 +723,7 @@ const server = http.createServer((req, res) => {
         res.end(JSON.stringify({ ok: true }));
       } catch (e) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: e.message }));
+        res.end(JSON.stringify({ error: 'Invalid request' }));
       }
       return;
     }
@@ -627,13 +737,19 @@ const server = http.createServer((req, res) => {
           res.end(JSON.stringify({ error: 'claudeApiKey is required' }));
           return;
         }
+        // Validate Jira URL if provided
+        if (jiraUrl && !isValidJiraUrl(jiraUrl)) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Invalid Jira URL. Must be a public HTTPS address.' }));
+          return;
+        }
         const sessionToken = createSession(memberId, claudeApiKey, jiraUrl, jiraEmail, jiraToken);
-        console.log('[Auth] Session created for member:', memberId);
+        console.log('[Auth] Session created');
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ sessionToken }));
       } catch (e) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: e.message }));
+        res.end(JSON.stringify({ error: 'Invalid request' }));
       }
       return;
     }
@@ -645,9 +761,9 @@ const server = http.createServer((req, res) => {
         const parsed  = JSON.parse(body);
         const claudeApiKey = session?.claudeApiKey || parsed.claudeApiKey;
         const { messages, system } = parsed;
-        console.log('[AI]   Request —', (messages.at(-1)?.content || '').slice(0, 80) + '…');
+        console.log('[AI]   Request received');
         const text = await callClaude(messages, system, claudeApiKey);
-        console.log('[AI]   Done    —', text.slice(0, 60) + '…');
+        console.log('[AI]   Done');
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ text }));
       } catch (e) {
@@ -665,9 +781,9 @@ const server = http.createServer((req, res) => {
         const parsed   = JSON.parse(body);
         const jiraUrl  = session?.jiraUrl  || parsed.jiraUrl;
         const auth     = session?.jiraAuth || parsed.auth;
-        const { path, method, body: jiraBody } = parsed;
-        console.log('[Jira] Request —', method, path);
-        const data = await proxyJira(jiraUrl, path, method, auth, jiraBody);
+        const { path: jiraPath, method: jiraMethod, body: jiraBody } = parsed;
+        console.log('[Jira] Request —', jiraMethod, jiraPath);
+        const data = await proxyJira(jiraUrl, jiraPath, jiraMethod, auth, jiraBody);
         console.log('[Jira] Done');
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(data));
@@ -704,11 +820,12 @@ const server = http.createServer((req, res) => {
       return;
     }
 
-    /* ── /api/perf ── */
+    /* ── /api/perf (requires session) ── */
     if (req.method === 'POST' && req.url === '/api/perf') {
+      if (!getSession(req)) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Authentication required' })); return; }
       try {
         const params    = JSON.parse(body);
-        const tmpScript = path.join(os.tmpdir(), 'qa_k6_' + Date.now() + '.js');
+        const tmpScript = path.join(os.tmpdir(), 'qa_k6_' + crypto.randomBytes(8).toString('hex') + '.js');
         fs.writeFileSync(tmpScript, generateK6Script(params));
         console.log('[Perf] Running k6 —', params.testName);
         const result = await runK6(tmpScript);
@@ -724,11 +841,16 @@ const server = http.createServer((req, res) => {
       return;
     }
 
-    /* ── /api/sync ── */
+    /* ── /api/sync (requires session) ── */
     if (req.method === 'POST' && req.url === '/api/sync') {
+      if (!getSession(req)) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Authentication required' })); return; }
       try {
         const payload = JSON.parse(body);
         const { type } = payload;
+        if (!['session','bug','perf','coverage'].includes(type)) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Invalid sync type' })); return;
+        }
         const item = { id: crypto.randomBytes(8).toString('hex'), ...payload, syncedAt: Date.now() };
         if      (type === 'session')  serverDB.sessions.unshift(item);
         else if (type === 'bug')      serverDB.bugs.unshift(item);
@@ -743,7 +865,7 @@ const server = http.createServer((req, res) => {
         res.end(JSON.stringify({ ok: true }));
       } catch (e) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: e.message }));
+        res.end(JSON.stringify({ error: 'Invalid request' }));
       }
       return;
     }

@@ -945,7 +945,7 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
     if(!perfForm.testName.trim()||!perfForm.apiUrl.trim())return;
     setPerfLoading(true);
     try{
-      const r=await fetch(API_BASE+"/api/perf",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...perfForm,projectName:proj?.name||""})});
+      const r=await fetch(API_BASE+"/api/perf",{method:"POST",headers:{"Content-Type":"application/json","X-Session-Token":sessionStorage.getItem(SESSION_TOKEN_KEY)||""},body:JSON.stringify({...perfForm,projectName:proj?.name||""})});
       const d=await r.json();
       if(d.error)throw new Error(d.error);
       setPerfResult({...d,testName:perfForm.testName,testType:perfForm.testType,vus:perfForm.vus,duration:perfForm.duration,p95Threshold:perfForm.p95Threshold});
@@ -981,7 +981,7 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
     if(codegenStatus!=="running"||!codegenSessionId)return;
     const iv=setInterval(async()=>{
       try{
-        const r=await fetch(API_BASE+"/api/codegen/status/"+codegenSessionId);
+        const r=await fetch(API_BASE+"/api/codegen/status/"+codegenSessionId,{headers:{"X-Session-Token":sessionStorage.getItem(SESSION_TOKEN_KEY)||""}});
         const d=await r.json();
         if(d.status==="done"){setCodegenScript(d.script||"");setCodegenStatus("done");clearInterval(iv);}
         else if(d.status==="empty"){setCodegenScript("");setCodegenStatus("empty");clearInterval(iv);}
@@ -995,14 +995,14 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
   const startCodegen=async()=>{
     setCodegenStatus("launching");
     try{
-      const r=await fetch(API_BASE+"/api/codegen/start",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url:appUrl})});
+      const r=await fetch(API_BASE+"/api/codegen/start",{method:"POST",headers:{"Content-Type":"application/json","X-Session-Token":sessionStorage.getItem(SESSION_TOKEN_KEY)||""},body:JSON.stringify({url:appUrl})});
       const d=await r.json();
       if(!r.ok){setCodegenStatus("error");return;}
       setCodegenSessionId(d.sessionId);setCodegenStatus("running");setPhase("codegenRecording");
     }catch{setCodegenStatus("error");}
   };
   const cancelCodegen=async()=>{
-    if(codegenSessionId)fetch(API_BASE+"/api/codegen/"+codegenSessionId,{method:"DELETE"}).catch(()=>{});
+    if(codegenSessionId)fetch(API_BASE+"/api/codegen/"+codegenSessionId,{method:"DELETE",headers:{"X-Session-Token":sessionStorage.getItem(SESSION_TOKEN_KEY)||""}}).catch(()=>{});
     setCodegenSessionId(null);setCodegenStatus("idle");setPhase("urlPrompt");
   };
 
@@ -1177,7 +1177,7 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
       addLine("▶ Starting Playwright runner…");
       addLine("→ Uploading "+Object.keys(projFiles).filter(f=>!f.endsWith(".md")).length+" test file(s) to server…");
       try{
-        const r=await fetch(API_BASE+"/api/playwright/run",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({files:projFiles})});
+        const r=await fetch(API_BASE+"/api/playwright/run",{method:"POST",headers:{"Content-Type":"application/json","X-Session-Token":sessionStorage.getItem(SESSION_TOKEN_KEY)||""},body:JSON.stringify({files:projFiles})});
         const data=await r.json();
         if(data.error==="not_installed"){
           addLine(""); addLine("✗ Playwright is not installed on the server.");
@@ -2175,7 +2175,7 @@ function LoginPage({onLogin}) {
   const saved=React.useMemo(()=>{try{return JSON.parse(localStorage.getItem(CREDS_KEY))||null;}catch{return null;}},[]);
   const [mode,setMode]=useState(saved?.mode||"admin");
   const [email,setEmail]=useState(saved?.email||"");
-  const [pass,setPass]=useState(saved?.pass||"");
+  const [pass,setPass]=useState("");
   const [err,setErr]=useState("");
   const [remember,setRemember]=useState(!!saved);
   const [busy,setBusy]=useState(false);
@@ -2188,7 +2188,7 @@ function LoginPage({onLogin}) {
         const d=await r.json();
         if(!r.ok){setErr(d.error||"Invalid password");setBusy(false);return;}
         sessionStorage.setItem(ADMIN_TOKEN_KEY,d.token);
-        if(remember){localStorage.setItem(CREDS_KEY,JSON.stringify({mode,email,pass}));}
+        if(remember){localStorage.setItem(CREDS_KEY,JSON.stringify({mode,email}));}
         else{localStorage.removeItem(CREDS_KEY);}
         onLogin({role:"admin",id:"admin",forceChangePwd:!!d.isDefaultPassword},remember);
       }catch{setErr("Cannot reach server. Make sure node server.js is running.");}
@@ -2199,7 +2199,7 @@ function LoginPage({onLogin}) {
       const r=await fetch(API_BASE+"/api/members/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({email,password:pass})});
       const d=await r.json();
       if(!r.ok){setErr(d.error||"Invalid credentials");setBusy(false);return;}
-      if(remember){localStorage.setItem(CREDS_KEY,JSON.stringify({mode,email,pass}));}
+      if(remember){localStorage.setItem(CREDS_KEY,JSON.stringify({mode,email}));}
       else{localStorage.removeItem(CREDS_KEY);}
       onLogin({role:"member",member:d.member,id:d.member.id},remember);
     }catch{setErr("Cannot reach server. Make sure node server.js is running.");}
