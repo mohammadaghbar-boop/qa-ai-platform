@@ -3,11 +3,12 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline'; connect-src 'self' https://unpkg.com https://cdnjs.cloudflare.com; img-src 'self' data: blob:; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self';"/>
 <title>QA AI Platform</title>
-<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+<script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.26.5/babel.min.js" crossorigin="anonymous"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js" crossorigin="anonymous"></script>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f5f0; color: #1a1a18; min-height: 100vh; }
@@ -48,14 +49,25 @@
 const { useState, useRef, useEffect } = React;
 
 /* ─── DB ─────────────────────────────────────────────────────────────────── */
-const DB = { members:[], projects:[], assignments:[], sessions:[], bugs:[], notifs:[], savedStories:[], categories:[], memberSettings:[] };
+const DB = { members:[], projects:[], assignments:[], sessions:[], bugs:[], notifs:[], savedStories:[], categories:[] };
 const STORAGE_KEY = "qa_platform_db";
 function loadDB() {
-  try { const s=localStorage.getItem(STORAGE_KEY); if(s){ const p=JSON.parse(s); Object.keys(p).forEach(k=>{ if(Array.isArray(p[k])) DB[k]=p[k]; }); } } catch(e){}
+  try { const s=localStorage.getItem(STORAGE_KEY); if(s){ const p=JSON.parse(s); Object.keys(p).forEach(k=>{ if(Array.isArray(p[k])&&k in DB) DB[k]=p[k]; }); } } catch(e){}
+  // Strip any cached passwords or legacy credentials — now stored server-side
+  DB.members=DB.members.map(({password,...m})=>m);
 }
 function saveDB() {
   try { localStorage.setItem(STORAGE_KEY,JSON.stringify(DB)); } catch(e){}
 }
+// One-time migration: purge any legacy credential data from localStorage
+(function purgeLegacyCredentials(){
+  try{
+    const raw=localStorage.getItem(STORAGE_KEY);
+    if(!raw)return;
+    const p=JSON.parse(raw);
+    if(p.memberSettings){delete p.memberSettings;localStorage.setItem(STORAGE_KEY,JSON.stringify(p));}
+  }catch(e){}
+})();
 loadDB();
 const uid = () => Math.random().toString(36).slice(2,8);
 const tod = () => new Date().toLocaleDateString();
@@ -70,48 +82,48 @@ const pushNotif = (to,msg) => { DB.notifs.push({id:uid(),to,msg,read:false,ts:ts
 const API_BASE = window.location.protocol === "file:" ? "http://localhost:3456" : "";
 let _currentMemberId = ""; // set by App on login / page-load
 
-function _getMemberSettings() {
-  return DB.memberSettings.find(s => s.memberId === _currentMemberId) || null;
-}
-
 /* ─── Session management ─────────────────────────────────────────────────── */
 const SESSION_TOKEN_KEY = "qa_api_session_token";
+const ADMIN_TOKEN_KEY   = "qa_admin_token";
+const MEMBER_TOKEN_KEY  = "qa_member_token";
 
-async function establishSession(memberId) {
-  const settings = DB.memberSettings.find(s => s.memberId === memberId);
-  if (!settings?.claudeApiKey) return null;
+async function _refreshSession() {
+  const mt = sessionStorage.getItem(MEMBER_TOKEN_KEY);
+  if (!mt) return null;
   try {
-    const r = await fetch(API_BASE + "/api/auth/session", {
+    const r = await fetch(API_BASE + "/api/members/session/refresh", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        memberId:     settings.memberId,
-        claudeApiKey: settings.claudeApiKey,
-        jiraUrl:      settings.jiraUrl,
-        jiraEmail:    settings.jiraEmail,
-        jiraToken:    settings.jiraToken
-      })
+      headers: { "X-Member-Token": mt }
     });
+    if (!r.ok) return null;
     const d = await r.json();
-    if (d.sessionToken) {
-      sessionStorage.setItem(SESSION_TOKEN_KEY, d.sessionToken);
-      return d.sessionToken;
-    }
-  } catch (e) {
-    console.warn("Could not establish server session:", e.message);
-  }
+    if (d.sessionToken) { sessionStorage.setItem(SESSION_TOKEN_KEY, d.sessionToken); return d.sessionToken; }
+  } catch (e) { console.warn("Session refresh failed:", e.message); }
   return null;
+}
+
+/* ─── Session helpers ────────────────────────────────────────────────────── */
+async function _ensureSession() {
+  let token = sessionStorage.getItem(SESSION_TOKEN_KEY);
+  if (!token) token = await _refreshSession();
+  return token || null;
 }
 
 /* ─── Claude API ─────────────────────────────────────────────────────────── */
 async function callAI(messages, sys="", max=4000, _legacy="") {
-  const sessionToken = sessionStorage.getItem(SESSION_TOKEN_KEY);
+  const doCall = (token) => fetch(API_BASE + "/api/ai", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Session-Token": token || "" },
+    body: JSON.stringify({ messages, system: sys })
+  });
   try {
-    const r = await fetch(API_BASE + "/api/ai", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Session-Token": sessionToken || "" },
-      body: JSON.stringify({ messages, system: sys })
-    });
+    let token = await _ensureSession();
+    let r = await doCall(token);
+    // Session stale (server restarted) — refresh once and retry
+    if (r.status === 500 || r.status === 401) {
+      const fresh = await _refreshSession();
+      if (fresh) r = await doCall(fresh);
+    }
     if (r.ok) {
       const d = await r.json();
       if (d.error) throw new Error(d.error);
@@ -128,13 +140,19 @@ async function callAI(messages, sys="", max=4000, _legacy="") {
 
 /* ─── Jira API ───────────────────────────────────────────────────────────── */
 async function callJira(proj, method, path, body=null) {
-  const sessionToken = sessionStorage.getItem(SESSION_TOKEN_KEY);
-  if (!sessionToken) throw new Error("No active session. Please log in again.");
-  const r = await fetch(API_BASE + "/api/jira", {
+  let token = await _ensureSession();
+  if (!token) throw new Error("No active session. Please log out and log back in.");
+  const doCall = (t) => fetch(API_BASE + "/api/jira", {
     method: "POST",
-    headers: { "Content-Type": "application/json", "X-Session-Token": sessionToken },
+    headers: { "Content-Type": "application/json", "X-Session-Token": t },
     body: JSON.stringify({ path, method, body })
   });
+  let r = await doCall(token);
+  // Session stale (server restarted) — refresh once and retry
+  if (r.status === 500 || r.status === 401) {
+    const fresh = await _refreshSession();
+    if (fresh) r = await doCall(fresh);
+  }
   if (!r.ok) {
     const d = await r.json().catch(()=>({}));
     throw new Error(d.error || "Server error " + r.status);
@@ -142,6 +160,27 @@ async function callJira(proj, method, path, body=null) {
   const d = await r.json();
   if (d.error) throw new Error(d.error);
   return d;
+}
+
+/* ─── Admin sync (best-effort, never blocks UI) ─────────────────────────── */
+async function syncToServer(type, payload) {
+  try {
+    const token = sessionStorage.getItem(SESSION_TOKEN_KEY);
+    await fetch(API_BASE + "/api/sync", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Session-Token": token || "" },
+      body: JSON.stringify({ type, ...payload })
+    });
+  } catch {}
+}
+
+/* ─── Member helpers ─────────────────────────────────────────────────────── */
+async function loadMembersFromServer() {
+  try {
+    const adminToken=sessionStorage.getItem(ADMIN_TOKEN_KEY)||"";
+    const r=await fetch(API_BASE+"/api/members",{headers:{"X-Admin-Token":adminToken}});
+    if(r.ok){ const list=await r.json(); DB.members=list; saveDB(); }
+  } catch {}
 }
 
 /* ─── File helpers ───────────────────────────────────────────────────────── */
@@ -283,6 +322,7 @@ function NotifBell({userId}) {
       🔔{unread.length>0&&<span style={{position:"absolute",top:-6,right:-6,background:"var(--color-text-danger)",color:"#fff",borderRadius:20,padding:"0 5px",fontSize:10,minWidth:16,textAlign:"center"}}>{unread.length}</span>}
     </button>
     {open&&<div style={{position:"fixed",left:pos.left,bottom:pos.bottom,width:300,background:"var(--color-background-secondary)",border:"1px solid var(--color-border-secondary)",borderRadius:12,zIndex:9999,boxShadow:"0 8px 24px rgba(0,0,0,.14)"}}>
+
       <div style={{padding:"12px 16px",borderBottom:"1px solid var(--color-border-tertiary)",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
         <div style={{fontWeight:500,fontSize:14}}>Notifications</div>
         {unread.length>0&&<button onClick={()=>{unread.forEach(n=>n.read=true);tick(x=>x+1);}} style={{padding:"3px 8px",borderRadius:6,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:12,color:"var(--color-text-secondary)"}}>Mark read</button>}
@@ -505,8 +545,32 @@ function PerfAIChat({proj,perfForm,perfResult}) {
 function MembersPage() {
   const [list,setList]=useState([...DB.members]);
   const [f,setF]=useState({name:"",email:"",password:"",role:"QA Engineer"});
-  const add=()=>{ if(!f.name||!f.email||!f.password) return; const m={id:uid(),...f}; DB.members.push(m); pushNotif(m.id,"Welcome to QA AI Platform!"); saveDB(); setList([...DB.members]); setF({name:"",email:"",password:"",role:"QA Engineer"}); };
-  const del=id=>{ DB.members=DB.members.filter(m=>m.id!==id); DB.assignments=DB.assignments.filter(a=>a.memberId!==id); saveDB(); setList([...DB.members]); };
+  const [err,setErr]=useState(""); const [busy,setBusy]=useState(false);
+  useEffect(()=>{ loadMembersFromServer().then(()=>setList([...DB.members])); },[]);
+  const adminToken=()=>sessionStorage.getItem(ADMIN_TOKEN_KEY)||"";
+  const add=async()=>{
+    if(!f.name||!f.email||!f.password){setErr("All fields are required.");return;}
+    setBusy(true); setErr("");
+    try{
+      const r=await fetch(API_BASE+"/api/members",{method:"POST",headers:{"Content-Type":"application/json","X-Admin-Token":adminToken()},body:JSON.stringify(f)});
+      const d=await r.json();
+      if(!r.ok){setErr(d.error||"Failed to add member.");setBusy(false);return;}
+      DB.members.push(d); saveDB();
+      pushNotif(d.id,"Welcome to QA AI Platform!");
+      setList([...DB.members]); setF({name:"",email:"",password:"",role:"QA Engineer"});
+    }catch{setErr("Cannot reach server.");}
+    setBusy(false);
+  };
+  const del=async id=>{
+    setBusy(true);
+    try{
+      await fetch(API_BASE+"/api/members/"+id,{method:"DELETE",headers:{"X-Admin-Token":adminToken()}});
+      DB.members=DB.members.filter(m=>m.id!==id);
+      DB.assignments=DB.assignments.filter(a=>a.memberId!==id);
+      saveDB(); setList([...DB.members]);
+    }catch{setErr("Cannot reach server.");}
+    setBusy(false);
+  };
   const th={textAlign:"left",padding:"8px 12px",borderBottom:"1px solid var(--color-border-tertiary)",fontSize:12,fontWeight:500,color:"var(--color-text-secondary)"};
   const td={padding:"10px 12px",borderBottom:"1px solid var(--color-border-tertiary)"};
   return <div>
@@ -516,15 +580,16 @@ function MembersPage() {
         <div><Lbl>Full name</Lbl><input style={inp} value={f.name} onChange={e=>setF(p=>({...p,name:e.target.value}))} placeholder="Jane Smith"/></div>
         <div><Lbl>Role</Lbl><select style={sel} value={f.role} onChange={e=>setF(p=>({...p,role:e.target.value}))}>{["QA Engineer","Senior QA Engineer","QA Automation Engineer","Lead QA"].map(r=><option key={r}>{r}</option>)}</select></div>
         <div><Lbl>Email</Lbl><input style={inp} value={f.email} onChange={e=>setF(p=>({...p,email:e.target.value}))} placeholder="jane@co.com"/></div>
-        <div><Lbl>Password</Lbl><input type="password" style={inp} value={f.password} onChange={e=>setF(p=>({...p,password:e.target.value}))} placeholder="••••••"/></div>
+        <div><Lbl>Password</Lbl><input type="password" style={inp} value={f.password} onChange={e=>setF(p=>({...p,password:e.target.value}))} placeholder="Min. 6 characters"/></div>
       </div>
-      <Btn v="primary" onClick={add}>Add member</Btn>
+      {err&&<div style={{color:"var(--color-text-danger)",fontSize:13,marginBottom:10}}>{err}</div>}
+      <Btn v="primary" onClick={add} disabled={busy}>{busy?"Adding…":"Add member"}</Btn>
     </div>
     <div style={card}>{list.length===0?<div style={{color:"var(--color-text-tertiary)",fontSize:14}}>No members yet.</div>:
       <table style={{width:"100%",borderCollapse:"collapse",fontSize:14}}>
         <thead><tr><th style={th}>Name</th><th style={th}>Role</th><th style={th}>Email</th><th style={th}>Project</th><th style={th}></th></tr></thead>
         <tbody>{list.map(m=>{ const ps=DB.assignments.filter(x=>x.memberId===m.id).map(a=>DB.projects.find(x=>x.id===a.projectId)).filter(Boolean);
-          return <tr key={m.id}><td style={td}><b>{m.name}</b></td><td style={td}><span style={{fontSize:13,color:"var(--color-text-secondary)"}}>{m.role}</span></td><td style={td}>{m.email}</td><td style={td}>{ps.length>0?ps.map(p=><Tag key={p.id} c="blue">{p.name}</Tag>):<span style={{color:"var(--color-text-tertiary)",fontSize:13}}>—</span>}</td><td style={td}><Btn v="danger" onClick={()=>del(m.id)}>Remove</Btn></td></tr>;
+          return <tr key={m.id}><td style={td}><b>{m.name}</b></td><td style={td}><span style={{fontSize:13,color:"var(--color-text-secondary)"}}>{m.role}</span></td><td style={td}>{m.email}</td><td style={td}>{ps.length>0?ps.map(p=><Tag key={p.id} c="blue">{p.name}</Tag>):<span style={{color:"var(--color-text-tertiary)",fontSize:13}}>—</span>}</td><td style={td}><Btn v="danger" onClick={()=>del(m.id)} disabled={busy}>Remove</Btn></td></tr>;
         })}</tbody>
       </table>}
     </div>
@@ -596,31 +661,137 @@ function AssignmentsPage() {
 }
 
 function DashboardPage() {
-  const s=DB.sessions; const b=DB.bugs;
-  const tp=s.reduce((a,x)=>a+(x.passed||0),0), tf=s.reduce((a,x)=>a+(x.failed||0),0);
+  const [sd,setSd]=useState(null);
+  const [tab,setTab]=useState("sessions");
+  const [loading,setLoading]=useState(true);
+  const [bugProjFilter,setBugProjFilter]=useState("All");
+  const [bugMemberFilter,setBugMemberFilter]=useState("All");
+  const fetchData=()=>{
+    setLoading(true);
+    const adminToken=sessionStorage.getItem(ADMIN_TOKEN_KEY)||"";
+    fetch(API_BASE+"/api/admin/data",{headers:{"X-Admin-Token":adminToken}})
+      .then(r=>r.json()).then(d=>{setSd(d);setLoading(false);})
+      .catch(()=>setLoading(false));
+  };
+  useEffect(()=>{fetchData();},[]);
+  const sessions=sd?.sessions||[]; const bugs=sd?.bugs||[]; const perfs=sd?.perfResults||[]; const cov=sd?.coverage||[];
+  const bugProjects=["All",...new Set(bugs.map(x=>x.projectName).filter(Boolean))];
+  const bugMembers=["All",...new Set(bugs.map(x=>x.memberName).filter(Boolean))];
+  const filteredBugs=bugs.filter(x=>(bugProjFilter==="All"||(x.projectName||"")=== bugProjFilter)&&(bugMemberFilter==="All"||x.memberName===bugMemberFilter));
+  const tp=sessions.reduce((a,x)=>a+(x.passed||0),0), tf=sessions.reduce((a,x)=>a+(x.failed||0),0);
   const pr=tp+tf>0?Math.round(tp/(tp+tf)*100):0;
-  const cards=[{l:"Members",v:DB.members.length,c:"info"},{l:"Projects",v:DB.projects.length,c:"success"},{l:"Sessions",v:s.length,c:"warning"},{l:"Bugs",v:b.length,c:"danger"},{l:"Passed",v:tp,c:"success"},{l:"Pass rate",v:pr+"%",c:pr>=80?"success":pr>=50?"warning":"danger"}];
+  const perfPassed=perfs.filter(x=>x.passed).length;
+  const cards=[
+    {l:"Members",v:DB.members.length,c:"info"},
+    {l:"Projects",v:DB.projects.length,c:"success"},
+    {l:"Test Sessions",v:sessions.length,c:"warning"},
+    {l:"Bugs Filed",v:bugs.length,c:"danger"},
+    {l:"Pass Rate",v:pr+"%",c:pr>=80?"success":pr>=50?"warning":"danger"},
+    {l:"Perf Tests",v:perfs.length,c:"info"},
+  ];
   const th={textAlign:"left",padding:"8px 10px",borderBottom:"1px solid var(--color-border-tertiary)",fontSize:12,fontWeight:500,color:"var(--color-text-secondary)"};
-  const td={padding:"8px 10px",borderBottom:"1px solid var(--color-border-tertiary)"};
+  const td={padding:"8px 10px",borderBottom:"1px solid var(--color-border-tertiary)",fontSize:13};
+  const tabBtn=(t,label)=><button onClick={()=>setTab(t)} style={{padding:"6px 16px",borderRadius:8,border:"1px solid "+(tab===t?"var(--color-text-info)":"var(--color-border-secondary)"),background:tab===t?"var(--color-background-info)":"transparent",cursor:"pointer",fontSize:13,fontWeight:tab===t?600:400,color:tab===t?"var(--color-text-info)":"var(--color-text-secondary)"}}>{label}</button>;
   return <div>
-    <H1>Dashboard</H1>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+      <H1 style={{marginBottom:0}}>Dashboard</H1>
+      {loading&&<span style={{fontSize:12,color:"var(--color-text-tertiary)"}}>Loading server data…</span>}
+      {!loading&&!sd&&<span style={{fontSize:12,color:"var(--color-text-warning)"}}>⚠ Server data unavailable — start node server.js</span>}
+      {!loading&&sd&&<button onClick={fetchData} style={{fontSize:12,padding:"4px 12px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",color:"var(--color-text-secondary)"}}>↻ Refresh</button>}
+    </div>
     <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12,marginBottom:20}}>
       {cards.map(x=><div key={x.l} style={{...card,marginBottom:0,padding:18}}><div style={{fontSize:28,fontWeight:500,color:`var(--color-text-${x.c})`}}>{x.v}</div><div style={{fontSize:13,color:"var(--color-text-secondary)",marginTop:2}}>{x.l}</div></div>)}
     </div>
-    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
-      <div style={card}><H2>Recent sessions</H2>
-        {s.length===0?<div style={{color:"var(--color-text-tertiary)",fontSize:14}}>None yet.</div>:
-        <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}><thead><tr><th style={th}>Member</th><th style={th}>Story</th><th style={th}>Result</th></tr></thead>
-          <tbody>{[...s].reverse().slice(0,8).map((x,i)=><tr key={i}><td style={td}>{x.name}</td><td style={td}><Tag c="blue">{x.sid}</Tag></td><td style={td}><Tag c="green">{x.passed}P</Tag> <Tag c="red">{x.failed}F</Tag></td></tr>)}</tbody>
-        </table>}
+    <div style={{display:"flex",gap:8,marginBottom:16}}>{tabBtn("sessions","📋 Sessions")}{tabBtn("bugs","🐛 Bugs")}{tabBtn("perf","⚡ Performance")}{tabBtn("coverage","📊 Coverage")}</div>
+
+    {tab==="sessions"&&<div style={card}>
+      <H2>Test Sessions — all members</H2>
+      {sessions.length===0?<div style={{color:"var(--color-text-tertiary)",fontSize:14}}>No sessions synced yet. Sessions appear here after members complete test execution.</div>:
+      <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+        <thead><tr><th style={th}>Member</th><th style={th}>Project</th><th style={th}>Story</th><th style={th}>Summary</th><th style={th}>Platform</th><th style={th}>Passed</th><th style={th}>Failed</th><th style={th}>Date</th></tr></thead>
+        <tbody>{sessions.slice(0,50).map((x,i)=><tr key={i}>
+          <td style={td}><b>{x.memberName}</b></td>
+          <td style={td}><Tag c="blue">{x.projectName||"—"}</Tag></td>
+          <td style={td}><Tag c="blue">{x.sid}</Tag></td>
+          <td style={td}><span style={{fontSize:12,color:"var(--color-text-secondary)"}}>{(x.summary||"").slice(0,40)}{x.summary?.length>40?"…":""}</span></td>
+          <td style={td}><span style={{fontSize:12}}>{x.platform||"—"}</span></td>
+          <td style={td}><Tag c="green">{x.passed}</Tag></td>
+          <td style={td}><Tag c={x.failed>0?"red":"green"}>{x.failed}</Tag></td>
+          <td style={{...td,fontSize:11,color:"var(--color-text-tertiary)"}}>{x.syncedAt?new Date(x.syncedAt).toLocaleDateString():""}</td>
+        </tr>)}</tbody>
+      </table>}
+    </div>}
+
+    {tab==="bugs"&&<div style={card}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,flexWrap:"wrap",gap:8}}>
+        <H2 style={{marginBottom:0}}>Bugs Filed — all members</H2>
+        <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+          <label style={{fontSize:12,color:"var(--color-text-secondary)"}}>Project:</label>
+          <select value={bugProjFilter} onChange={e=>{setBugProjFilter(e.target.value);}} style={{padding:"4px 10px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"var(--color-background-primary)",color:"var(--color-text-primary)",fontSize:13,cursor:"pointer"}}>
+            {bugProjects.map(p=><option key={p} value={p}>{p}</option>)}
+          </select>
+          <label style={{fontSize:12,color:"var(--color-text-secondary)"}}>Member:</label>
+          <select value={bugMemberFilter} onChange={e=>{setBugMemberFilter(e.target.value);}} style={{padding:"4px 10px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"var(--color-background-primary)",color:"var(--color-text-primary)",fontSize:13,cursor:"pointer"}}>
+            {bugMembers.map(m=><option key={m} value={m}>{m}</option>)}
+          </select>
+          {(bugProjFilter!=="All"||bugMemberFilter!=="All")&&<button onClick={()=>{setBugProjFilter("All");setBugMemberFilter("All");}} style={{padding:"4px 10px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:12,color:"var(--color-text-secondary)"}}>✕ Clear</button>}
+        </div>
       </div>
-      <div style={card}><H2>Recent bugs</H2>
-        {b.length===0?<div style={{color:"var(--color-text-tertiary)",fontSize:14}}>None yet.</div>:
-        <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}><thead><tr><th style={th}>Bug</th><th style={th}>Story</th><th style={th}>Sev</th><th style={th}>Status</th></tr></thead>
-          <tbody>{[...b].reverse().slice(0,8).map((x,i)=><tr key={i}><td style={td}><Tag c="red">{x.bid}</Tag></td><td style={td}><Tag c="blue">{x.sid}</Tag></td><td style={td}><Tag c={x.sev==="High"||x.sev==="Critical"?"red":"amber"}>{x.sev}</Tag></td><td style={td}><span style={{fontSize:12}}>{x.status}</span></td></tr>)}</tbody>
-        </table>}
-      </div>
-    </div>
+      {bugs.length===0?<div style={{color:"var(--color-text-tertiary)",fontSize:14}}>No bugs synced yet. Bugs appear here after members file them.</div>:
+      filteredBugs.length===0?<div style={{color:"var(--color-text-tertiary)",fontSize:14}}>No bugs match the selected filters.</div>:
+      <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+        <thead><tr><th style={th}>Bug ID</th><th style={th}>Filed by</th><th style={th}>Project</th><th style={th}>Story</th><th style={th}>Summary</th><th style={th}>Severity</th><th style={th}>Jira</th><th style={th}>Date</th></tr></thead>
+        <tbody>{filteredBugs.slice(0,50).map((x,i)=><tr key={i}>
+          <td style={td}><Tag c="red">{x.bid}</Tag></td>
+          <td style={td}><b>{x.memberName}</b></td>
+          <td style={td}><span style={{fontSize:12}}>{x.projectName||"—"}</span></td>
+          <td style={td}><Tag c="blue">{x.sid}</Tag></td>
+          <td style={td}><span style={{fontSize:12,color:"var(--color-text-secondary)"}}>{(x.summary||"").slice(0,40)}{x.summary?.length>40?"…":""}</span></td>
+          <td style={td}><Tag c={x.severity==="Critical"||x.severity==="High"?"red":"amber"}>{x.severity}</Tag></td>
+          <td style={td}><span style={{fontSize:12,fontFamily:"monospace"}}>{x.jiraKey||"—"}</span></td>
+          <td style={{...td,fontSize:11,color:"var(--color-text-tertiary)"}}>{x.syncedAt?new Date(x.syncedAt).toLocaleDateString():""}</td>
+        </tr>)}</tbody>
+      </table>}
+    </div>}
+
+    {tab==="perf"&&<div style={card}>
+      <H2>Performance Tests — all members</H2>
+      {perfs.length===0?<div style={{color:"var(--color-text-tertiary)",fontSize:14}}>No performance tests synced yet.</div>:
+      <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+        <thead><tr><th style={th}>Test Name</th><th style={th}>Member</th><th style={th}>Project</th><th style={th}>Type</th><th style={th}>VUs</th><th style={th}>p95</th><th style={th}>Threshold</th><th style={th}>Result</th><th style={th}>Date</th></tr></thead>
+        <tbody>{perfs.slice(0,50).map((x,i)=><tr key={i}>
+          <td style={td}><b>{x.testName}</b></td>
+          <td style={td}>{x.memberName}</td>
+          <td style={td}><span style={{fontSize:12}}>{x.projectName||"—"}</span></td>
+          <td style={td}><Tag c={x.testType==="stress"?"red":"blue"}>{x.testType}</Tag></td>
+          <td style={td}>{x.vus}</td>
+          <td style={td}><span style={{fontFamily:"monospace",fontSize:12}}>{x.metrics?.p95||0}ms</span></td>
+          <td style={td}><span style={{fontFamily:"monospace",fontSize:12}}>{x.p95Threshold}ms</span></td>
+          <td style={td}><Tag c={x.passed?"green":"red"}>{x.passed?"✓ Pass":"✗ Fail"}</Tag></td>
+          <td style={{...td,fontSize:11,color:"var(--color-text-tertiary)"}}>{x.syncedAt?new Date(x.syncedAt).toLocaleDateString():""}</td>
+        </tr>)}</tbody>
+      </table>}
+    </div>}
+
+    {tab==="coverage"&&<div style={card}>
+      <H2>Coverage Reports — all members</H2>
+      {cov.length===0?<div style={{color:"var(--color-text-tertiary)",fontSize:14}}>No coverage reports synced yet.</div>:
+      <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+        <thead><tr><th style={th}>Member</th><th style={th}>Project</th><th style={th}>Story</th><th style={th}>Summary</th><th style={th}>Platform</th><th style={th}>Approved Cases</th><th style={th}>Passed</th><th style={th}>Failed</th><th style={th}>Bugs</th><th style={th}>Date</th></tr></thead>
+        <tbody>{cov.slice(0,50).map((x,i)=><tr key={i}>
+          <td style={td}><b>{x.memberName}</b></td>
+          <td style={td}><span style={{fontSize:12}}>{x.projectName||"—"}</span></td>
+          <td style={td}><Tag c="blue">{x.sid}</Tag></td>
+          <td style={td}><span style={{fontSize:12,color:"var(--color-text-secondary)"}}>{(x.summary||"").slice(0,35)}{x.summary?.length>35?"…":""}</span></td>
+          <td style={td}><span style={{fontSize:12}}>{x.platform||"—"}</span></td>
+          <td style={td}><b>{x.approvedCases}</b></td>
+          <td style={td}><Tag c="green">{x.passed}</Tag></td>
+          <td style={td}><Tag c={x.failed>0?"red":"green"}>{x.failed}</Tag></td>
+          <td style={td}><Tag c={x.bugs>0?"red":"green"}>{x.bugs}</Tag></td>
+          <td style={{...td,fontSize:11,color:"var(--color-text-tertiary)"}}>{x.syncedAt?new Date(x.syncedAt).toLocaleDateString():""}</td>
+        </tr>)}</tbody>
+      </table>}
+    </div>}
   </div>;
 }
 
@@ -731,10 +902,11 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
   const [execLines,setExecLines]=useState([]); const [result,setResult]=useState(null);
   const [loading,setLoading]=useState(false); const [lmsg,setLmsg]=useState(""); const [fetchError,setFetchError]=useState("");
   const [jKey,setJKey]=useState(null); const [bugDone,setBugDone]=useState(null);
-  const [showBugForm,setShowBugForm]=useState(false); const [bf,setBf]=useState({summary:"",sev:"High",steps:[""],expected:"",actual:"",screenshot:null});
+  const [showBugForm,setShowBugForm]=useState(false); const [bf,setBf]=useState({summary:"",sev:"High",steps:[""],expected:"",actual:"",attachments:[]});
   const [fixed,setFixed]=useState(false); const [hist,setHist]=useState([]); const [chat,setChat]=useState(false); const [hasSaved,setHasSaved]=useState(false);
-  const [showAddCase,setShowAddCase]=useState(false); const [newCase,setNewCase]=useState({title:"",type:"happy",platform:"web",preconditions:"",steps:[""],expected:"",automatable:true});
+  const [showAddCase,setShowAddCase]=useState(false); const [newCase,setNewCase]=useState({title:"",type:"happy",platform:"web",preconditions:"",steps:[""],expected:"",automatable:true}); const [newCaseErr,setNewCaseErr]=useState("");
   const [selectedForScripts,setSelectedForScripts]=useState([]); const [coverageText,setCoverageText]=useState(""); const [sessionBugs,setSessionBugs]=useState([]); const [appUrl,setAppUrl]=useState("");
+  const [codegenSessionId,setCodegenSessionId]=useState(null); const [codegenScript,setCodegenScript]=useState(""); const [codegenStatus,setCodegenStatus]=useState("idle");
   const [scriptCache,setScriptCache]=useState({});
   const [editingBugId,setEditingBugId]=useState(null); const [editBugForm,setEditBugForm]=useState({});
   const [toast,setToast]=useState(null);
@@ -764,11 +936,12 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
     if(!perfForm.testName.trim()||!perfForm.apiUrl.trim())return;
     setPerfLoading(true);
     try{
-      const r=await fetch(API_BASE+"/api/perf",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...perfForm,projectName:proj?.name||""})});
+      const r=await fetch(API_BASE+"/api/perf",{method:"POST",headers:{"Content-Type":"application/json","X-Session-Token":sessionStorage.getItem(SESSION_TOKEN_KEY)||""},body:JSON.stringify({...perfForm,projectName:proj?.name||""})});
       const d=await r.json();
       if(d.error)throw new Error(d.error);
       setPerfResult({...d,testName:perfForm.testName,testType:perfForm.testType,vus:perfForm.vus,duration:perfForm.duration,p95Threshold:perfForm.p95Threshold});
       setPhase("perfResult");
+      syncToServer("perf",{memberId:member.id,memberName:member.name,projectId:proj?.id||"",projectName:proj?.name||"",testName:perfForm.testName,testType:perfForm.testType,passed:d.passed,metrics:d.metrics,vus:perfForm.vus,duration:perfForm.duration,p95Threshold:perfForm.p95Threshold});
     }catch(e){alert("Performance test error: "+e.message);}
     setPerfLoading(false);
   };
@@ -794,9 +967,38 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
     try{localStorage.setItem(WS_SNAP,JSON.stringify({phase,testKind,sid,sdata,platform,ctypes,gapText,cases,scripts,tab,result,execLines,coverageText,sessionBugs,selectedForScripts,appUrl,perfForm,perfResult}));}catch{}
   },[phase,sid,sdata,platform,ctypes,gapText,cases,scripts,tab,result,execLines,coverageText,sessionBugs,selectedForScripts,appUrl]);
 
+  // Poll codegen session status while recording
+  useEffect(()=>{
+    if(codegenStatus!=="running"||!codegenSessionId)return;
+    const iv=setInterval(async()=>{
+      try{
+        const r=await fetch(API_BASE+"/api/codegen/status/"+codegenSessionId,{headers:{"X-Session-Token":sessionStorage.getItem(SESSION_TOKEN_KEY)||""}});
+        const d=await r.json();
+        if(d.status==="done"){setCodegenScript(d.script||"");setCodegenStatus("done");clearInterval(iv);}
+        else if(d.status==="empty"){setCodegenScript("");setCodegenStatus("empty");clearInterval(iv);}
+        else if(d.status==="not_installed"){setCodegenStatus("not_installed");clearInterval(iv);}
+        else if(d.status==="error"||d.status==="not_found"){setCodegenStatus("error");clearInterval(iv);}
+      }catch{setCodegenStatus("error");clearInterval(iv);}
+    },2000);
+    return()=>clearInterval(iv);
+  },[codegenStatus,codegenSessionId]);
+
+  const startCodegen=async()=>{
+    setCodegenStatus("launching");
+    try{
+      const r=await fetch(API_BASE+"/api/codegen/start",{method:"POST",headers:{"Content-Type":"application/json","X-Session-Token":sessionStorage.getItem(SESSION_TOKEN_KEY)||""},body:JSON.stringify({url:appUrl})});
+      const d=await r.json();
+      if(!r.ok){setCodegenStatus("error");return;}
+      setCodegenSessionId(d.sessionId);setCodegenStatus("running");setPhase("codegenRecording");
+    }catch{setCodegenStatus("error");}
+  };
+  const cancelCodegen=async()=>{
+    if(codegenSessionId)fetch(API_BASE+"/api/codegen/"+codegenSessionId,{method:"DELETE",headers:{"X-Session-Token":sessionStorage.getItem(SESSION_TOKEN_KEY)||""}}).catch(()=>{});
+    setCodegenSessionId(null);setCodegenStatus("idle");setPhase("urlPrompt");
+  };
+
   const SYS=`You are an expert QA engineer. All story data is already provided in the user message — do NOT use any external tools, do NOT access Jira, Atlassian, or any other service. Work only with the text provided. Project:"${proj?.name}" Platform:${proj?.platform||"web"}.`;
-  const mSettings=DB.memberSettings.find(s=>s.memberId===member.id);
-  const jiraConfigured=!!(mSettings?.jiraUrl&&mSettings?.jiraToken&&mSettings?.jiraEmail);
+  const jiraConfigured=!!sessionStorage.getItem(SESSION_TOKEN_KEY);
   const approved=cases.filter(c=>c.status==="approved");
   const autoable=approved.filter(c=>c.automatable!==false);
   const manOnly=approved.filter(c=>c.automatable===false);
@@ -823,9 +1025,10 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
       setPhase("mode"); setLoading(false);
     } catch(e) {
       if(jiraConfigured){
-        setFetchError(e.message.includes("not configured")||e.message.includes("server")||e.message.includes("fetch")
-          ? e.message
-          : "Story \""+sid+"\" was not found in Jira ("+proj.jiraProjKey+"). Please check the story ID and try again.");
+        const isNotFound=/404|not found/i.test(e.message);
+        setFetchError(isNotFound
+          ? "Story \""+sid+"\" was not found in Jira ("+proj.jiraProjKey+"). Please check the story ID and try again."
+          : e.message);
         setLoading(false); return;
       }
       setSdata({key:sid,summary:"Story "+sid,description:"",labels:[],type:"Story",status:"In Progress",assignee:"—",priority:"Medium",sim:true});
@@ -856,8 +1059,13 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
     if(newTypes.length===0){setCases(keptCases);setPhase("ready");setLoading(false);return;}
     setLmsg("Generating "+newTypes.map(t=>t+" flow").join(", ")+" in parallel…");
     const ctx=sdata&&!sdata.sim?`Story: "${sdata.summary}"\nAcceptance Criteria:\n${sdata.description?.slice(0,2500)||"No description provided."}`:"Simulate a realistic feature story with clear acceptance criteria.";
+    const typeGuide={
+      happy:"Focus on the MAIN SUCCESS paths — valid inputs, correct credentials, expected user journeys, normal operations where everything works.",
+      edge:"Focus ONLY on BOUNDARY and LIMIT conditions — min/max field lengths, zero/empty values, very long strings, special characters, date boundaries, maximum file sizes. Do NOT duplicate negative error scenarios.",
+      negative:"Focus ONLY on INVALID inputs and ERROR conditions — wrong passwords, unauthorized access, missing required fields, incorrect data formats, network errors, permission denied. Do NOT duplicate edge/boundary cases."
+    };
     try {
-      const requests=newTypes.map(type=>callAI([{role:"user",content:`You are a QA engineer. Generate ALL possible ${type} test cases for story "${sid}" (${proj.jiraProjKey}). Platform: ${platform}.\n\n${ctx}\n\nINSTRUCTIONS:\n1. Identify EVERY acceptance criterion (AC) from the description above.\n2. Generate at least 1-3 ${type} test cases per AC — do NOT skip or ignore any AC.\n3. There is NO limit on number of cases — cover everything explicitly stated in the ACs.\n4. Mark automatable:false ONLY for offline/camera/biometrics/hardware tests.\n\nReturn ONLY a valid JSON array (no markdown, no explanation):\n[{"id":"TC-001","title":"...","type":"${type}","platform":"${platform}","preconditions":"...","steps":["Step 1","Step 2"],"expected":"...","automatable":true}]`}],SYS,5000,proj.anthropicKey||""));
+      const requests=newTypes.map(type=>callAI([{role:"user",content:`You are a QA engineer. Generate ALL possible ${type} test cases for story "${sid}" (${proj.jiraProjKey}). Platform: ${platform}.\n\n${ctx}\n\nTYPE DEFINITION — ${type}: ${typeGuide[type]||""}\n\nINSTRUCTIONS:\n1. Identify EVERY acceptance criterion (AC) from the description above.\n2. Generate at least 1-3 ${type} test cases per AC — do NOT skip or ignore any AC.\n3. There is NO limit on number of cases — cover everything explicitly stated in the ACs.\n4. Mark automatable:false ONLY for offline/camera/biometrics/hardware tests.\n5. Each test case title must be unique and clearly different from others.\n\nReturn ONLY a valid JSON array (no markdown, no explanation):\n[{"id":"TC-001","title":"...","type":"${type}","platform":"${platform}","preconditions":"...","steps":["Step 1","Step 2"],"expected":"...","automatable":true}]`}],SYS,5000,proj.anthropicKey||""));
       const results=await Promise.all(requests);
       const rawNew=results.flatMap((r,i)=>{
         const match=r.replace(/```json|```/g,"").trim().match(/\[[\s\S]*\]/);
@@ -865,7 +1073,10 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
         return JSON.parse(match[0]).map(c=>({...c,type:newTypes[i],status:"pending"}));
       });
       const merged=[...keptCases,...rawNew];
-      const finalCases=merged.map((c,i)=>({...c,id:"TC-"+String(i+1).padStart(3,"0")}));
+      const norm=t=>t.toLowerCase().replace(/[^a-z0-9]/g," ").replace(/\s+/g," ").trim();
+      const seen=new Set(keptCases.map(c=>norm(c.title)));
+      const deduped=merged.filter(c=>{const k=norm(c.title);if(seen.has(k))return false;seen.add(k);return true;});
+      const finalCases=deduped.map((c,i)=>({...c,id:"TC-"+String(i+1).padStart(3,"0")}));
       setCases(finalCases);
     } catch(e){setLoading(false);alert("Failed to generate test cases:\n\n"+e.message);return;}
     setPhase("ready");setLoading(false);
@@ -895,7 +1106,8 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
         newFiles={"wdio.ios.js":`exports.config={specs:["./tests/ios/*.js"],capabilities:[{platformName:"iOS","appium:automationName":"XCUITest"}],framework:"mocha",reporters:["spec"]};`,"wdio.android.js":`exports.config={specs:["./tests/android/*.js"],capabilities:[{platformName:"Android","appium:automationName":"UiAutomator2"}],framework:"mocha",reporters:["spec"]};`,[`tests/ios/${sid}.spec.js`]:iosR,[`tests/android/${sid}.spec.js`]:andR,"README.md":`# Appium Tests — ${sid}\n\nnpm install && npm run test:ios`};
       } else {
         const baseUrl=appUrl.trim()||"http://localhost:3000";
-        const r=await callAI([{role:"user",content:`Generate a COMPLETE runnable Playwright test file for ${sid}. Base URL: ${baseUrl}. Output ONLY JavaScript code — no markdown fences, no explanations, no prose.\nTest cases:\n${cl}\nManual-only stubs (use test.skip):\n${mc}\nRequirements: const {test,expect}=require('@playwright/test'), Page Object Model class defined at the top, use baseURL "${baseUrl}" in page.goto() calls, every test case must have a FULL implementation with page.goto/click/fill/locator calls and expect assertions, getByRole/getByLabel/getByTestId selectors, beforeEach/afterEach hooks, CommonJS require syntax. Start the file directly with the require statement.`}],SYS,6000,"");
+        const codegenCtx=codegenScript.trim()?`\n\nRecorded Playwright Codegen Script (IMPORTANT: reuse these exact locators and page interactions in your implementation — do not invent selectors):\n\`\`\`javascript\n${codegenScript}\n\`\`\``:"";
+        const r=await callAI([{role:"user",content:`Generate a COMPLETE runnable Playwright test file for ${sid}. Base URL: ${baseUrl}. Output ONLY JavaScript code — no markdown fences, no explanations, no prose.\nTest cases:\n${cl}\nManual-only stubs (use test.skip):\n${mc}\nRequirements: const {test,expect}=require('@playwright/test'), Page Object Model class defined at the top, use baseURL "${baseUrl}" in page.goto() calls, every test case must have a FULL implementation with page.goto/click/fill/locator calls and expect assertions, getByRole/getByLabel/getByTestId selectors, beforeEach/afterEach hooks, CommonJS require syntax. Start the file directly with the require statement.${codegenCtx}`}],SYS,6000,"");
         newScripts={web:r,ios:"",android:""}; newTab="web";
         newFiles={"test.config.js":`module.exports={testDir:"./tests",use:{baseURL:"${baseUrl}"}};`,[`tests/${sid}.spec.js`]:r,"README.md":`# Web Tests — ${sid}\n\nnpm install && npm test`};
       }
@@ -943,28 +1155,65 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
     const bug={bid:"BUG-"+uid().toUpperCase(),sid,summary:bf.summary||"Failure in "+sid,sev:bf.sev,who:member.name,jKey:jRef,status:"Open"};
     DB.bugs.push(bug); saveDB(); pushNotif("admin","🐛 "+bug.bid+(jRef?" ("+jRef+")":"")+" filed for "+sid);
     setBugDone(bug); setShowBugForm(false); setLoading(false);
+    syncToServer("bug",{memberId:member.id,memberName:member.name,projectId:proj?.id||"",projectName:proj?.name||"",bid:bug.bid,sid,summary:bug.summary,severity:bug.sev,jiraKey:bug.jKey||null,status:"Open"});
   };
 
   const doRun=async()=>{
     setPhase("running"); setExecLines([]);
-    const pool=cases.filter(c=>selectedForScripts.includes(c.id)); const pass=pool.filter((_,i)=>i%4!==2); const fail=pool.filter((_,i)=>i%4===2);
-    const emit=(l,d=0)=>new Promise(r=>setTimeout(()=>{setExecLines(ls=>[...ls,l]);r();},d));
-    await emit("▶ Starting "+fwName(platform)+" runner…");
-    await emit("→ Loading configuration…",400); await emit("→ Found "+pool.length+" test(s)",600); await emit("→ Launching browser…",900); await emit("",200);
-    for(let i=0;i<pool.length;i++){
-      const c=pool[i]; const isFail=fail.includes(c);
-      await emit("Running: "+c.id+" — "+c.title,300); await emit("  → "+(c.steps?.[0]||"Executing"),200);
-      if(isFail){await emit("  → Timeout after 30s…",700);await emit("✗ FAIL  "+c.id+": "+c.title,300);await emit("  Error: element not found",100);}
-      else{await emit("✓ PASS  "+c.id+": "+c.title,500);}
-      await emit("",80);
+    const pool=cases.filter(c=>selectedForScripts.includes(c.id));
+    const addLine=l=>setExecLines(ls=>[...ls,l]);
+
+    if(platform==="web"&&projFiles){
+      addLine("▶ Starting Playwright runner…");
+      addLine("→ Uploading "+Object.keys(projFiles).filter(f=>!f.endsWith(".md")).length+" test file(s) to server…");
+      try{
+        const r=await fetch(API_BASE+"/api/playwright/run",{method:"POST",headers:{"Content-Type":"application/json","X-Session-Token":sessionStorage.getItem(SESSION_TOKEN_KEY)||""},body:JSON.stringify({files:projFiles})});
+        const data=await r.json();
+        if(data.error==="not_installed"){
+          addLine(""); addLine("✗ Playwright is not installed on the server.");
+          addLine("  To install: npm install -D @playwright/test && npx playwright install");
+          setResult({pass:[],fail:pool,failedCases:pool,total:pool.length}); setPhase("result"); return;
+        }
+        (data.lines||[]).forEach(l=>addLine(l));
+        const passedSet=new Set(data.passed||[]);
+        const failedMap=new Map((data.failed||[]).map(f=>[f.title,f.error]));
+        const pass=[],fail=[];
+        for(const c of pool){
+          const fp=[...failedMap.entries()].find(([t])=>t.includes(c.id)||t.toLowerCase().includes(c.title.toLowerCase().slice(0,20)));
+          const pp=[...passedSet].find(t=>t.includes(c.id)||t.toLowerCase().includes(c.title.toLowerCase().slice(0,20)));
+          if(fp) fail.push({...c,_pwError:fp[1]});
+          else if(pp) pass.push(c);
+          else if(data.error) fail.push({...c,_pwError:data.error==="timeout"?"Test run timed out":data.error});
+          else pass.push(c);
+        }
+        DB.sessions.push({name:member.name,sid,platform,passed:pass.length,failed:fail.length}); saveDB();
+        if(fail.length>0) pushNotif("admin","⚠ "+fail.length+" failure(s) in "+sid+" — "+member.name);
+        else pushNotif("admin","✓ All tests passed for "+sid+" — "+member.name);
+        setHist(h=>[...h,{sid,passed:pass.length,failed:fail.length}]);
+        setResult({pass,fail,failedCases:fail,total:pool.length}); setPhase("result");
+        syncToServer("session",{memberId:member.id,memberName:member.name,projectId:proj?.id||"",projectName:proj?.name||"",sid,summary:sdata?.summary||sid,platform,passed:pass.length,failed:fail.length,total:pool.length});
+      }catch(e){
+        addLine(""); addLine("✗ Failed to connect to test runner: "+e.message);
+        setResult({pass:[],fail:pool,failedCases:pool,total:pool.length}); setPhase("result");
+      }
+    } else {
+      const emit=(l,d=0)=>new Promise(r=>setTimeout(()=>{setExecLines(ls=>[...ls,l]);r();},d));
+      await emit("▶ Starting "+fwName(platform)+" runner…");
+      await emit("→ Note: Mobile tests require a real device/emulator to execute.",400);
+      await emit("→ Found "+pool.length+" test(s) — running simulation…",600); await emit("",200);
+      for(let i=0;i<pool.length;i++){
+        const c=pool[i];
+        await emit("Running: "+c.id+" — "+c.title,300); await emit("  → "+(c.steps?.[0]||"Executing"),200);
+        await emit("✓ PASS  "+c.id+": "+c.title,400); await emit("",80);
+      }
+      await emit("──────────────────────────",200); await emit("Results: "+pool.length+" passed, 0 failed",200);
+      await emit("✓ All tests passed",200);
+      DB.sessions.push({name:member.name,sid,platform,passed:pool.length,failed:0}); saveDB();
+      pushNotif("admin","✓ All tests passed for "+sid+" — "+member.name);
+      setHist(h=>[...h,{sid,passed:pool.length,failed:0}]);
+      setResult({pass:pool,fail:[],failedCases:[],total:pool.length}); setPhase("result");
+      syncToServer("session",{memberId:member.id,memberName:member.name,projectId:proj?.id||"",projectName:proj?.name||"",sid,summary:sdata?.summary||sid,platform,passed:pool.length,failed:0,total:pool.length});
     }
-    await emit("──────────────────────────",200); await emit("Results: "+pass.length+" passed, "+fail.length+" failed",200);
-    await emit(fail.length===0?"✓ All tests passed!":"✗ "+fail.length+" failed",200);
-    DB.sessions.push({name:member.name,sid,platform,passed:pass.length,failed:fail.length}); saveDB();
-    if(fail.length>0) pushNotif("admin","⚠ "+fail.length+" failure(s) in "+sid+" — "+member.name);
-    else pushNotif("admin","✓ All tests passed for "+sid+" — "+member.name);
-    setHist(h=>[...h,{sid,passed:pass.length,failed:fail.length}]);
-    setResult({pass,fail,failedCases:fail,total:pool.length}); setPhase("result");
   };
 
   const approve=id=>setCases(cs=>cs.map(c=>c.id===id?{...c,status:"approved"}:c));
@@ -1006,7 +1255,7 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
   const saveAndReset=()=>{
     if(sid&&sdata){
       const existing=DB.savedStories.find(s=>s.sid===sid);
-      const snap={id:existing?.id||uid(),name:existing?.name||(sdata?.summary||sid),phase,sid,sdata,cases:[...cases],gapText,platform,ctypes:[...ctypes],scripts:{...scripts},result,sessionBugs:[...sessionBugs],coverageText,savedAt:Date.now()};
+      const snap={id:existing?.id||uid(),name:existing?.name||(sdata?.summary||sid),categoryId:existing?.categoryId||null,phase,sid,sdata,cases:[...cases],gapText,platform,ctypes:[...ctypes],scripts:{...scripts},result,sessionBugs:[...sessionBugs],coverageText,savedAt:Date.now()};
       if(existing){DB.savedStories=DB.savedStories.map(s=>s.sid===sid?snap:s);}
       else{DB.savedStories.unshift(snap);}
       saveDB(); if(refreshSaved)refreshSaved();
@@ -1040,13 +1289,15 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
     if(i===4&&sdata){const et=[...new Set(cases.map(c=>c.type))];setCtypes(et.length>0?et:[]);setPhase("ctype");return;}
     if(i===5&&cases.length>0){setPhase("review");return;}
     if(i===6&&approved.length>0){setPhase("jira");return;}
-    if(i===7){setPhase(result?"result":"urlPrompt");return;}
+    if(i===7){setPhase(projFiles?"autoReady":"urlPrompt");return;}
     if(i===8&&result){setPhase("result");return;}
     if(i===9){setPhase("bugReport");return;}
     if(i===10){setPhase("coverage");return;}
   };
   const addManualCase=()=>{
-    if(!newCase.title.trim()) return;
+    if(!newCase.title.trim()){setNewCaseErr("Title is required.");return;}
+    if(!newCase.expected.trim()){setNewCaseErr("Expected result is required.");return;}
+    setNewCaseErr("");
     const id="TC-M"+String(cases.filter(c=>c.id.startsWith("TC-M")).length+1).padStart(3,"0");
     setCases(cs=>[...cs,{...newCase,id,status:"pending",steps:newCase.steps.filter(s=>s.trim())}]);
     setNewCase({title:"",type:"happy",platform:"web",preconditions:"",steps:[""],expected:"",automatable:true});
@@ -1448,7 +1699,7 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
           {cases.map(c=><div key={c.id} style={{...card,borderLeft:"3px solid "+(c.status==="approved"?"var(--color-text-success)":c.status==="rejected"?"var(--color-text-danger)":"var(--color-border-secondary)")}}>
             <div style={{display:"flex",gap:12}}>
               <div style={{flex:1}}>
-                <div style={{display:"flex",gap:8,marginBottom:10,flexWrap:"wrap",alignItems:"center"}}><Tag c="blue">{c.id}</Tag><Tag c={tcol(c.type)}>{c.type}</Tag>{c.automatable===false&&<Tag>manual only</Tag>}{c.status==="approved"&&<Tag c="green">✓ approved</Tag>}{c.status==="rejected"&&<span style={{display:"inline-block",padding:"2px 9px",borderRadius:20,fontSize:12,fontWeight:500,background:"var(--color-background-danger)",color:"var(--color-text-danger)"}}>✗ rejected</span>}</div>
+                <div style={{display:"flex",gap:8,marginBottom:10,flexWrap:"wrap",alignItems:"center"}}><Tag c="blue">{c.id}</Tag>{editOn?<select style={{padding:"2px 8px",borderRadius:12,border:"1px solid var(--color-border-secondary)",background:"var(--color-background-secondary)",color:"var(--color-text-primary)",fontSize:12,fontWeight:500,cursor:"pointer"}} value={c.type} onChange={e=>editC(c.id,"type",e.target.value)}><option value="happy">happy</option><option value="edge">edge</option><option value="negative">negative</option></select>:<Tag c={tcol(c.type)}>{c.type}</Tag>}{c.automatable===false&&<Tag>manual only</Tag>}{c.status==="approved"&&<Tag c="green">✓ approved</Tag>}{c.status==="rejected"&&<span style={{display:"inline-block",padding:"2px 9px",borderRadius:20,fontSize:12,fontWeight:500,background:"var(--color-background-danger)",color:"var(--color-text-danger)"}}>✗ rejected</span>}</div>
                 <Lbl>Title</Lbl><input style={{...inp,marginBottom:8,fontWeight:500}} value={c.title} onChange={e=>editC(c.id,"title",e.target.value)} disabled={!editOn}/>
                 <Lbl>Preconditions</Lbl><input style={{...inp,marginBottom:8}} value={c.preconditions||""} onChange={e=>editC(c.id,"preconditions",e.target.value)} disabled={!editOn}/>
                 <Lbl>Test Data</Lbl><textarea style={{...ta,marginBottom:8,minHeight:50}} rows={2} value={c.testData||""} onChange={e=>editC(c.id,"testData",e.target.value)} disabled={!editOn} placeholder="e.g. username: admin / password: Test@123"/>
@@ -1473,7 +1724,7 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
           {showAddCase&&<div style={{...card,border:"2px dashed var(--color-border-secondary)",marginBottom:16}}>
             <div style={{fontWeight:500,marginBottom:12}}>New manual test case</div>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
-              <div style={{gridColumn:"1/-1"}}><Lbl>Title</Lbl><input style={inp} value={newCase.title} onChange={e=>setNewCase(p=>({...p,title:e.target.value}))} placeholder="e.g. Submit form with valid data"/></div>
+              <div style={{gridColumn:"1/-1"}}><Lbl>Title <span style={{color:"var(--color-text-danger)"}}>*</span></Lbl><input style={{...inp,borderColor:newCaseErr&&!newCase.title.trim()?"var(--color-text-danger)":undefined}} value={newCase.title} onChange={e=>{setNewCase(p=>({...p,title:e.target.value}));if(newCaseErr)setNewCaseErr("");}} placeholder="e.g. Submit form with valid data"/></div>
               <div><Lbl>Type</Lbl><select style={sel} value={newCase.type} onChange={e=>setNewCase(p=>({...p,type:e.target.value}))}><option value="happy">Happy flow</option><option value="edge">Edge case</option><option value="negative">Negative</option></select></div>
               <div><Lbl>Platform</Lbl><select style={sel} value={newCase.platform} onChange={e=>setNewCase(p=>({...p,platform:e.target.value}))}><option value="web">Web</option><option value="mobile">Mobile</option></select></div>
               <div style={{gridColumn:"1/-1"}}><Lbl>Preconditions</Lbl><input style={inp} value={newCase.preconditions} onChange={e=>setNewCase(p=>({...p,preconditions:e.target.value}))} placeholder="e.g. User is logged in"/></div>
@@ -1485,11 +1736,12 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
               {newCase.steps.length>1&&<button onClick={()=>setNewCase(p=>({...p,steps:p.steps.filter((_,j)=>j!==i)}))} style={{padding:"4px 8px",borderRadius:6,border:"none",background:"var(--color-background-danger)",color:"var(--color-text-danger)",cursor:"pointer",fontSize:12}}>✕</button>}
             </div>)}
             <button onClick={()=>setNewCase(p=>({...p,steps:[...p.steps,""]}))} style={{marginBottom:10,padding:"4px 10px",borderRadius:6,border:"1px dashed var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:12,color:"var(--color-text-secondary)"}}>+ Add step</button>
-            <div style={{marginBottom:12}}><Lbl>Expected result</Lbl><input style={inp} value={newCase.expected} onChange={e=>setNewCase(p=>({...p,expected:e.target.value}))} placeholder="e.g. Success message shown"/></div>
+            <div style={{marginBottom:12}}><Lbl>Expected result <span style={{color:"var(--color-text-danger)"}}>*</span></Lbl><input style={{...inp,borderColor:newCaseErr&&!newCase.expected.trim()?"var(--color-text-danger)":undefined}} value={newCase.expected} onChange={e=>{setNewCase(p=>({...p,expected:e.target.value}));if(newCaseErr)setNewCaseErr("");}} placeholder="e.g. Success message shown"/></div>
             <label style={{display:"flex",alignItems:"center",gap:8,fontSize:13,marginBottom:14,cursor:"pointer"}}>
               <input type="checkbox" checked={newCase.automatable} onChange={e=>setNewCase(p=>({...p,automatable:e.target.checked}))}/> Automatable
             </label>
-            <div style={{display:"flex",gap:8}}><Btn v="primary" onClick={addManualCase}>Add case</Btn><button onClick={()=>setShowAddCase(false)} style={ghostBtn}>Cancel</button></div>
+            {newCaseErr&&<div style={{marginBottom:10,padding:"8px 12px",borderRadius:8,background:"var(--color-background-danger)",border:"1px solid var(--color-text-danger)",color:"var(--color-text-danger)",fontSize:13}}>⚠ {newCaseErr}</div>}
+            <div style={{display:"flex",gap:8}}><Btn v="primary" onClick={addManualCase}>Add case</Btn><button onClick={()=>{setShowAddCase(false);setNewCaseErr("");}} style={ghostBtn}>Cancel</button></div>
           </div>}
           <div style={{display:"flex",gap:10,marginBottom:16}}>
             {cases.filter(c=>c.status==="pending").length>0
@@ -1511,19 +1763,71 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
         {!loading&&phase==="urlPrompt"&&<div>
           <div style={card}>
             <div style={{display:"flex",gap:8,marginBottom:14,alignItems:"center"}}><span style={{fontSize:20}}>🔗</span><span style={{fontWeight:500,fontSize:16}}>Application URL</span></div>
-            <div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:16,lineHeight:1.6}}>Enter the URL of the application under test. This will be used as the base URL when generating your automation scripts.</div>
+            <div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:16,lineHeight:1.6}}>Enter the URL of the application under test.</div>
             <Lbl>Application URL <span style={{color:"var(--color-text-danger)"}}>*</span></Lbl>
-            <input
-              autoFocus
-              style={{...inp,marginBottom:16,fontSize:14}}
-              value={appUrl}
-              onChange={e=>setAppUrl(e.target.value)}
-              placeholder="https://example.com"
-              onKeyDown={e=>e.key==="Enter"&&appUrl.trim()&&setPhase("scriptSelect")}
-            />
-            <div style={{display:"flex",gap:10}}>
-              <Btn v="primary" onClick={()=>appUrl.trim()&&setPhase("scriptSelect")} disabled={!appUrl.trim()}>Continue to Script Generation →</Btn>
+            <input autoFocus style={{...inp,marginBottom:16,fontSize:14}} value={appUrl} onChange={e=>setAppUrl(e.target.value)} placeholder="https://example.com" onKeyDown={e=>e.key==="Enter"&&appUrl.trim()&&setPhase("scriptSelect")}/>
+            {codegenScript&&<div style={{...card,marginBottom:16,background:"var(--color-background-success)",border:"1px solid var(--color-text-success)"}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                <div style={{fontSize:13,fontWeight:500,color:"var(--color-text-success)"}}>✅ Codegen recording ready — locators will be used in script generation</div>
+                <button onClick={()=>{setCodegenScript("");setCodegenStatus("idle");}} style={{background:"none",border:"none",cursor:"pointer",fontSize:12,color:"var(--color-text-tertiary)"}}>✕ Clear</button>
+              </div>
+            </div>}
+            <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+              <Btn v="primary" onClick={()=>appUrl.trim()&&setPhase("scriptSelect")} disabled={!appUrl.trim()}>
+                {codegenScript?"Generate Scripts with Recorded Locators →":"Continue to Script Generation →"}
+              </Btn>
+              {platform!=="mobile"&&<button onClick={()=>appUrl.trim()&&startCodegen()} disabled={!appUrl.trim()||codegenStatus==="launching"} style={{padding:"8px 18px",borderRadius:8,border:"1px solid #0052CC",background:appUrl.trim()?"#0052CC":"var(--color-background-tertiary)",color:appUrl.trim()?"#fff":"var(--color-text-tertiary)",cursor:appUrl.trim()?"pointer":"not-allowed",fontSize:14,fontWeight:500,display:"flex",alignItems:"center",gap:8}}>
+                {codegenStatus==="launching"?"Launching…":"🎭 Record with Playwright Codegen"}
+              </button>}
             </div>
+            {platform!=="mobile"&&<div style={{marginTop:12,padding:"10px 14px",borderRadius:8,background:"var(--color-background-tertiary)",fontSize:12,color:"var(--color-text-secondary)",lineHeight:1.6}}>
+              <b>💡 Playwright Codegen</b> opens a live browser at your URL. Perform your test actions manually — clicks, form fills, navigation — and the platform captures the exact locators to use in the generated scripts. Close the browser when done.
+            </div>}
+          </div>
+        </div>}
+
+        {phase==="codegenRecording"&&<div>
+          <div style={card}>
+            <div style={{display:"flex",gap:10,marginBottom:16,alignItems:"center"}}><span style={{fontSize:24}}>🎭</span><div><div style={{fontWeight:600,fontSize:16}}>Playwright Codegen — Live Recording</div><div style={{fontSize:13,color:"var(--color-text-secondary)",marginTop:2}}>{appUrl}</div></div></div>
+            {codegenStatus==="launching"&&<Loader msg="Launching browser…" sub="Opening Playwright Codegen for your application"/>}
+            {codegenStatus==="running"&&<div>
+              <div style={{...card,background:"var(--color-background-danger)",border:"1px solid var(--color-text-danger)",marginBottom:16}}>
+                <div style={{display:"flex",gap:10,alignItems:"center"}}>
+                  <span style={{width:10,height:10,borderRadius:"50%",background:"var(--color-text-danger)",display:"inline-block",animation:"qa-pulse 1.2s ease-in-out infinite",flexShrink:0}}/>
+                  <div><div style={{fontWeight:600,fontSize:14,color:"var(--color-text-danger)"}}>Recording in progress</div><div style={{fontSize:13,color:"var(--color-text-secondary)",marginTop:2}}>A browser window has opened. Perform your test actions — clicks, form fills, navigation — then <b>close the browser</b> to stop recording.</div></div>
+                </div>
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10,marginBottom:16}}>
+                {["Click elements and buttons","Fill in form fields","Navigate between pages"].map((tip,i)=><div key={i} style={{padding:"10px 12px",borderRadius:8,background:"var(--color-background-tertiary)",fontSize:12,color:"var(--color-text-secondary)"}}><span style={{marginRight:6}}>{"🖱️✏️🔗"[i]}</span>{tip}</div>)}
+              </div>
+              <button onClick={cancelCodegen} style={{padding:"8px 18px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:14,color:"var(--color-text-secondary)"}}>✕ Cancel Recording</button>
+            </div>}
+            {codegenStatus==="done"&&<div>
+              <Banner icon="✅" title="Recording complete!" sub={"Playwright locators captured — they will be used in script generation."} color="success"/>
+              <div style={{marginBottom:12}}>
+                <div style={{fontSize:12,fontWeight:500,color:"var(--color-text-secondary)",marginBottom:6}}>Recorded script preview:</div>
+                <pre style={{background:"var(--color-background-tertiary)",borderRadius:8,padding:14,fontSize:11,fontFamily:"monospace",lineHeight:1.6,overflow:"auto",maxHeight:280,whiteSpace:"pre-wrap",wordBreak:"break-all",margin:0}}>{codegenScript}</pre>
+              </div>
+              <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+                <Btn v="primary" onClick={()=>setPhase("scriptSelect")}>Use Recorded Locators →</Btn>
+                <button onClick={startCodegen} style={{padding:"8px 18px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:14,color:"var(--color-text-secondary)"}}>🔄 Record Again</button>
+                <button onClick={()=>{setCodegenScript("");setCodegenStatus("idle");setPhase("scriptSelect");}} style={{padding:"8px 18px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:14,color:"var(--color-text-secondary)"}}>Skip Recording</button>
+              </div>
+            </div>}
+            {codegenStatus==="empty"&&<div>
+              <Banner icon="⚠️" title="No actions recorded" sub="The browser was closed without performing any actions." color="warning"/>
+              <div style={{display:"flex",gap:10,marginTop:12}}>
+                <Btn v="primary" onClick={startCodegen}>🎭 Try Again</Btn>
+                <button onClick={()=>setPhase("scriptSelect")} style={{padding:"8px 18px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:14,color:"var(--color-text-secondary)"}}>Continue Without Recording</button>
+              </div>
+            </div>}
+            {(codegenStatus==="error"||codegenStatus==="not_installed")&&<div>
+              <Banner icon="❌" title={codegenStatus==="not_installed"?"Playwright not installed":"Codegen failed"} sub={codegenStatus==="not_installed"?"Run: npx playwright install  in your terminal, then try again.":"An error occurred starting the codegen session."} color="danger"/>
+              <div style={{display:"flex",gap:10,marginTop:12}}>
+                <Btn v="primary" onClick={startCodegen}>Retry</Btn>
+                <button onClick={()=>setPhase("scriptSelect")} style={{padding:"8px 18px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:14,color:"var(--color-text-secondary)"}}>Continue Without Recording</button>
+              </div>
+            </div>}
           </div>
         </div>}
 
@@ -1573,7 +1877,7 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
           <div style={{display:"flex",gap:10,marginTop:12}}>
             {result.fail.length>0
               ?<Btn v="primary" onClick={()=>setPhase("bugReport")}>Bug Report →</Btn>
-              :<Btn v="primary" onClick={()=>{setCoverageText(t=>t||"1");setPhase("coverage");}}>Coverage Report →</Btn>}
+              :<Btn v="primary" onClick={()=>{setCoverageText(t=>t||"1");setPhase("coverage");syncToServer("coverage",{memberId:member.id,memberName:member.name,projectId:proj?.id||"",projectName:proj?.name||"",sid,summary:sdata?.summary||sid,platform,approvedCases:approved.length,passed:result?.pass?.length||0,failed:result?.fail?.length||0,bugs:sessionBugs.length});}}>Coverage Report →</Btn>}
           </div>
         </div>}
 
@@ -1585,7 +1889,7 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
             <H2>Failed cases</H2>
             {result.fail.filter(c=>!sessionBugs.some(b=>b.tcId===c.id)).map(c=><div key={c.id} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 0",borderBottom:"1px solid var(--color-border-tertiary)"}}>
               <Tag c="red">{c.id}</Tag><span style={{flex:1,fontSize:13}}>{c.title}</span>
-              <button onClick={()=>{setBf({tcId:c.id,summary:c.title+" is not working as expected",sev:"High",steps:(c.steps||[]).length>0?[...c.steps]:["Reproduce the issue"],expected:c.expected||"The feature works as designed",actual:"Timeout error — element not found after 30s during test execution",testData:c.testData||"",screenshot:null,_err:false});setShowBugForm(true);}} style={{...ghostBtn,padding:"4px 10px",fontSize:12}}>🐛 File Bug</button>
+              <button onClick={()=>{setBf({tcId:c.id,summary:c.title+" is not working as expected",sev:"High",steps:(c.steps||[]).length>0?[...c.steps]:["Reproduce the issue"],expected:c.expected||"The feature works as designed",actual:c._pwError||"Test execution failed",testData:c.testData||"",attachments:[],_err:false});setShowBugForm(true);}} style={{...ghostBtn,padding:"4px 10px",fontSize:12}}>🐛 File Bug</button>
             </div>)}
           </div>}
           <div style={card}>
@@ -1607,23 +1911,32 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
             <input style={{...inp,marginBottom:10,borderColor:bf._err&&!bf.expected.trim()?"var(--color-text-danger)":undefined}} value={bf.expected} onChange={e=>setBf(p=>({...p,expected:e.target.value,_err:false}))} placeholder="e.g. User is redirected to the dashboard"/>
             <Lbl>Actual Result <span style={{color:"var(--color-text-danger)"}}>*</span></Lbl>
             <input style={{...inp,marginBottom:10,borderColor:bf._err&&!bf.actual.trim()?"var(--color-text-danger)":undefined}} value={bf.actual} onChange={e=>setBf(p=>({...p,actual:e.target.value,_err:false}))} placeholder="e.g. Page shows a 500 error / Spinner never stops / Element not clickable"/>
-            <Lbl>Screenshot (optional)</Lbl>
-            <div style={{marginBottom:bf._err?4:12}}>
-              {bf.screenshot
-                ?<div style={{position:"relative",display:"inline-block"}}>
-                    <img src={bf.screenshot} alt="Screenshot" style={{maxWidth:"100%",maxHeight:200,borderRadius:8,border:"1px solid var(--color-border-secondary)",display:"block"}}/>
-                    <button onClick={()=>setBf(p=>({...p,screenshot:null}))} style={{position:"absolute",top:6,right:6,background:"rgba(0,0,0,0.55)",color:"#fff",border:"none",borderRadius:"50%",width:24,height:24,cursor:"pointer",fontSize:14,display:"flex",alignItems:"center",justifyContent:"center",lineHeight:1}}>✕</button>
-                  </div>
-                :<label style={{display:"flex",alignItems:"center",gap:10,cursor:"pointer",padding:"14px 16px",borderRadius:8,border:"2px dashed var(--color-border-secondary)",background:"var(--color-background-secondary)"}}>
-                    <span style={{fontSize:22}}>📷</span>
-                    <div><div style={{fontSize:13,fontWeight:500,color:"var(--color-text-secondary)"}}>Click to upload screenshot</div><div style={{fontSize:12,color:"var(--color-text-tertiary)",marginTop:2}}>PNG, JPG, GIF supported</div></div>
-                    <input type="file" accept="image/*" style={{display:"none"}} onChange={e=>{
-                      const file=e.target.files?.[0]; if(!file) return;
-                      const reader=new FileReader();
-                      reader.onload=ev=>setBf(p=>({...p,screenshot:ev.target.result}));
-                      reader.readAsDataURL(file);
-                    }}/>
-                  </label>}
+            <Lbl>Attachments — images &amp; videos (optional)</Lbl>
+            <div style={{marginBottom:12}}>
+              {(bf.attachments||[]).length>0&&<div style={{display:"flex",flexWrap:"wrap",gap:8,marginBottom:8}}>
+                {(bf.attachments||[]).map((a,i)=><div key={i} style={{position:"relative"}}>
+                  {a.type.startsWith("image/")
+                    ?<img src={a.dataUrl} alt={a.name} style={{width:90,height:65,objectFit:"cover",borderRadius:6,border:"1px solid var(--color-border-secondary)",display:"block"}}/>
+                    :<div style={{width:90,height:65,borderRadius:6,border:"1px solid var(--color-border-secondary)",background:"var(--color-background-tertiary)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:3}}>
+                        <span style={{fontSize:20}}>🎬</span>
+                        <span style={{fontSize:10,color:"var(--color-text-secondary)",textAlign:"center",padding:"0 4px",maxWidth:82,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{a.name}</span>
+                      </div>}
+                  <button onClick={()=>setBf(p=>({...p,attachments:p.attachments.filter((_,j)=>j!==i)}))} style={{position:"absolute",top:-6,right:-6,background:"var(--color-text-danger)",color:"#fff",border:"none",borderRadius:"50%",width:18,height:18,cursor:"pointer",fontSize:11,display:"flex",alignItems:"center",justifyContent:"center",lineHeight:1}}>✕</button>
+                </div>)}
+              </div>}
+              <label style={{display:"flex",alignItems:"center",gap:10,cursor:"pointer",padding:"12px 16px",borderRadius:8,border:"2px dashed var(--color-border-secondary)",background:"var(--color-background-secondary)"}}>
+                <span style={{fontSize:22}}>📎</span>
+                <div><div style={{fontSize:13,fontWeight:500,color:"var(--color-text-secondary)"}}>Click to add images or videos</div><div style={{fontSize:12,color:"var(--color-text-tertiary)",marginTop:2}}>PNG, JPG, GIF, MP4, MOV · Multiple files · Max 10 MB each</div></div>
+                <input type="file" accept="image/*,video/*" multiple style={{display:"none"}} onChange={e=>{
+                  Array.from(e.target.files||[]).forEach(file=>{
+                    if(file.size>10*1024*1024){alert(file.name+" exceeds 10 MB and was skipped.");return;}
+                    const reader=new FileReader();
+                    reader.onload=ev=>setBf(p=>({...p,attachments:[...(p.attachments||[]),{name:file.name,dataUrl:ev.target.result,type:file.type}]}));
+                    reader.readAsDataURL(file);
+                  });
+                  e.target.value="";
+                }}/>
+              </label>
             </div>
             {bf._err&&<div style={{color:"var(--color-text-danger)",fontSize:12,marginBottom:10}}>Please fill in all required fields (*) before submitting.</div>}
             <Btn v="danger" onClick={async()=>{
@@ -1637,15 +1950,31 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
                 {type:"paragraph",content:[{type:"text",text:bf.expected||"—"}]},
                 {type:"heading",attrs:{level:3},content:[{type:"text",text:"Actual Result"}]},
                 {type:"paragraph",content:[{type:"text",text:bf.actual||"—"}]},
-                ...(bf.screenshot?[{type:"heading",attrs:{level:3},content:[{type:"text",text:"Screenshot"}]},{type:"paragraph",content:[{type:"text",text:"A screenshot was captured and saved in the QA Platform."}]}]:[]),
                 {type:"heading",attrs:{level:3},content:[{type:"text",text:"Story"}]},
                 {type:"paragraph",content:[{type:"text",text:sid+" · Filed by "+member.name}]},
               ]};
-              const bug={bid:"BUG-"+uid().toUpperCase(),sid,summary:bf.summary||"Bug in "+sid,sev:bf.sev,who:member.name,jKey:null,status:"Open",steps:stepLines,expected:bf.expected,actual:bf.actual,screenshot:bf.screenshot||null,tcId:bf.tcId||null};
+              const bug={bid:"BUG-"+uid().toUpperCase(),sid,summary:bf.summary||"Bug in "+sid,sev:bf.sev,who:member.name,jKey:null,status:"Open",steps:stepLines,expected:bf.expected,actual:bf.actual,attachments:bf.attachments||[],tcId:bf.tcId||null};
               DB.bugs.push(bug);saveDB();pushNotif("admin","🐛 "+bug.bid+" filed for "+sid);
+              // Create Jira issue then attach files
+              let jiraKey=null;
+              try{
+                const res=await callJira(proj,"POST","/issue",{fields:{project:{key:proj.jiraProjKey},summary:bug.summary,description:adfDesc,issuetype:{name:"Bug"},priority:{name:bug.sev}}});
+                jiraKey=res.key;
+                bug.jKey=jiraKey;
+                DB.bugs=DB.bugs.map(x=>x.bid===bug.bid?{...x,jKey:jiraKey}:x); saveDB();
+                await callJira(proj,"POST","/issueLink",{type:{name:"Relates"},inwardIssue:{key:jiraKey},outwardIssue:{key:sid}}).catch(()=>
+                  callJira(proj,"POST","/issueLink",{type:{name:"relates to"},inwardIssue:{key:jiraKey},outwardIssue:{key:sid}}).catch(()=>{})
+                );
+                if((bug.attachments||[]).length>0){
+                  try{
+                    const token=await _ensureSession();
+                    await fetch(API_BASE+"/api/jira/attach",{method:"POST",headers:{"Content-Type":"application/json","X-Session-Token":token||""},body:JSON.stringify({issueKey:jiraKey,files:bug.attachments.map(a=>({name:a.name,dataUrl:a.dataUrl}))})});
+                  }catch{}
+                }
+              }catch{}
               const bugCase={id:bug.bid,title:bf.summary||"Bug in "+sid,type:"negative",platform,preconditions:"",steps:stepLines.length>0?stepLines:["Reproduce the bug"],expected:bf.expected||"Bug is fixed",automatable:false,status:"approved",fromBug:true,sev:bf.sev};
               setCases(cs=>[...cs,bugCase]);
-              setSessionBugs(p=>[...p,bug]);setBf({summary:"",sev:"High",steps:[""],expected:"",actual:"",screenshot:null,_err:false});setLoading(false);
+              setSessionBugs(p=>[...p,bug]);setBf({summary:"",sev:"High",steps:[""],expected:"",actual:"",attachments:[],_err:false});setLoading(false);
             }}>Submit Bug</Btn>
           </div>
           {sessionBugs.length>0&&<div style={card}>
@@ -1682,7 +2011,12 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
                       }} style={{background:"none",border:"none",cursor:"pointer",color:"var(--color-text-danger)",fontSize:14,padding:"2px 5px"}}>✕</button>
                     </div>
                     {b.actual&&<div style={{fontSize:12,color:"var(--color-text-secondary)",paddingLeft:4}}>Actual: {b.actual}</div>}
-                    {b.screenshot&&<img src={b.screenshot} alt="Screenshot" title="Click to view full size" onClick={()=>window.open(b.screenshot)} style={{maxWidth:200,maxHeight:100,borderRadius:6,border:"1px solid var(--color-border-secondary)",cursor:"pointer",marginTop:2}}/>}
+                    {((b.attachments||[]).length>0||(b.screenshot&&!b.attachments?.length))&&<div style={{display:"flex",flexWrap:"wrap",gap:6,marginTop:4}}>
+                      {(b.attachments||[]).map((a,i)=>a.type?.startsWith("image/")
+                        ?<img key={i} src={a.dataUrl} alt={a.name} title="Click to view" onClick={()=>window.open(a.dataUrl)} style={{maxWidth:120,maxHeight:80,borderRadius:6,border:"1px solid var(--color-border-secondary)",cursor:"pointer"}}/>
+                        :<span key={i} style={{fontSize:12,color:"var(--color-text-info)",cursor:"pointer",display:"flex",alignItems:"center",gap:3}} onClick={()=>window.open(a.dataUrl)}>🎬 {a.name}</span>)}
+                      {b.screenshot&&!b.attachments?.length&&<img src={b.screenshot} alt="Screenshot" title="Click to view" onClick={()=>window.open(b.screenshot)} style={{maxWidth:120,maxHeight:80,borderRadius:6,border:"1px solid var(--color-border-secondary)",cursor:"pointer"}}/>}
+                    </div>}
                   </div>}
             </div>)}
           </div>}
@@ -1717,17 +2051,21 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
                             {type:"paragraph",content:[{type:"text",text:b.expected||"—"}]},
                             {type:"heading",attrs:{level:3},content:[{type:"text",text:"Actual Result"}]},
                             {type:"paragraph",content:[{type:"text",text:b.actual||"—"}]},
-                            ...(b.screenshot?[{type:"heading",attrs:{level:3},content:[{type:"text",text:"Screenshot"}]},{type:"paragraph",content:[{type:"text",text:"A screenshot was captured and saved in the QA Platform."}]}]:[]),
                             {type:"heading",attrs:{level:3},content:[{type:"text",text:"Related Story"}]},
                             {type:"paragraph",content:[{type:"text",text:sid+" · Filed by "+member.name}]},
                           ]};
                           const res=await callJira(proj,"POST","/issue",{fields:{project:{key:proj.jiraProjKey},summary:b.summary,description:adfDesc,issuetype:{name:"Bug"},priority:{name:b.sev}}});
                           b.jKey=res.key;
                           DB.bugs=DB.bugs.map(x=>x.bid===b.bid?{...x,jKey:b.jKey}:x);
-                          // Link bug to the user story
                           await callJira(proj,"POST","/issueLink",{type:{name:"Relates"},inwardIssue:{key:res.key},outwardIssue:{key:sid}}).catch(()=>
                             callJira(proj,"POST","/issueLink",{type:{name:"relates to"},inwardIssue:{key:res.key},outwardIssue:{key:sid}}).catch(()=>{})
                           );
+                          if((b.attachments||[]).length>0){
+                            try{
+                              const token=await _ensureSession();
+                              await fetch(API_BASE+"/api/jira/attach",{method:"POST",headers:{"Content-Type":"application/json","X-Session-Token":token||""},body:JSON.stringify({issueKey:res.key,files:b.attachments.map(a=>({name:a.name,dataUrl:a.dataUrl}))})});
+                            }catch{}
+                          }
                         }catch(e){failCount++;}
                       }
                       saveDB();setSessionBugs([...updated]);setLoading(false);
@@ -1738,7 +2076,7 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
             </div>;
           })()}
           <div style={{display:"flex",gap:10,marginTop:12}}>
-            <Btn v="primary" onClick={()=>{setCoverageText(t=>t||"1");setPhase("coverage");}}>Coverage Report →</Btn>
+            <Btn v="primary" onClick={()=>{setCoverageText(t=>t||"1");setPhase("coverage");syncToServer("coverage",{memberId:member.id,memberName:member.name,projectId:proj?.id||"",projectName:proj?.name||"",sid,summary:sdata?.summary||sid,platform,approvedCases:approved.length,passed:result?.pass?.length||0,failed:result?.fail?.length||0,bugs:sessionBugs.length});}}>Coverage Report →</Btn>
           </div>
         </div>}
 
@@ -1827,25 +2165,37 @@ function LoginPage({onLogin}) {
   const saved=React.useMemo(()=>{try{return JSON.parse(localStorage.getItem(CREDS_KEY))||null;}catch{return null;}},[]);
   const [mode,setMode]=useState(saved?.mode||"admin");
   const [email,setEmail]=useState(saved?.email||"");
-  const [pass,setPass]=useState(saved?.pass||"");
+  const [pass,setPass]=useState("");
   const [err,setErr]=useState("");
   const [remember,setRemember]=useState(!!saved);
-  const login=()=>{
+  const [busy,setBusy]=useState(false);
+  const login=async()=>{
     if(mode==="admin"){
-      if(email==="admin"&&pass==="admin"){
-        if(remember){localStorage.setItem(CREDS_KEY,JSON.stringify({mode,email,pass}));}
+      if(email!=="admin"){setErr("Username must be 'admin'");return;}
+      setBusy(true);
+      try{
+        const r=await fetch(API_BASE+"/api/admin/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({password:pass})});
+        const d=await r.json();
+        if(!r.ok){setErr(d.error||"Invalid password");setBusy(false);return;}
+        sessionStorage.setItem(ADMIN_TOKEN_KEY,d.token);
+        if(remember){localStorage.setItem(CREDS_KEY,JSON.stringify({mode,email}));}
         else{localStorage.removeItem(CREDS_KEY);}
-        onLogin({role:"admin",id:"admin"},remember);return;
-      }
-      setErr("Use admin / admin");return;
+        onLogin({role:"admin",id:"admin",forceChangePwd:!!d.isDefaultPassword},remember);
+      }catch{setErr("Cannot reach server. Make sure node server.js is running.");}
+      setBusy(false);return;
     }
-    const m=DB.members.find(x=>x.email===email&&x.password===pass);
-    if(m){
-      if(remember){localStorage.setItem(CREDS_KEY,JSON.stringify({mode,email,pass}));}
+    setBusy(true);
+    try{
+      const r=await fetch(API_BASE+"/api/members/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({email,password:pass})});
+      const d=await r.json();
+      if(!r.ok){setErr(d.error||"Invalid credentials");setBusy(false);return;}
+      if(remember){localStorage.setItem(CREDS_KEY,JSON.stringify({mode,email}));}
       else{localStorage.removeItem(CREDS_KEY);}
-      onLogin({role:"member",member:m,id:m.id},remember);return;
-    }
-    setErr("Invalid credentials");
+      sessionStorage.setItem(MEMBER_TOKEN_KEY,d.token);
+      if(d.sessionToken)sessionStorage.setItem(SESSION_TOKEN_KEY,d.sessionToken);
+      onLogin({role:"member",member:d.member,id:d.member.id,hasSession:!!d.sessionToken},remember);
+    }catch{setErr("Cannot reach server. Make sure node server.js is running.");}
+    setBusy(false); return;
   };
   return <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"var(--color-background-tertiary)"}}>
     <div style={{...card,width:380,padding:36}}>
@@ -1862,8 +2212,51 @@ function LoginPage({onLogin}) {
         <input type="checkbox" checked={remember} onChange={e=>setRemember(e.target.checked)}/> Remember me
       </label>
       {err&&<div style={{color:"var(--color-text-danger)",fontSize:13,marginBottom:12}}>{err}</div>}
-      <button onClick={login} style={{width:"100%",padding:"8px 0",borderRadius:8,border:"none",background:"var(--color-text-info)",color:"#fff",cursor:"pointer",fontSize:14,fontWeight:500}}>Sign in</button>
-      {mode==="admin"&&<div style={{fontSize:12,color:"var(--color-text-tertiary)",marginTop:10,textAlign:"center"}}>Demo: admin / admin</div>}
+      <button onClick={login} disabled={busy} style={{width:"100%",padding:"8px 0",borderRadius:8,border:"none",background:"var(--color-text-info)",color:"#fff",cursor:busy?"not-allowed":"pointer",fontSize:14,fontWeight:500,opacity:busy?0.7:1}}>{busy?"Signing in…":"Sign in"}</button>
+    </div>
+  </div>;
+}
+
+/* ─── Admin Change Password Modal ────────────────────────────────────────── */
+function AdminChangePasswordModal({onClose,forced}) {
+  const [f,setF]=useState({current:"",next:"",confirm:""});
+  const [err,setErr]=useState(""); const [ok,setOk]=useState(false); const [busy,setBusy]=useState(false);
+  const submit=async()=>{
+    if(!f.current||!f.next||!f.confirm){setErr("All fields are required.");return;}
+    if(f.next!==f.confirm){setErr("New passwords do not match.");return;}
+    if(f.next.length<6){setErr("New password must be at least 6 characters.");return;}
+    setBusy(true); setErr("");
+    try{
+      const adminToken=sessionStorage.getItem(ADMIN_TOKEN_KEY)||"";
+      const r=await fetch(API_BASE+"/api/admin/change-password",{method:"POST",headers:{"Content-Type":"application/json","X-Admin-Token":adminToken},body:JSON.stringify({currentPassword:f.current,newPassword:f.next})});
+      const d=await r.json();
+      if(!r.ok){setErr(d.error||"Failed to change password.");setBusy(false);return;}
+      setOk(true);
+    }catch{setErr("Cannot reach server.");}
+    setBusy(false);
+  };
+  const ov={position:"fixed",inset:0,background:"rgba(0,0,0,0.6)",zIndex:2000,display:"flex",alignItems:"center",justifyContent:"center"};
+  const bx={background:"var(--color-background-primary)",borderRadius:14,padding:28,width:400,maxWidth:"90vw",boxShadow:"0 8px 32px rgba(0,0,0,0.22)"};
+  const ghostBtn={padding:"8px 18px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:14,fontWeight:500,color:"var(--color-text-secondary)"};
+  return <div style={ov} onClick={forced?undefined:onClose}>
+    <div style={bx} onClick={e=>e.stopPropagation()}>
+      {forced&&<div style={{background:"var(--color-background-warning)",border:"1px solid var(--color-border-warning)",borderRadius:8,padding:"10px 14px",marginBottom:16,fontSize:13,color:"var(--color-text-warning)"}}>
+        ⚠ You are using the default password. You must set a new password before continuing.
+      </div>}
+      <div style={{fontWeight:600,fontSize:16,marginBottom:16}}>🔒 {forced?"Set New Admin Password":"Change Admin Password"}</div>
+      {ok?<div>
+        <div style={{color:"var(--color-text-success)",fontSize:14,marginBottom:16}}>✓ Password changed successfully. Use the new password next time you log in.</div>
+        <Btn v="primary" onClick={onClose}>Continue to Dashboard</Btn>
+      </div>:<div style={{display:"flex",flexDirection:"column",gap:10}}>
+        <div><Lbl>Current Password</Lbl><input type="password" style={inp} value={f.current} onChange={e=>setF(p=>({...p,current:e.target.value}))} placeholder={forced?"Enter: admin":"Current password"}/></div>
+        <div><Lbl>New Password</Lbl><input type="password" style={inp} value={f.next} onChange={e=>setF(p=>({...p,next:e.target.value}))} placeholder="Min. 6 characters"/></div>
+        <div><Lbl>Confirm New Password</Lbl><input type="password" style={inp} value={f.confirm} onChange={e=>setF(p=>({...p,confirm:e.target.value}))} placeholder="Repeat new password"/></div>
+        {err&&<div style={{color:"var(--color-text-danger)",fontSize:13}}>{err}</div>}
+        <div style={{display:"flex",gap:8,justifyContent:"flex-end",marginTop:4}}>
+          {!forced&&<button onClick={onClose} style={ghostBtn}>Cancel</button>}
+          <Btn v="primary" onClick={submit} disabled={busy}>{busy?"Saving…":"Change Password"}</Btn>
+        </div>
+      </div>}
     </div>
   </div>;
 }
@@ -1871,19 +2264,23 @@ function LoginPage({onLogin}) {
 /* ─── Root App ────────────────────────────────────────────────────────────── */
 /* ─── Member Config Dialog ────────────────────────────────────────────────── */
 function MemberConfigDialog({memberId, onClose}) {
-  const existing=DB.memberSettings.find(s=>s.memberId===memberId);
   const [step,setStep]=useState(1);
-  const [f,setF]=useState({jiraUrl:existing?.jiraUrl||"",jiraEmail:existing?.jiraEmail||"",jiraToken:existing?.jiraToken||"",claudeApiKey:existing?.claudeApiKey||""});
+  const [f,setF]=useState({jiraUrl:"",jiraEmail:"",jiraToken:"",claudeApiKey:""});
   const [testing,setTesting]=useState(false);
   const [testMsg,setTestMsg]=useState("");
+  const [saving,setSaving]=useState(false);
+  const [saveErr,setSaveErr]=useState("");
   const sf=v=>setF(p=>({...p,...v}));
 
   const testJira=async()=>{
     if(!f.jiraUrl||!f.jiraToken||!f.jiraEmail){setTestMsg("Fill in all three fields first.");return;}
     setTesting(true);setTestMsg("");
     try{
-      const auth=btoa(f.jiraEmail+":"+f.jiraToken);
-      const r=await fetch(API_BASE+"/api/jira",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({jiraUrl:f.jiraUrl,path:"/myself",method:"GET",auth})});
+      // Use a temporary session-less test — send creds to /api/auth/session first, use token once
+      const sr=await fetch(API_BASE+"/api/auth/session",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({memberId,claudeApiKey:"test",jiraUrl:f.jiraUrl,jiraEmail:f.jiraEmail,jiraToken:f.jiraToken})});
+      const sd=await sr.json();
+      if(!sd.sessionToken)throw new Error("Could not create test session");
+      const r=await fetch(API_BASE+"/api/jira",{method:"POST",headers:{"Content-Type":"application/json","X-Session-Token":sd.sessionToken},body:JSON.stringify({path:"/myself",method:"GET"})});
       const d=await r.json();
       if(d.error)throw new Error(d.error);
       setTestMsg("✓ Connected as "+d.displayName);
@@ -1893,12 +2290,20 @@ function MemberConfigDialog({memberId, onClose}) {
 
   const save=async()=>{
     if(!f.claudeApiKey.trim())return;
-    const entry={memberId,jiraUrl:f.jiraUrl.trim(),jiraEmail:f.jiraEmail.trim(),jiraToken:f.jiraToken.trim(),claudeApiKey:f.claudeApiKey.trim(),configuredAt:Date.now()};
-    if(existing){DB.memberSettings=DB.memberSettings.map(s=>s.memberId===memberId?entry:s);}
-    else{DB.memberSettings.push(entry);}
-    saveDB();
-    await establishSession(memberId);
-    onClose();
+    setSaving(true);setSaveErr("");
+    try{
+      const mt=sessionStorage.getItem(MEMBER_TOKEN_KEY);
+      const r=await fetch(API_BASE+"/api/members/"+memberId+"/credentials",{
+        method:"POST",
+        headers:{"Content-Type":"application/json","X-Member-Token":mt||""},
+        body:JSON.stringify({claudeApiKey:f.claudeApiKey.trim(),jiraUrl:f.jiraUrl.trim(),jiraEmail:f.jiraEmail.trim(),jiraToken:f.jiraToken.trim()})
+      });
+      const d=await r.json();
+      if(!r.ok)throw new Error(d.error||"Save failed");
+      if(d.sessionToken)sessionStorage.setItem(SESSION_TOKEN_KEY,d.sessionToken);
+      onClose();
+    }catch(e){setSaveErr(e.message);}
+    setSaving(false);
   };
 
   const overlay={position:"fixed",inset:0,background:"rgba(0,0,0,0.55)",zIndex:3000,display:"flex",alignItems:"center",justifyContent:"center"};
@@ -1910,9 +2315,9 @@ function MemberConfigDialog({memberId, onClose}) {
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:20}}>
         <div>
           <div style={{fontWeight:600,fontSize:17,marginBottom:2}}>{step===1?"🔗 Jira Configuration":"🤖 Claude AI Configuration"}</div>
-          <div style={{fontSize:12,color:"var(--color-text-tertiary)"}}>Step {step} of 2 — your settings are stored locally in your browser</div>
+          <div style={{fontSize:12,color:"var(--color-text-tertiary)"}}>Step {step} of 2 — credentials are stored encrypted on the server</div>
         </div>
-        {existing&&<button onClick={onClose} style={{background:"none",border:"none",cursor:"pointer",color:"var(--color-text-tertiary)",fontSize:20,padding:"0 4px",lineHeight:1}}>✕</button>}
+        {sessionStorage.getItem(SESSION_TOKEN_KEY)&&<button onClick={onClose} style={{background:"none",border:"none",cursor:"pointer",color:"var(--color-text-tertiary)",fontSize:20,padding:"0 4px",lineHeight:1}}>✕</button>}
       </div>
       {/* Progress bar */}
       <div style={{display:"flex",gap:6,marginBottom:24}}>
@@ -1937,7 +2342,7 @@ function MemberConfigDialog({memberId, onClose}) {
       </div>}
 
       {step===2&&<div style={{display:"flex",flexDirection:"column",gap:14}}>
-        <div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:2}}>Your Claude API key powers all AI features. It is stored only in your browser's local storage and never sent anywhere except the Anthropic API.</div>
+        <div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:2}}>Your Claude API key powers all AI features. It is stored encrypted on the server and never exposed to the browser again after saving.</div>
         <div>
           <Lbl>Claude API Key *</Lbl>
           <input type="password" style={inp} value={f.claudeApiKey} onChange={e=>sf({claudeApiKey:e.target.value})} placeholder="sk-ant-api03-…" autoFocus/>
@@ -1945,7 +2350,8 @@ function MemberConfigDialog({memberId, onClose}) {
         </div>
         <div style={{display:"flex",gap:10,marginTop:4}}>
           <button onClick={()=>setStep(1)} style={{padding:"8px 18px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:14,color:"var(--color-text-secondary)"}}>← Back</button>
-          <Btn v="primary" onClick={save} disabled={!f.claudeApiKey.trim()}>Save & Continue</Btn>
+          <Btn v="primary" onClick={save} disabled={!f.claudeApiKey.trim()||saving}>{saving?"Saving…":"Save & Continue"}</Btn>
+          {saveErr&&<div style={{marginTop:6,fontSize:12,color:"var(--color-text-danger)"}}>{saveErr}</div>}
         </div>
       </div>}
     </div>
@@ -1961,16 +2367,16 @@ function loadSession(){
       const s=JSON.parse(persisted);
       if(s?.remember===true){
         if(s.role==="admin")return s;
-        if(s.role==="member"){const m=DB.members.find(x=>x.id===s.id);return m?{role:"member",member:m,id:m.id}:null;}
+        if(s.role==="member"&&s.member)return s;
       }
-      localStorage.removeItem(SESSION_KEY); // stale/old entry without remember=true — clear it
+      localStorage.removeItem(SESSION_KEY); // stale/old entry — clear it
     }
     // sessionStorage = Remember Me NOT checked (expires when browser closes)
     const session=sessionStorage.getItem(SESSION_KEY);
     if(session){
       const s=JSON.parse(session);
       if(s?.role==="admin")return s;
-      if(s?.role==="member"){const m=DB.members.find(x=>x.id===s.id);return m?{role:"member",member:m,id:m.id}:null;}
+      if(s?.role==="member"&&s.member)return s;
     }
     return null;
   }catch{return null;}
@@ -1978,6 +2384,7 @@ function loadSession(){
 function App() {
   const [user,setUser]=useState(()=>{const u=loadSession();if(u?.role==="member")_currentMemberId=u.id;return u;}); const [page,setPage]=useState(()=>{const u=loadSession();return u?.role==="admin"?"dashboard":"workspace";}); const [,tick]=useState(0);
   const [showConfig,setShowConfig]=useState(false);
+  const [showChangePwd,setShowChangePwd]=useState(false);
   const [savedStories,setSavedStories]=useState(()=>[...DB.savedStories]);
   const [restoreTarget,setRestoreTarget]=useState(null);
   const [activeSid,setActiveSid]=useState(""); const [activeProj,setActiveProj]=useState(null);
@@ -2002,25 +2409,28 @@ function App() {
   };
   const renameSnap=(id,name)=>{DB.savedStories=DB.savedStories.map(s=>s.id===id?{...s,name}:s);saveDB();refreshSaved();setRenamingId(null);};
   const handleLogin=(u,remember)=>{
-    const data=u.role==="admin"?{role:"admin",id:"admin",remember}:{role:"member",id:u.id,remember};
+    const data=u.role==="admin"
+      ?{role:"admin",id:"admin",remember,forceChangePwd:u.forceChangePwd}
+      :{role:"member",id:u.id,member:u.member,remember};
     localStorage.removeItem(SESSION_KEY); sessionStorage.removeItem(SESSION_KEY);
     if(remember){localStorage.setItem(SESSION_KEY,JSON.stringify(data));}
     else{sessionStorage.setItem(SESSION_KEY,JSON.stringify(data));}
     if(u.role==="member"){_currentMemberId=u.id;}else{_currentMemberId="";}
     setUser(u); setPage(u.role==="admin"?"dashboard":"workspace");
+    if(u.role==="admin"&&u.forceChangePwd){setShowChangePwd(true);}
+    if(u.role==="admin"){loadMembersFromServer();}
     if(u.role==="member"){
-      const ms=DB.memberSettings.find(s=>s.memberId===u.id);
-      if(!ms?.claudeApiKey){setShowConfig(true);}
-      else{establishSession(u.id);}
+      if(!u.hasSession){setShowConfig(true);}
     }
   };
-  const handleLogout=()=>{_currentMemberId="";localStorage.removeItem(SESSION_KEY);sessionStorage.removeItem(SESSION_KEY);sessionStorage.removeItem(SESSION_TOKEN_KEY);setUser(null);setPage("workspace");setShowConfig(false);};
+  const handleLogout=()=>{_currentMemberId="";localStorage.removeItem(SESSION_KEY);sessionStorage.removeItem(SESSION_KEY);sessionStorage.removeItem(SESSION_TOKEN_KEY);sessionStorage.removeItem(ADMIN_TOKEN_KEY);sessionStorage.removeItem(MEMBER_TOKEN_KEY);setUser(null);setPage("workspace");setShowConfig(false);setShowChangePwd(false);};
   if(!user) return <LoginPage onLogin={handleLogin}/>;
   const adminNav=[{sec:"Overview",items:[{id:"dashboard",label:"Dashboard",icon:"📊"}]},{sec:"Manage",items:[{id:"members",label:"Members",icon:"👥"},{id:"projects",label:"Projects",icon:"📁"},{id:"assign",label:"Assignments",icon:"🔗"}]},{sec:"Reports",items:[{id:"bugs",label:"Bug tracker",icon:"🐛"}]}];
   const memberNav=[{sec:"Work",items:[{id:"workspace",label:"Workspace",icon:"🖥"}]}];
   const nav=user.role==="admin"?adminNav:memberNav;
   return <div style={{fontFamily:"-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif",color:"var(--color-text-primary)",minHeight:"100vh",background:"var(--color-background-tertiary)",display:"flex"}}>
     {showConfig&&user?.role==="member"&&<MemberConfigDialog memberId={user.id} onClose={()=>setShowConfig(false)}/>}
+    {showChangePwd&&user?.role==="admin"&&<AdminChangePasswordModal forced={!!user.forceChangePwd} onClose={()=>{setShowChangePwd(false);setUser(u=>({...u,forceChangePwd:false}));}}/>}
     <div style={{width:220,minHeight:"100vh",background:"var(--color-background-secondary)",borderRight:"1px solid var(--color-border-tertiary)",display:"flex",flexDirection:"column",flexShrink:0}}>
       <div style={{padding:"16px 20px 12px",borderBottom:"1px solid var(--color-border-tertiary)"}}>
         <div style={{fontWeight:500,fontSize:15}}>QA AI Platform</div>
@@ -2097,8 +2507,9 @@ function App() {
           <NotifBell userId={user.role==="admin"?"admin":user.id}/>
         </div>
         {user.role==="member"&&<button onClick={()=>setShowConfig(true)} style={{width:"100%",padding:"7px 0",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:13,color:"var(--color-text-secondary)",marginBottom:8,display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>
-          {(()=>{const ms=DB.memberSettings.find(s=>s.memberId===user.id);return ms?.claudeApiKey?<><span style={{color:"var(--color-text-success)"}}>●</span> Settings</>:<><span style={{color:"var(--color-text-warning)"}}>●</span> Settings</>})()}
+          {sessionStorage.getItem(SESSION_TOKEN_KEY)?<><span style={{color:"var(--color-text-success)"}}>●</span> Settings</>:<><span style={{color:"var(--color-text-warning)"}}>●</span> Settings</>}
         </button>}
+        {user.role==="admin"&&<button onClick={()=>setShowChangePwd(true)} style={{width:"100%",padding:"7px 0",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:13,color:"var(--color-text-secondary)",marginBottom:8}}>🔒 Change Password</button>}
         <button onClick={handleLogout} style={{width:"100%",padding:"8px 0",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:13,color:"var(--color-text-secondary)"}}>Sign out</button>
       </div>
     </div>
