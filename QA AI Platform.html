@@ -673,8 +673,10 @@ function DashboardPage() {
   const [sd,setSd]=useState(null);
   const [tab,setTab]=useState("sessions");
   const [loading,setLoading]=useState(true);
-  const [bugProjFilter,setBugProjFilter]=useState("All");
-  const [bugMemberFilter,setBugMemberFilter]=useState("All");
+  const [sessMember,setSessMember]=useState("All"); const [sessProj,setSessProj]=useState("All");
+  const [bugMember,setBugMember]=useState("All"); const [bugProj,setBugProj]=useState("All");
+  const [perfMember,setPerfMember]=useState("All"); const [perfProj,setPerfProj]=useState("All");
+  const [covMember,setCovMember]=useState("All"); const [covProj,setCovProj]=useState("All");
   const fetchData=()=>{
     setLoading(true);
     const adminToken=sessionStorage.getItem(ADMIN_TOKEN_KEY)||"";
@@ -684,9 +686,12 @@ function DashboardPage() {
   };
   useEffect(()=>{fetchData();},[]);
   const sessions=sd?.sessions||[]; const bugs=sd?.bugs||[]; const perfs=sd?.perfResults||[]; const cov=sd?.coverage||[];
-  const bugProjects=["All",...new Set(bugs.map(x=>x.projectName).filter(Boolean))];
-  const bugMembers=["All",...new Set(bugs.map(x=>x.memberName).filter(Boolean))];
-  const filteredBugs=bugs.filter(x=>(bugProjFilter==="All"||(x.projectName||"")=== bugProjFilter)&&(bugMemberFilter==="All"||x.memberName===bugMemberFilter));
+  const memberOpts=["All",...DB.members.map(m=>m.name).filter(Boolean)];
+  const projOpts=["All",...DB.projects.map(p=>p.name).filter(Boolean)];
+  const filteredSess=sessions.filter(x=>(sessMember==="All"||x.memberName===sessMember)&&(sessProj==="All"||(x.projectName||"")==sessProj));
+  const filteredBugs=bugs.filter(x=>(bugMember==="All"||x.memberName===bugMember)&&(bugProj==="All"||(x.projectName||"")==bugProj));
+  const filteredPerfs=perfs.filter(x=>(perfMember==="All"||x.memberName===perfMember)&&(perfProj==="All"||(x.projectName||"")==perfProj));
+  const filteredCov=cov.filter(x=>(covMember==="All"||x.memberName===covMember)&&(covProj==="All"||(x.projectName||"")==covProj));
   const tp=sessions.reduce((a,x)=>a+(x.passed||0),0), tf=sessions.reduce((a,x)=>a+(x.failed||0),0);
   const pr=tp+tf>0?Math.round(tp/(tp+tf)*100):0;
   const perfPassed=perfs.filter(x=>x.passed).length;
@@ -700,7 +705,15 @@ function DashboardPage() {
   ];
   const th={textAlign:"left",padding:"8px 10px",borderBottom:"1px solid var(--color-border-tertiary)",fontSize:12,fontWeight:500,color:"var(--color-text-secondary)"};
   const td={padding:"8px 10px",borderBottom:"1px solid var(--color-border-tertiary)",fontSize:13};
+  const fsel={padding:"4px 10px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"var(--color-background-primary)",color:"var(--color-text-primary)",fontSize:13,cursor:"pointer"};
   const tabBtn=(t,label)=><button onClick={()=>setTab(t)} style={{padding:"6px 16px",borderRadius:8,border:"1px solid "+(tab===t?"var(--color-text-info)":"var(--color-border-secondary)"),background:tab===t?"var(--color-background-info)":"transparent",cursor:"pointer",fontSize:13,fontWeight:tab===t?600:400,color:tab===t?"var(--color-text-info)":"var(--color-text-secondary)"}}>{label}</button>;
+  const FilterBar=({member,setMember,proj,setProj})=><div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+    <label style={{fontSize:12,color:"var(--color-text-secondary)"}}>Member:</label>
+    <select value={member} onChange={e=>setMember(e.target.value)} style={fsel}>{memberOpts.map(m=><option key={m} value={m}>{m}</option>)}</select>
+    <label style={{fontSize:12,color:"var(--color-text-secondary)"}}>Project:</label>
+    <select value={proj} onChange={e=>setProj(e.target.value)} style={fsel}>{projOpts.map(p=><option key={p} value={p}>{p}</option>)}</select>
+    {(member!=="All"||proj!=="All")&&<button onClick={()=>{setMember("All");setProj("All");}} style={{padding:"4px 10px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:12,color:"var(--color-text-secondary)"}}>✕ Clear</button>}
+  </div>;
   return <div>
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
       <H1 style={{marginBottom:0}}>Dashboard</H1>
@@ -714,11 +727,15 @@ function DashboardPage() {
     <div style={{display:"flex",gap:8,marginBottom:16}}>{tabBtn("sessions","📋 Sessions")}{tabBtn("bugs","🐛 Bugs")}{tabBtn("perf","⚡ Performance")}{tabBtn("coverage","📊 Coverage")}</div>
 
     {tab==="sessions"&&<div style={card}>
-      <H2>Test Sessions — all members</H2>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,flexWrap:"wrap",gap:8}}>
+        <H2 style={{marginBottom:0}}>Test Sessions</H2>
+        <FilterBar member={sessMember} setMember={setSessMember} proj={sessProj} setProj={setSessProj}/>
+      </div>
       {sessions.length===0?<div style={{color:"var(--color-text-tertiary)",fontSize:14}}>No sessions synced yet. Sessions appear here after members complete test execution.</div>:
+      filteredSess.length===0?<div style={{color:"var(--color-text-tertiary)",fontSize:14}}>No sessions match the selected filters.</div>:
       <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
         <thead><tr><th style={th}>Member</th><th style={th}>Project</th><th style={th}>Story</th><th style={th}>Summary</th><th style={th}>Platform</th><th style={th}>Passed</th><th style={th}>Failed</th><th style={th}>Date</th></tr></thead>
-        <tbody>{sessions.slice(0,50).map((x,i)=><tr key={i}>
+        <tbody>{filteredSess.slice(0,50).map((x,i)=><tr key={i}>
           <td style={td}><b>{x.memberName}</b></td>
           <td style={td}><Tag c="blue">{x.projectName||"—"}</Tag></td>
           <td style={td}><Tag c="blue">{x.sid}</Tag></td>
@@ -733,18 +750,8 @@ function DashboardPage() {
 
     {tab==="bugs"&&<div style={card}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,flexWrap:"wrap",gap:8}}>
-        <H2 style={{marginBottom:0}}>Bugs Filed — all members</H2>
-        <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
-          <label style={{fontSize:12,color:"var(--color-text-secondary)"}}>Project:</label>
-          <select value={bugProjFilter} onChange={e=>{setBugProjFilter(e.target.value);}} style={{padding:"4px 10px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"var(--color-background-primary)",color:"var(--color-text-primary)",fontSize:13,cursor:"pointer"}}>
-            {bugProjects.map(p=><option key={p} value={p}>{p}</option>)}
-          </select>
-          <label style={{fontSize:12,color:"var(--color-text-secondary)"}}>Member:</label>
-          <select value={bugMemberFilter} onChange={e=>{setBugMemberFilter(e.target.value);}} style={{padding:"4px 10px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"var(--color-background-primary)",color:"var(--color-text-primary)",fontSize:13,cursor:"pointer"}}>
-            {bugMembers.map(m=><option key={m} value={m}>{m}</option>)}
-          </select>
-          {(bugProjFilter!=="All"||bugMemberFilter!=="All")&&<button onClick={()=>{setBugProjFilter("All");setBugMemberFilter("All");}} style={{padding:"4px 10px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:12,color:"var(--color-text-secondary)"}}>✕ Clear</button>}
-        </div>
+        <H2 style={{marginBottom:0}}>Bugs Filed</H2>
+        <FilterBar member={bugMember} setMember={setBugMember} proj={bugProj} setProj={setBugProj}/>
       </div>
       {bugs.length===0?<div style={{color:"var(--color-text-tertiary)",fontSize:14}}>No bugs synced yet. Bugs appear here after members file them.</div>:
       filteredBugs.length===0?<div style={{color:"var(--color-text-tertiary)",fontSize:14}}>No bugs match the selected filters.</div>:
@@ -764,11 +771,15 @@ function DashboardPage() {
     </div>}
 
     {tab==="perf"&&<div style={card}>
-      <H2>Performance Tests — all members</H2>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,flexWrap:"wrap",gap:8}}>
+        <H2 style={{marginBottom:0}}>Performance Tests</H2>
+        <FilterBar member={perfMember} setMember={setPerfMember} proj={perfProj} setProj={setPerfProj}/>
+      </div>
       {perfs.length===0?<div style={{color:"var(--color-text-tertiary)",fontSize:14}}>No performance tests synced yet.</div>:
+      filteredPerfs.length===0?<div style={{color:"var(--color-text-tertiary)",fontSize:14}}>No performance tests match the selected filters.</div>:
       <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
         <thead><tr><th style={th}>Test Name</th><th style={th}>Member</th><th style={th}>Project</th><th style={th}>Type</th><th style={th}>VUs</th><th style={th}>p95</th><th style={th}>Threshold</th><th style={th}>Result</th><th style={th}>Date</th></tr></thead>
-        <tbody>{perfs.slice(0,50).map((x,i)=><tr key={i}>
+        <tbody>{filteredPerfs.slice(0,50).map((x,i)=><tr key={i}>
           <td style={td}><b>{x.testName}</b></td>
           <td style={td}>{x.memberName}</td>
           <td style={td}><span style={{fontSize:12}}>{x.projectName||"—"}</span></td>
@@ -783,11 +794,15 @@ function DashboardPage() {
     </div>}
 
     {tab==="coverage"&&<div style={card}>
-      <H2>Coverage Reports — all members</H2>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,flexWrap:"wrap",gap:8}}>
+        <H2 style={{marginBottom:0}}>Coverage Reports</H2>
+        <FilterBar member={covMember} setMember={setCovMember} proj={covProj} setProj={setCovProj}/>
+      </div>
       {cov.length===0?<div style={{color:"var(--color-text-tertiary)",fontSize:14}}>No coverage reports synced yet.</div>:
+      filteredCov.length===0?<div style={{color:"var(--color-text-tertiary)",fontSize:14}}>No coverage reports match the selected filters.</div>:
       <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
         <thead><tr><th style={th}>Member</th><th style={th}>Project</th><th style={th}>Story</th><th style={th}>Summary</th><th style={th}>Platform</th><th style={th}>Approved Cases</th><th style={th}>Passed</th><th style={th}>Failed</th><th style={th}>Bugs</th><th style={th}>Date</th></tr></thead>
-        <tbody>{cov.slice(0,50).map((x,i)=><tr key={i}>
+        <tbody>{filteredCov.slice(0,50).map((x,i)=><tr key={i}>
           <td style={td}><b>{x.memberName}</b></td>
           <td style={td}><span style={{fontSize:12}}>{x.projectName||"—"}</span></td>
           <td style={td}><Tag c="blue">{x.sid}</Tag></td>
@@ -804,28 +819,6 @@ function DashboardPage() {
   </div>;
 }
 
-function BugsPage() {
-  const [bugs,setBugs]=useState([...DB.bugs]); const [flt,setFlt]=useState("All");
-  const shown=flt==="All"?bugs:bugs.filter(b=>b.sev===flt);
-  const upd=(bid,s)=>{ const b=DB.bugs.find(x=>x.bid===bid); if(b){b.status=s;saveDB();setBugs([...DB.bugs]);} };
-  const th={textAlign:"left",padding:"8px 12px",borderBottom:"1px solid var(--color-border-tertiary)",fontSize:12,fontWeight:500,color:"var(--color-text-secondary)"};
-  const td={padding:"10px 12px",borderBottom:"1px solid var(--color-border-tertiary)"};
-  return <div>
-    <H1>Bug Tracker</H1>
-    <div style={{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap"}}>
-      {["All","Critical","High","Medium","Low"].map(s=><button key={s} onClick={()=>setFlt(s)} style={{padding:"6px 14px",borderRadius:8,border:`1px solid ${flt===s?"transparent":"var(--color-border-secondary)"}`,background:flt===s?"var(--color-text-info)":"transparent",cursor:"pointer",fontSize:13,fontWeight:500,color:flt===s?"#fff":"var(--color-text-secondary)"}}>{s}</button>)}
-    </div>
-    <div style={card}>{shown.length===0?<div style={{color:"var(--color-text-tertiary)",fontSize:14}}>No bugs.</div>:
-      <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
-        <thead><tr><th style={th}>Bug</th><th style={th}>Story</th><th style={th}>Summary</th><th style={th}>Sev</th><th style={th}>Status</th><th style={th}>Filed by</th></tr></thead>
-        <tbody>{shown.map((b,i)=><tr key={i}><td style={td}><Tag c="red">{b.bid}</Tag></td><td style={td}><Tag c="blue">{b.sid}</Tag></td><td style={td}><span style={{fontSize:12}}>{b.summary}</span></td><td style={td}><Tag c={b.sev==="Critical"||b.sev==="High"?"red":"amber"}>{b.sev}</Tag></td>
-          <td style={td}><select style={{...sel,width:"auto",padding:"4px 8px",fontSize:12}} value={b.status} onChange={e=>upd(b.bid,e.target.value)}>{["Open","In Progress","Fixed","Closed"].map(s=><option key={s}>{s}</option>)}</select></td>
-          <td style={td}><span style={{fontSize:12}}>{b.who}</span></td>
-        </tr>)}</tbody>
-      </table>}
-    </div>
-  </div>;
-}
 
 /* ─── ADF text extractor (recursive) ────────────────────────────────────── */
 function adfToText(node) {
