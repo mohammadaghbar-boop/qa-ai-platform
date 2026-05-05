@@ -664,8 +664,14 @@ function DashboardPage() {
   const [sd,setSd]=useState(null);
   const [tab,setTab]=useState("sessions");
   const [loading,setLoading]=useState(true);
+  const [sessProjFilter,setSessProjFilter]=useState("All");
+  const [sessMemberFilter,setSessMemberFilter]=useState("All");
   const [bugProjFilter,setBugProjFilter]=useState("All");
   const [bugMemberFilter,setBugMemberFilter]=useState("All");
+  const [perfProjFilter,setPerfProjFilter]=useState("All");
+  const [perfMemberFilter,setPerfMemberFilter]=useState("All");
+  const [covProjFilter,setCovProjFilter]=useState("All");
+  const [covMemberFilter,setCovMemberFilter]=useState("All");
   const fetchData=()=>{
     setLoading(true);
     const adminToken=sessionStorage.getItem(ADMIN_TOKEN_KEY)||"";
@@ -675,9 +681,20 @@ function DashboardPage() {
   };
   useEffect(()=>{fetchData();},[]);
   const sessions=sd?.sessions||[]; const bugs=sd?.bugs||[]; const perfs=sd?.perfResults||[]; const cov=sd?.coverage||[];
-  const bugProjects=["All",...new Set([...DB.projects.map(p=>p.name).filter(Boolean),...bugs.map(x=>x.projectName).filter(Boolean)])];
-  const bugMembers=["All",...new Set([...(sd?.members||DB.members).map(m=>m.name).filter(Boolean),...bugs.map(x=>x.memberName).filter(Boolean)])];
-  const filteredBugs=bugs.filter(x=>(bugProjFilter==="All"||(x.projectName||"")=== bugProjFilter)&&(bugMemberFilter==="All"||x.memberName===bugMemberFilter));
+  const allProjects=["All",...new Set([...DB.projects.map(p=>p.name),...sessions.map(x=>x.projectName),...bugs.map(x=>x.projectName),...perfs.map(x=>x.projectName),...cov.map(x=>x.projectName)].filter(Boolean))];
+  const allMembers=["All",...new Set([...(sd?.members||DB.members).map(m=>m.name),...sessions.map(x=>x.memberName),...bugs.map(x=>x.memberName),...perfs.map(x=>x.memberName),...cov.map(x=>x.memberName)].filter(Boolean))];
+  const filteredSessions=sessions.filter(x=>(sessProjFilter==="All"||(x.projectName||"")===sessProjFilter)&&(sessMemberFilter==="All"||x.memberName===sessMemberFilter));
+  const filteredBugs=bugs.filter(x=>(bugProjFilter==="All"||(x.projectName||"")===bugProjFilter)&&(bugMemberFilter==="All"||x.memberName===bugMemberFilter));
+  const filteredPerfs=perfs.filter(x=>(perfProjFilter==="All"||(x.projectName||"")===perfProjFilter)&&(perfMemberFilter==="All"||x.memberName===perfMemberFilter));
+  const filteredCov=cov.filter(x=>(covProjFilter==="All"||(x.projectName||"")===covProjFilter)&&(covMemberFilter==="All"||x.memberName===covMemberFilter));
+  const selStyle={padding:"4px 10px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"var(--color-background-primary)",color:"var(--color-text-primary)",fontSize:13,cursor:"pointer"};
+  const FilterBar=({projF,setProj,memberF,setMember})=><div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+    <label style={{fontSize:12,color:"var(--color-text-secondary)"}}>Project:</label>
+    <select value={projF} onChange={e=>setProj(e.target.value)} style={selStyle}>{allProjects.map(p=><option key={p} value={p}>{p}</option>)}</select>
+    <label style={{fontSize:12,color:"var(--color-text-secondary)"}}>Member:</label>
+    <select value={memberF} onChange={e=>setMember(e.target.value)} style={selStyle}>{allMembers.map(m=><option key={m} value={m}>{m}</option>)}</select>
+    {(projF!=="All"||memberF!=="All")&&<button onClick={()=>{setProj("All");setMember("All");}} style={{padding:"4px 10px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:12,color:"var(--color-text-secondary)"}}>✕ Clear</button>}
+  </div>;
   const tp=sessions.reduce((a,x)=>a+(x.passed||0),0), tf=sessions.reduce((a,x)=>a+(x.failed||0),0);
   const pr=tp+tf>0?Math.round(tp/(tp+tf)*100):0;
   const perfPassed=perfs.filter(x=>x.passed).length;
@@ -705,11 +722,15 @@ function DashboardPage() {
     <div style={{display:"flex",gap:8,marginBottom:16}}>{tabBtn("sessions","📋 Sessions")}{tabBtn("bugs","🐛 Bugs")}{tabBtn("perf","⚡ Performance")}{tabBtn("coverage","📊 Coverage")}</div>
 
     {tab==="sessions"&&<div style={card}>
-      <H2>Test Sessions — all members</H2>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,flexWrap:"wrap",gap:8}}>
+        <H2 style={{marginBottom:0}}>Test Sessions — all members</H2>
+        <FilterBar projF={sessProjFilter} setProj={setSessProjFilter} memberF={sessMemberFilter} setMember={setSessMemberFilter}/>
+      </div>
       {sessions.length===0?<div style={{color:"var(--color-text-tertiary)",fontSize:14}}>No sessions synced yet. Sessions appear here after members complete test execution.</div>:
+      filteredSessions.length===0?<div style={{color:"var(--color-text-tertiary)",fontSize:14}}>No sessions match the selected filters.</div>:
       <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
         <thead><tr><th style={th}>Member</th><th style={th}>Project</th><th style={th}>Story</th><th style={th}>Summary</th><th style={th}>Platform</th><th style={th}>Passed</th><th style={th}>Failed</th><th style={th}>Date</th></tr></thead>
-        <tbody>{sessions.slice(0,50).map((x,i)=><tr key={i}>
+        <tbody>{filteredSessions.slice(0,50).map((x,i)=><tr key={i}>
           <td style={td}><b>{x.memberName}</b></td>
           <td style={td}><Tag c="blue">{x.projectName||"—"}</Tag></td>
           <td style={td}><Tag c="blue">{x.sid}</Tag></td>
@@ -725,17 +746,7 @@ function DashboardPage() {
     {tab==="bugs"&&<div style={card}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,flexWrap:"wrap",gap:8}}>
         <H2 style={{marginBottom:0}}>Bugs Filed — all members</H2>
-        <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
-          <label style={{fontSize:12,color:"var(--color-text-secondary)"}}>Project:</label>
-          <select value={bugProjFilter} onChange={e=>{setBugProjFilter(e.target.value);}} style={{padding:"4px 10px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"var(--color-background-primary)",color:"var(--color-text-primary)",fontSize:13,cursor:"pointer"}}>
-            {bugProjects.map(p=><option key={p} value={p}>{p}</option>)}
-          </select>
-          <label style={{fontSize:12,color:"var(--color-text-secondary)"}}>Member:</label>
-          <select value={bugMemberFilter} onChange={e=>{setBugMemberFilter(e.target.value);}} style={{padding:"4px 10px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"var(--color-background-primary)",color:"var(--color-text-primary)",fontSize:13,cursor:"pointer"}}>
-            {bugMembers.map(m=><option key={m} value={m}>{m}</option>)}
-          </select>
-          {(bugProjFilter!=="All"||bugMemberFilter!=="All")&&<button onClick={()=>{setBugProjFilter("All");setBugMemberFilter("All");}} style={{padding:"4px 10px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:12,color:"var(--color-text-secondary)"}}>✕ Clear</button>}
-        </div>
+        <FilterBar projF={bugProjFilter} setProj={setBugProjFilter} memberF={bugMemberFilter} setMember={setBugMemberFilter}/>
       </div>
       {bugs.length===0?<div style={{color:"var(--color-text-tertiary)",fontSize:14}}>No bugs synced yet. Bugs appear here after members file them.</div>:
       filteredBugs.length===0?<div style={{color:"var(--color-text-tertiary)",fontSize:14}}>No bugs match the selected filters.</div>:
@@ -755,11 +766,15 @@ function DashboardPage() {
     </div>}
 
     {tab==="perf"&&<div style={card}>
-      <H2>Performance Tests — all members</H2>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,flexWrap:"wrap",gap:8}}>
+        <H2 style={{marginBottom:0}}>Performance Tests — all members</H2>
+        <FilterBar projF={perfProjFilter} setProj={setPerfProjFilter} memberF={perfMemberFilter} setMember={setPerfMemberFilter}/>
+      </div>
       {perfs.length===0?<div style={{color:"var(--color-text-tertiary)",fontSize:14}}>No performance tests synced yet.</div>:
+      filteredPerfs.length===0?<div style={{color:"var(--color-text-tertiary)",fontSize:14}}>No performance tests match the selected filters.</div>:
       <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
         <thead><tr><th style={th}>Test Name</th><th style={th}>Member</th><th style={th}>Project</th><th style={th}>Type</th><th style={th}>VUs</th><th style={th}>p95</th><th style={th}>Threshold</th><th style={th}>Result</th><th style={th}>Date</th></tr></thead>
-        <tbody>{perfs.slice(0,50).map((x,i)=><tr key={i}>
+        <tbody>{filteredPerfs.slice(0,50).map((x,i)=><tr key={i}>
           <td style={td}><b>{x.testName}</b></td>
           <td style={td}>{x.memberName}</td>
           <td style={td}><span style={{fontSize:12}}>{x.projectName||"—"}</span></td>
@@ -774,11 +789,15 @@ function DashboardPage() {
     </div>}
 
     {tab==="coverage"&&<div style={card}>
-      <H2>Coverage Reports — all members</H2>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,flexWrap:"wrap",gap:8}}>
+        <H2 style={{marginBottom:0}}>Coverage Reports — all members</H2>
+        <FilterBar projF={covProjFilter} setProj={setCovProjFilter} memberF={covMemberFilter} setMember={setCovMemberFilter}/>
+      </div>
       {cov.length===0?<div style={{color:"var(--color-text-tertiary)",fontSize:14}}>No coverage reports synced yet.</div>:
+      filteredCov.length===0?<div style={{color:"var(--color-text-tertiary)",fontSize:14}}>No coverage reports match the selected filters.</div>:
       <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
         <thead><tr><th style={th}>Member</th><th style={th}>Project</th><th style={th}>Story</th><th style={th}>Summary</th><th style={th}>Platform</th><th style={th}>Approved Cases</th><th style={th}>Passed</th><th style={th}>Failed</th><th style={th}>Bugs</th><th style={th}>Date</th></tr></thead>
-        <tbody>{cov.slice(0,50).map((x,i)=><tr key={i}>
+        <tbody>{filteredCov.slice(0,50).map((x,i)=><tr key={i}>
           <td style={td}><b>{x.memberName}</b></td>
           <td style={td}><span style={{fontSize:12}}>{x.projectName||"—"}</span></td>
           <td style={td}><Tag c="blue">{x.sid}</Tag></td>
