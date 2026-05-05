@@ -1184,6 +1184,7 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
         (data.lines||[]).forEach(l=>addLine(l));
         const passedSet=new Set(data.passed||[]);
         const failedMap=new Map((data.failed||[]).map(f=>[f.title,f.error]));
+        const totalReported=passedSet.size+failedMap.size;
         const pass=[],fail=[];
         for(const c of pool){
           const fp=[...failedMap.entries()].find(([t])=>t.includes(c.id)||t.toLowerCase().includes(c.title.toLowerCase().slice(0,20)));
@@ -1191,7 +1192,8 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
           if(fp) fail.push({...c,_pwError:fp[1]});
           else if(pp) pass.push(c);
           else if(data.error) fail.push({...c,_pwError:data.error==="timeout"?"Test run timed out":data.error});
-          else pass.push(c);
+          else if(totalReported===0) fail.push({...c,_pwError:"Test was not executed — Playwright reported 0 results. Check that test file names and test titles match the generated scripts."});
+          else fail.push({...c,_pwError:"Test result not found in Playwright output — test may not have run or title did not match."});
         }
         DB.sessions.push({name:member.name,sid,platform,passed:pass.length,failed:fail.length}); saveDB();
         if(fail.length>0) pushNotif("admin","⚠ "+fail.length+" failure(s) in "+sid+" — "+member.name);
