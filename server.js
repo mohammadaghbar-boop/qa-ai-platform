@@ -225,10 +225,12 @@ function callClaude(messages, system) {
       (m.role === 'user' ? 'Human' : 'Assistant') + ': ' + m.content
     ).join('\n\n');
     const fullPrompt = system ? `[System: ${system}]\n\n${conversation}` : conversation;
-    const proc = spawn('claude', [
-      '-p', '--output-format', 'text',
-      '--strict-mcp-config', '--mcp-config', EMPTY_MCP
-    ], { shell: true, env: process.env });
+    const isWin = process.platform === 'win32';
+    const claudeCmd = isWin ? 'cmd' : 'claude';
+    const claudeArgs = isWin
+      ? ['/c', process.env.APPDATA + '\\npm\\claude.cmd', '-p', '--output-format', 'text', '--strict-mcp-config', '--mcp-config', EMPTY_MCP]
+      : ['-p', '--output-format', 'text', '--strict-mcp-config', '--mcp-config', EMPTY_MCP];
+    const proc = spawn(claudeCmd, claudeArgs, { shell: false, env: process.env });
     let output = '', error = '';
     proc.stdin.write(fullPrompt);
     proc.stdin.end();
