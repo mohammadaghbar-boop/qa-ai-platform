@@ -675,8 +675,8 @@ function DashboardPage() {
   };
   useEffect(()=>{fetchData();},[]);
   const sessions=sd?.sessions||[]; const bugs=sd?.bugs||[]; const perfs=sd?.perfResults||[]; const cov=sd?.coverage||[];
-  const bugProjects=["All",...new Set(bugs.map(x=>x.projectName).filter(Boolean))];
-  const bugMembers=["All",...new Set(bugs.map(x=>x.memberName).filter(Boolean))];
+  const bugProjects=["All",...new Set([...DB.projects.map(p=>p.name).filter(Boolean),...bugs.map(x=>x.projectName).filter(Boolean)])];
+  const bugMembers=["All",...new Set([...(sd?.members||DB.members).map(m=>m.name).filter(Boolean),...bugs.map(x=>x.memberName).filter(Boolean)])];
   const filteredBugs=bugs.filter(x=>(bugProjFilter==="All"||(x.projectName||"")=== bugProjFilter)&&(bugMemberFilter==="All"||x.memberName===bugMemberFilter));
   const tp=sessions.reduce((a,x)=>a+(x.passed||0),0), tf=sessions.reduce((a,x)=>a+(x.failed||0),0);
   const pr=tp+tf>0?Math.round(tp/(tp+tf)*100):0;
