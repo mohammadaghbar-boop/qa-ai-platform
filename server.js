@@ -250,7 +250,8 @@ function proxyJira(jiraUrl, jiraPath, method, auth, body) {
     if (!jiraUrl || !isValidJiraUrl(jiraUrl)) {
       reject(new Error('Invalid Jira URL. Must be a public HTTPS address.')); return;
     }
-    const baseUrl = jiraUrl.replace(/\/+$/, ''); // strip trailing slashes
+    // Use only the origin (protocol + hostname) — strip any path the user may have pasted
+    const baseUrl = new URL(jiraUrl).origin;
     const url  = new URL(baseUrl + '/rest/api/3' + jiraPath);
     const opts = {
       hostname: url.hostname,

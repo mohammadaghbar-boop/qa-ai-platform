@@ -2342,7 +2342,8 @@ function MemberConfigDialog({memberId, onClose}) {
     setTesting(true);setTestMsg("");
     try{
       const mt=sessionStorage.getItem(MEMBER_TOKEN_KEY)||"";
-      const sr=await fetch(API_BASE+"/api/auth/session",{method:"POST",headers:{"Content-Type":"application/json","X-Member-Token":mt},body:JSON.stringify({memberId,jiraUrl:f.jiraUrl,jiraEmail:f.jiraEmail,jiraToken:f.jiraToken})});
+      const cleanUrl=(()=>{try{return new URL(f.jiraUrl.trim()).origin;}catch{return f.jiraUrl.trim();}})();
+      const sr=await fetch(API_BASE+"/api/auth/session",{method:"POST",headers:{"Content-Type":"application/json","X-Member-Token":mt},body:JSON.stringify({memberId,jiraUrl:cleanUrl,jiraEmail:f.jiraEmail,jiraToken:f.jiraToken})});
       const sd=await sr.json();
       if(!sd.sessionToken)throw new Error("Could not create test session");
       const r=await fetch(API_BASE+"/api/jira",{method:"POST",headers:{"Content-Type":"application/json","X-Session-Token":sd.sessionToken},body:JSON.stringify({path:"/myself",method:"GET"})});
@@ -2360,7 +2361,7 @@ function MemberConfigDialog({memberId, onClose}) {
       const r=await fetch(API_BASE+"/api/members/"+memberId+"/credentials",{
         method:"POST",
         headers:{"Content-Type":"application/json","X-Member-Token":mt||""},
-        body:JSON.stringify({jiraUrl:f.jiraUrl.trim(),jiraEmail:f.jiraEmail.trim(),jiraToken:f.jiraToken.trim()})
+        body:JSON.stringify({jiraUrl:(()=>{try{return new URL(f.jiraUrl.trim()).origin;}catch{return f.jiraUrl.trim();}})(),jiraEmail:f.jiraEmail.trim(),jiraToken:f.jiraToken.trim()})
       });
       const d=await r.json();
       if(!r.ok)throw new Error(d.error||"Save failed");
@@ -2385,7 +2386,11 @@ function MemberConfigDialog({memberId, onClose}) {
 
       <div style={{display:"flex",flexDirection:"column",gap:14}}>
         <div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:2}}>Connect to your Jira instance to fetch user stories and link bugs. AI features run via Claude CLI — no API key needed.</div>
-        <div><Lbl>Jira URL</Lbl><input style={inp} value={f.jiraUrl} onChange={e=>sf({jiraUrl:e.target.value})} placeholder="https://yourorg.atlassian.net"/></div>
+        <div>
+          <Lbl>Jira URL <span style={{fontWeight:400,color:"var(--color-text-tertiary)"}}>— base URL only, e.g. https://yourorg.atlassian.net</span></Lbl>
+          <input style={inp} value={f.jiraUrl} onChange={e=>sf({jiraUrl:e.target.value})} placeholder="https://yourorg.atlassian.net"/>
+          {f.jiraUrl&&(()=>{try{const o=new URL(f.jiraUrl).origin;return o!==f.jiraUrl.trim().replace(/\/+$/,'')&&<div style={{fontSize:11,color:"var(--color-text-warning)",marginTop:3}}>⚠ Path detected — only the base URL is used: <b>{o}</b></div>}catch{return null;}})()}
+        </div>
         <div><Lbl>Email</Lbl><input style={inp} value={f.jiraEmail} onChange={e=>sf({jiraEmail:e.target.value})} placeholder="you@company.com"/></div>
         <div><Lbl>API Token</Lbl><input type="password" style={inp} value={f.jiraToken} onChange={e=>sf({jiraToken:e.target.value})} placeholder="••••••"/><div style={{fontSize:11,color:"var(--color-text-tertiary)",marginTop:3}}>Get yours at id.atlassian.com → Security → API Tokens</div></div>
         {f.jiraUrl&&f.jiraEmail&&f.jiraToken&&<div>
