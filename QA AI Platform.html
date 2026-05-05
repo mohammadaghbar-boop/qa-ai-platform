@@ -1092,22 +1092,28 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
     }
     setLoading(true); setLmsg("Generating "+fwName(platform)+" scripts…");
     const selCases=cases.filter(c=>selectedForScripts.includes(c.id));
-    const cl=selCases.map(c=>`${c.id}: ${c.title}\n  Steps: ${(c.steps||[]).join(" → ")}\n  Expected: ${c.expected}`).join("\n\n");
+    const cl=selCases.map(c=>[
+      `${c.id}: ${c.title} [${c.type}]`,
+      c.preconditions?`  Preconditions: ${c.preconditions}`:'',
+      `  Steps:\n${(c.steps||[]).map((s,i)=>`    ${i+1}. ${s}`).join('\n')}`,
+      `  *** EXPECTED RESULT (MUST BE ASSERTED): ${c.expected} ***`
+    ].filter(Boolean).join('\n')).join("\n\n");
+    const assertionRules=`\nCRITICAL ASSERTION RULES — follow exactly:\n1. Every test MUST assert the EXACT "EXPECTED RESULT" stated — this is the most important assertion.\n2. Use specific assertions: toHaveURL(), toHaveText(), toContainText(), toHaveValue(), toBeChecked(), toHaveCount() — not generic toBeVisible() alone.\n3. Add assertions after every step that produces a verifiable state change (navigation, form submit, error message shown, data saved).\n4. The final assertion in each test must directly validate the Expected Result text.\n5. NEVER write a test that can pass without actually verifying the expected outcome.`;
     const mc="";
     try {
       let newScripts,newTab,newFiles;
       if(platform==="mobile"){
         const urlCtx=appUrl.trim()?`\nApp URL: ${appUrl.trim()}`:"";
         const [iosR,andR]=await Promise.all([
-          callAI([{role:"user",content:`Generate a COMPLETE runnable Appium WebdriverIO test file for iOS, story ${sid}.${urlCtx} Output ONLY JavaScript code — no markdown fences, no explanations, no prose.\nTest cases:\n${cl}\nManual-only stubs (use it.skip):\n${mc}\nRequirements: describe/it blocks, XCUITest capabilities, accessibility id selectors, full test implementation with actual driver.$$ commands and assertions, beforeEach/afterEach hooks, CommonJS require syntax. Start the file directly with const/require statements.`}],SYS,6000,""),
-          callAI([{role:"user",content:`Generate a COMPLETE runnable Appium WebdriverIO test file for Android, story ${sid}.${urlCtx} Output ONLY JavaScript code — no markdown fences, no explanations, no prose.\nTest cases:\n${cl}\nManual-only stubs (use it.skip):\n${mc}\nRequirements: describe/it blocks, UiAutomator2 capabilities, android UiSelector or accessibility id selectors, full test implementation with actual driver.$$ commands and assertions, beforeEach/afterEach hooks, CommonJS require syntax. Start the file directly with const/require statements.`}],SYS,6000,"")
+          callAI([{role:"user",content:`Generate a COMPLETE runnable Appium WebdriverIO test file for iOS, story ${sid}.${urlCtx}\nOutput ONLY JavaScript code — no markdown fences, no explanations.\n${assertionRules}\nTest cases:\n${cl}\nRequirements: describe/it blocks, XCUITest capabilities, accessibility id selectors, driver.$$ commands, specific assertions on expected results (expect(el).toHaveText(), expect(el).toBeDisplayed()), beforeEach/afterEach hooks, CommonJS require. Start directly with require statements.`}],SYS,8000,""),
+          callAI([{role:"user",content:`Generate a COMPLETE runnable Appium WebdriverIO test file for Android, story ${sid}.${urlCtx}\nOutput ONLY JavaScript code — no markdown fences, no explanations.\n${assertionRules}\nTest cases:\n${cl}\nRequirements: describe/it blocks, UiAutomator2 capabilities, UiSelector or accessibility id selectors, driver.$$ commands, specific assertions on expected results (expect(el).toHaveText(), expect(el).toBeDisplayed()), beforeEach/afterEach hooks, CommonJS require. Start directly with require statements.`}],SYS,8000,"")
         ]);
         newScripts={ios:iosR,android:andR,web:""}; newTab="ios";
         newFiles={"wdio.ios.js":`exports.config={specs:["./tests/ios/*.js"],capabilities:[{platformName:"iOS","appium:automationName":"XCUITest"}],framework:"mocha",reporters:["spec"]};`,"wdio.android.js":`exports.config={specs:["./tests/android/*.js"],capabilities:[{platformName:"Android","appium:automationName":"UiAutomator2"}],framework:"mocha",reporters:["spec"]};`,[`tests/ios/${sid}.spec.js`]:iosR,[`tests/android/${sid}.spec.js`]:andR,"README.md":`# Appium Tests — ${sid}\n\nnpm install && npm run test:ios`};
       } else {
         const baseUrl=appUrl.trim()||"http://localhost:3000";
-        const codegenCtx=codegenScript.trim()?`\n\nRecorded Playwright Codegen Script (IMPORTANT: reuse these exact locators and page interactions in your implementation — do not invent selectors):\n\`\`\`javascript\n${codegenScript}\n\`\`\``:"";
-        const r=await callAI([{role:"user",content:`Generate a COMPLETE runnable Playwright test file for ${sid}. Base URL: ${baseUrl}. Output ONLY JavaScript code — no markdown fences, no explanations, no prose.\nTest cases:\n${cl}\nManual-only stubs (use test.skip):\n${mc}\nRequirements: const {test,expect}=require('@playwright/test'), Page Object Model class defined at the top, use baseURL "${baseUrl}" in page.goto() calls, every test case must have a FULL implementation with page.goto/click/fill/locator calls and expect assertions, getByRole/getByLabel/getByTestId selectors, beforeEach/afterEach hooks, CommonJS require syntax. Start the file directly with the require statement.${codegenCtx}`}],SYS,6000,"");
+        const codegenCtx=codegenScript.trim()?`\n\nRecorded Playwright Codegen Script (IMPORTANT: reuse these exact locators and page interactions — do not invent selectors):\n\`\`\`javascript\n${codegenScript}\n\`\`\``:"";
+        const r=await callAI([{role:"user",content:`Generate a COMPLETE runnable Playwright test file for ${sid}. Base URL: ${baseUrl}.\nOutput ONLY JavaScript code — no markdown fences, no explanations.\n${assertionRules}\nTest cases:\n${cl}\nRequirements: const {test,expect}=require('@playwright/test'), Page Object Model class at top, page.goto() with baseURL "${baseUrl}", getByRole/getByLabel/getByTestId/getByText selectors, beforeEach/afterEach hooks, CommonJS require. Start directly with the require statement.${codegenCtx}`}],SYS,8000,"");
         newScripts={web:r,ios:"",android:""}; newTab="web";
         newFiles={"test.config.js":`module.exports={testDir:"./tests",use:{baseURL:"${baseUrl}"}};`,[`tests/${sid}.spec.js`]:r,"README.md":`# Web Tests — ${sid}\n\nnpm install && npm test`};
       }
@@ -1123,7 +1129,8 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
     const failed=result?.failedCases||[];
     const cur=platform==="mobile"?(tab==="ios"?scripts.ios:scripts.android):scripts.web;
     try {
-      const r=await callAI([{role:"user",content:`Fix failing tests for ${sid}.\nFailed:\n${failed.map(c=>`${c.id}: ${c.title}\nError: TimeoutError`).join("\n\n")}\nScript:\n${cur}\nFix locators, add waits, fix assertions. Return complete fixed script only.`}],SYS,5000,"");
+      const failedCl=failed.map(c=>`${c.id}: ${c.title}\n  Steps:\n${(c.steps||[]).map((s,i)=>`    ${i+1}. ${s}`).join('\n')}\n  Expected Result (must be asserted): ${c.expected}\n  Error: ${c._pwError||"TimeoutError"}`).join("\n\n");
+      const r=await callAI([{role:"user",content:`Fix failing Playwright tests for ${sid}.\nFailed test cases:\n${failedCl}\nCurrent script:\n${cur}\nFix locators, add proper waits, and ensure each test asserts its EXACT Expected Result using specific assertions (toHaveText, toHaveURL, toContainText, toHaveValue) — not generic toBeVisible(). Return complete fixed script only, no explanations.`}],SYS,8000,"");
       if(platform==="mobile"){if(tab==="ios")setScripts(s=>({...s,ios:r}));else setScripts(s=>({...s,android:r}));}else setScripts(s=>({...s,web:r}));
       setFixed(true); setPhase("autoReady");
     } catch(e){alert(e.message);}
