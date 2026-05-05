@@ -1053,7 +1053,8 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
     try{
       const s=JSON.parse(localStorage.getItem(WS_SNAP));
       if(!s||s.phase==="input"||s.phase==="testType")return;
-      setPhase(s.phase);setTestKind(s.testKind||"functional");setSid(s.sid||"");setSdata(s.sdata||null);setPlatform(s.platform||"web");
+      const restoredPhase=s.phase==="running"?(s.result?"result":"scripts"):s.phase;
+      setPhase(restoredPhase);setTestKind(s.testKind||"functional");setSid(s.sid||"");setSdata(s.sdata||null);setPlatform(s.platform||"web");
       setCtypes(s.ctypes||[]);setGapText(s.gapText||"");setCases(s.cases||[]);
       setScripts(s.scripts||{web:"",ios:"",android:""});setTab(s.tab||"web");
       setResult(s.result||null);setExecLines(s.execLines||[]);
