@@ -250,7 +250,8 @@ function proxyJira(jiraUrl, jiraPath, method, auth, body) {
     if (!jiraUrl || !isValidJiraUrl(jiraUrl)) {
       reject(new Error('Invalid Jira URL. Must be a public HTTPS address.')); return;
     }
-    const url  = new URL(jiraUrl + '/rest/api/3' + jiraPath);
+    const baseUrl = jiraUrl.replace(/\/+$/, ''); // strip trailing slashes
+    const url  = new URL(baseUrl + '/rest/api/3' + jiraPath);
     const opts = {
       hostname: url.hostname,
       path:     url.pathname + url.search,
@@ -263,14 +264,15 @@ function proxyJira(jiraUrl, jiraPath, method, auth, body) {
       }
     };
     const req = https.request(opts, res => {
-      let data = '';
-      res.on('data', d => data += d);
+      const chunks = [];
+      res.on('data', d => chunks.push(d));
       res.on('end', () => {
+        const data = Buffer.concat(chunks).toString('utf8');
         if (res.statusCode >= 400) {
-          reject(new Error('Jira ' + res.statusCode + ': ' + data.slice(0, 120)));
+          reject(new Error('Jira ' + res.statusCode + ': ' + data.slice(0, 200)));
         } else {
           try { resolve(JSON.parse(data)); }
-          catch { resolve(data); }
+          catch (e) { reject(new Error('Jira response parse error: ' + e.message)); }
         }
       });
     });
