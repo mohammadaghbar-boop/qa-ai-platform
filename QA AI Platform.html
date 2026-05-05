@@ -2441,7 +2441,7 @@ function App() {
   };
   const handleLogout=()=>{_currentMemberId="";localStorage.removeItem(SESSION_KEY);sessionStorage.removeItem(SESSION_KEY);sessionStorage.removeItem(SESSION_TOKEN_KEY);sessionStorage.removeItem(ADMIN_TOKEN_KEY);sessionStorage.removeItem(MEMBER_TOKEN_KEY);setUser(null);setPage("workspace");setShowConfig(false);setShowChangePwd(false);};
   if(!user) return <LoginPage onLogin={handleLogin}/>;
-  const adminNav=[{sec:"Overview",items:[{id:"dashboard",label:"Dashboard",icon:"📊"}]},{sec:"Manage",items:[{id:"members",label:"Members",icon:"👥"},{id:"projects",label:"Projects",icon:"📁"},{id:"assign",label:"Assignments",icon:"🔗"}]},{sec:"Reports",items:[{id:"bugs",label:"Bug tracker",icon:"🐛"}]}];
+  const adminNav=[{sec:"Overview",items:[{id:"dashboard",label:"Dashboard",icon:"📊"}]},{sec:"Manage",items:[{id:"members",label:"Members",icon:"👥"},{id:"projects",label:"Projects",icon:"📁"},{id:"assign",label:"Assignments",icon:"🔗"}]}];
   const memberNav=[{sec:"Work",items:[{id:"workspace",label:"Workspace",icon:"🖥"}]}];
   const nav=user.role==="admin"?adminNav:memberNav;
   return <div style={{fontFamily:"-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif",color:"var(--color-text-primary)",minHeight:"100vh",background:"var(--color-background-tertiary)",display:"flex"}}>
@@ -2534,7 +2534,6 @@ function App() {
       {user.role==="admin"&&page==="members"&&<MembersPage/>}
       {user.role==="admin"&&page==="projects"&&<ProjectsPage/>}
       {user.role==="admin"&&page==="assign"&&<AssignmentsPage/>}
-      {user.role==="admin"&&page==="bugs"&&<BugsPage/>}
       {user.role==="member"&&page==="workspace"&&<Workspace member={user.member} refreshSaved={refreshSaved} restoreTarget={restoreTarget} clearRestore={()=>setRestoreTarget(null)} onActiveSid={setActiveSid} onProjChange={setActiveProj} resetTrigger={resetTrigger}/>}
     </div>
   </div>;
