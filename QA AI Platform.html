@@ -608,7 +608,7 @@ function ProjectsPage() {
   return <div>
     <H1>Projects</H1>
     <div style={{...card,marginBottom:12,padding:"12px 16px",background:"var(--color-background-info)",border:"1px solid var(--color-border-secondary)"}}>
-      <div style={{fontSize:13,color:"var(--color-text-secondary)"}}>ℹ️ Jira credentials (URL, email, API token) and Claude API key are now configured per member in their Settings — not stored on the project.</div>
+      <div style={{fontSize:13,color:"var(--color-text-secondary)"}}>ℹ️ Jira credentials (URL, email, API token) are configured per member in their Settings. AI runs via Claude CLI — no API key needed.</div>
     </div>
     <div style={card}><H2>{editing?"Edit":"New"} project</H2>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
@@ -2264,8 +2264,7 @@ function AdminChangePasswordModal({onClose,forced}) {
 /* ─── Root App ────────────────────────────────────────────────────────────── */
 /* ─── Member Config Dialog ────────────────────────────────────────────────── */
 function MemberConfigDialog({memberId, onClose}) {
-  const [step,setStep]=useState(1);
-  const [f,setF]=useState({jiraUrl:"",jiraEmail:"",jiraToken:"",claudeApiKey:""});
+  const [f,setF]=useState({jiraUrl:"",jiraEmail:"",jiraToken:""});
   const [testing,setTesting]=useState(false);
   const [testMsg,setTestMsg]=useState("");
   const [saving,setSaving]=useState(false);
@@ -2276,8 +2275,7 @@ function MemberConfigDialog({memberId, onClose}) {
     if(!f.jiraUrl||!f.jiraToken||!f.jiraEmail){setTestMsg("Fill in all three fields first.");return;}
     setTesting(true);setTestMsg("");
     try{
-      // Use a temporary session-less test — send creds to /api/auth/session first, use token once
-      const sr=await fetch(API_BASE+"/api/auth/session",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({memberId,claudeApiKey:"test",jiraUrl:f.jiraUrl,jiraEmail:f.jiraEmail,jiraToken:f.jiraToken})});
+      const sr=await fetch(API_BASE+"/api/auth/session",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({memberId,jiraUrl:f.jiraUrl,jiraEmail:f.jiraEmail,jiraToken:f.jiraToken})});
       const sd=await sr.json();
       if(!sd.sessionToken)throw new Error("Could not create test session");
       const r=await fetch(API_BASE+"/api/jira",{method:"POST",headers:{"Content-Type":"application/json","X-Session-Token":sd.sessionToken},body:JSON.stringify({path:"/myself",method:"GET"})});
@@ -2289,14 +2287,13 @@ function MemberConfigDialog({memberId, onClose}) {
   };
 
   const save=async()=>{
-    if(!f.claudeApiKey.trim())return;
     setSaving(true);setSaveErr("");
     try{
       const mt=sessionStorage.getItem(MEMBER_TOKEN_KEY);
       const r=await fetch(API_BASE+"/api/members/"+memberId+"/credentials",{
         method:"POST",
         headers:{"Content-Type":"application/json","X-Member-Token":mt||""},
-        body:JSON.stringify({claudeApiKey:f.claudeApiKey.trim(),jiraUrl:f.jiraUrl.trim(),jiraEmail:f.jiraEmail.trim(),jiraToken:f.jiraToken.trim()})
+        body:JSON.stringify({jiraUrl:f.jiraUrl.trim(),jiraEmail:f.jiraEmail.trim(),jiraToken:f.jiraToken.trim()})
       });
       const d=await r.json();
       if(!r.ok)throw new Error(d.error||"Save failed");
@@ -2311,21 +2308,16 @@ function MemberConfigDialog({memberId, onClose}) {
 
   return <div style={overlay}>
     <div style={box}>
-      {/* Header */}
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:20}}>
         <div>
-          <div style={{fontWeight:600,fontSize:17,marginBottom:2}}>{step===1?"🔗 Jira Configuration":"🤖 Claude AI Configuration"}</div>
-          <div style={{fontSize:12,color:"var(--color-text-tertiary)"}}>Step {step} of 2 — credentials are stored encrypted on the server</div>
+          <div style={{fontWeight:600,fontSize:17,marginBottom:2}}>🔗 Jira Configuration</div>
+          <div style={{fontSize:12,color:"var(--color-text-tertiary)"}}>Jira credentials are stored encrypted on the server. Skip if you don't use Jira.</div>
         </div>
         {sessionStorage.getItem(SESSION_TOKEN_KEY)&&<button onClick={onClose} style={{background:"none",border:"none",cursor:"pointer",color:"var(--color-text-tertiary)",fontSize:20,padding:"0 4px",lineHeight:1}}>✕</button>}
       </div>
-      {/* Progress bar */}
-      <div style={{display:"flex",gap:6,marginBottom:24}}>
-        {[1,2].map(n=><div key={n} style={{flex:1,height:4,borderRadius:2,background:n<=step?"var(--color-text-info)":"var(--color-border-secondary)",transition:"background 0.2s"}}/>)}
-      </div>
 
-      {step===1&&<div style={{display:"flex",flexDirection:"column",gap:14}}>
-        <div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:2}}>Connect to your Jira instance to fetch user stories and link bugs. Skip if you don't use Jira.</div>
+      <div style={{display:"flex",flexDirection:"column",gap:14}}>
+        <div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:2}}>Connect to your Jira instance to fetch user stories and link bugs. AI features run via Claude CLI — no API key needed.</div>
         <div><Lbl>Jira URL</Lbl><input style={inp} value={f.jiraUrl} onChange={e=>sf({jiraUrl:e.target.value})} placeholder="https://yourorg.atlassian.net"/></div>
         <div><Lbl>Email</Lbl><input style={inp} value={f.jiraEmail} onChange={e=>sf({jiraEmail:e.target.value})} placeholder="you@company.com"/></div>
         <div><Lbl>API Token</Lbl><input type="password" style={inp} value={f.jiraToken} onChange={e=>sf({jiraToken:e.target.value})} placeholder="••••••"/><div style={{fontSize:11,color:"var(--color-text-tertiary)",marginTop:3}}>Get yours at id.atlassian.com → Security → API Tokens</div></div>
@@ -2335,25 +2327,12 @@ function MemberConfigDialog({memberId, onClose}) {
           </button>
           {testMsg&&<div style={{marginTop:6,fontSize:12,color:testMsg.startsWith("✓")?"var(--color-text-success)":"var(--color-text-danger)"}}>{testMsg}</div>}
         </div>}
-        <div style={{display:"flex",gap:10,marginTop:4}}>
-          <Btn v="primary" onClick={()=>{setTestMsg("");setStep(2);}}>Next →</Btn>
-          <button onClick={()=>{setTestMsg("");setStep(2);}} style={{padding:"8px 18px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:14,color:"var(--color-text-secondary)"}}>Skip Jira</button>
+        <div style={{display:"flex",gap:10,marginTop:4,alignItems:"center"}}>
+          <Btn v="primary" onClick={save} disabled={saving}>{saving?"Saving…":"Save & Continue"}</Btn>
+          <button onClick={onClose} style={{padding:"8px 18px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:14,color:"var(--color-text-secondary)"}}>Skip</button>
+          {saveErr&&<div style={{fontSize:12,color:"var(--color-text-danger)"}}>{saveErr}</div>}
         </div>
-      </div>}
-
-      {step===2&&<div style={{display:"flex",flexDirection:"column",gap:14}}>
-        <div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:2}}>Your Claude API key powers all AI features. It is stored encrypted on the server and never exposed to the browser again after saving.</div>
-        <div>
-          <Lbl>Claude API Key *</Lbl>
-          <input type="password" style={inp} value={f.claudeApiKey} onChange={e=>sf({claudeApiKey:e.target.value})} placeholder="sk-ant-api03-…" autoFocus/>
-          <div style={{fontSize:11,color:"var(--color-text-tertiary)",marginTop:3}}>Get yours at console.anthropic.com → API Keys</div>
-        </div>
-        <div style={{display:"flex",gap:10,marginTop:4}}>
-          <button onClick={()=>setStep(1)} style={{padding:"8px 18px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:14,color:"var(--color-text-secondary)"}}>← Back</button>
-          <Btn v="primary" onClick={save} disabled={!f.claudeApiKey.trim()||saving}>{saving?"Saving…":"Save & Continue"}</Btn>
-          {saveErr&&<div style={{marginTop:6,fontSize:12,color:"var(--color-text-danger)"}}>{saveErr}</div>}
-        </div>
-      </div>}
+      </div>
     </div>
   </div>;
 }

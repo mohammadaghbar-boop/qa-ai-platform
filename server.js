@@ -27,13 +27,12 @@ const path   = require('path');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 
-// In-memory session store: token -> { memberId, claudeApiKey, jiraUrl, jiraAuth, createdAt }
+// In-memory session store: token -> { memberId, jiraUrl, jiraAuth, createdAt }
 const sessions = new Map();
-function createSession(memberId, claudeApiKey, jiraUrl, jiraEmail, jiraToken) {
+function createSession(memberId, jiraUrl, jiraEmail, jiraToken) {
   const token = crypto.randomBytes(32).toString('hex');
   sessions.set(token, {
     memberId,
-    claudeApiKey,
     jiraUrl:  jiraUrl  || '',
     jiraAuth: (jiraEmail && jiraToken) ? Buffer.from(jiraEmail + ':' + jiraToken).toString('base64') : '',
     createdAt: Date.now()
@@ -131,23 +130,21 @@ function decryptField(stored) {
   d.setAuthTag(Buffer.from(tagH, 'hex'));
   return d.update(Buffer.from(dataH, 'hex')) + d.final('utf8');
 }
-function encryptMemberCredentials(claudeApiKey, jiraUrl, jiraEmail, jiraToken) {
+function encryptMemberCredentials(jiraUrl, jiraEmail, jiraToken) {
   return {
-    claudeApiKey: encryptField(claudeApiKey),
-    jiraUrl:      jiraUrl   ? encryptField(jiraUrl)   : '',
-    jiraEmail:    jiraEmail ? encryptField(jiraEmail) : '',
-    jiraToken:    jiraToken ? encryptField(jiraToken) : ''
+    jiraUrl:   jiraUrl   ? encryptField(jiraUrl)   : '',
+    jiraEmail: jiraEmail ? encryptField(jiraEmail) : '',
+    jiraToken: jiraToken ? encryptField(jiraToken) : ''
   };
 }
 function decryptMemberCredentials(member) {
   const c = member.credentials;
-  if (!c || !c.claudeApiKey) return null;
+  if (!c) return null;
   try {
     return {
-      claudeApiKey: decryptField(c.claudeApiKey),
-      jiraUrl:      c.jiraUrl   ? decryptField(c.jiraUrl)   : '',
-      jiraEmail:    c.jiraEmail ? decryptField(c.jiraEmail) : '',
-      jiraToken:    c.jiraToken ? decryptField(c.jiraToken) : ''
+      jiraUrl:   c.jiraUrl   ? decryptField(c.jiraUrl)   : '',
+      jiraEmail: c.jiraEmail ? decryptField(c.jiraEmail) : '',
+      jiraToken: c.jiraToken ? decryptField(c.jiraToken) : ''
     };
   } catch { return null; }
 }
@@ -221,46 +218,27 @@ setInterval(() => {
   }
 }, 30 * 60 * 1000);
 
-/* ── Claude AI (direct Anthropic API) ──────────────────────────────────── */
-function callClaude(messages, system, claudeApiKey) {
+/* ── Claude AI (via Claude CLI — no API key required) ───────────────────── */
+function callClaude(messages, system) {
   return new Promise((resolve, reject) => {
-    if (!claudeApiKey) {
-      reject(new Error('No Claude API key configured. Please add your API key in Settings.'));
-      return;
-    }
-    const payload = JSON.stringify({
-      model: 'claude-sonnet-4-6',
-      max_tokens: 8192,
-      ...(system ? { system } : {}),
-      messages
+    const conversation = messages.map(m =>
+      (m.role === 'user' ? 'Human' : 'Assistant') + ': ' + m.content
+    ).join('\n\n');
+    const fullPrompt = system ? `[System: ${system}]\n\n${conversation}` : conversation;
+    const proc = spawn('claude', [
+      '-p', '--output-format', 'text',
+      '--strict-mcp-config', '--mcp-config', EMPTY_MCP
+    ], { shell: true, env: process.env });
+    let output = '', error = '';
+    proc.stdin.write(fullPrompt);
+    proc.stdin.end();
+    proc.stdout.on('data', d => output += d.toString());
+    proc.stderr.on('data', d => error  += d.toString());
+    proc.on('close', code => {
+      if (code === 0 && output.trim()) resolve(output.trim());
+      else reject(new Error(error.trim() || 'claude CLI returned no output (exit ' + code + ')'));
     });
-    const opts = {
-      hostname: 'api.anthropic.com',
-      path:     '/v1/messages',
-      method:   'POST',
-      timeout:  REQ_TIMEOUT,
-      headers:  {
-        'Content-Type':      'application/json',
-        'x-api-key':         claudeApiKey,
-        'anthropic-version': '2023-06-01',
-        'Content-Length':    Buffer.byteLength(payload)
-      }
-    };
-    const req = https.request(opts, res => {
-      let data = '';
-      res.on('data', d => data += d);
-      res.on('end', () => {
-        try {
-          const parsed = JSON.parse(data);
-          if (parsed.error) reject(new Error('Claude API: ' + (parsed.error.message || parsed.error.type)));
-          else resolve(parsed.content[0].text);
-        } catch (e) { reject(new Error('Failed to parse Claude API response: ' + data.slice(0, 120))); }
-      });
-    });
-    req.on('timeout', () => { req.destroy(new Error('Claude API request timed out')); });
-    req.on('error', reject);
-    req.write(payload);
-    req.end();
+    proc.on('error', err => reject(new Error('Could not start claude CLI: ' + err.message)));
   });
 }
 
@@ -709,7 +687,7 @@ const server = http.createServer((req, res) => {
         // Auto-create API session from server-side stored credentials (if configured)
         let sessionToken = null;
         const creds = decryptMemberCredentials(member);
-        if (creds) sessionToken = createSession(member.id, creds.claudeApiKey, creds.jiraUrl, creds.jiraEmail, creds.jiraToken);
+        if (creds) sessionToken = createSession(member.id, creds.jiraUrl, creds.jiraEmail, creds.jiraToken);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ token, member: { id: member.id, name: member.name, email: member.email, role: member.role }, sessionToken }));
       } catch (e) {
@@ -769,16 +747,12 @@ const server = http.createServer((req, res) => {
           res.writeHead(403, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'Forbidden' })); return;
         }
-        const { claudeApiKey, jiraUrl, jiraEmail, jiraToken } = JSON.parse(body);
-        if (!claudeApiKey) {
-          res.writeHead(400, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'claudeApiKey is required' })); return;
-        }
+        const { jiraUrl, jiraEmail, jiraToken } = JSON.parse(body);
         const member = (serverDB.members || []).find(m => m.id === memberId);
         if (!member) { res.writeHead(404, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Member not found' })); return; }
-        member.credentials = encryptMemberCredentials(claudeApiKey, jiraUrl || '', jiraEmail || '', jiraToken || '');
+        member.credentials = encryptMemberCredentials(jiraUrl || '', jiraEmail || '', jiraToken || '');
         saveServerDB(serverDB);
-        const sessionToken = createSession(memberId, claudeApiKey, jiraUrl, jiraEmail, jiraToken);
+        const sessionToken = createSession(memberId, jiraUrl, jiraEmail, jiraToken);
         console.log('[Member] Credentials saved:', member.name);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ ok: true, sessionToken }));
@@ -804,7 +778,7 @@ const server = http.createServer((req, res) => {
           res.writeHead(400, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'No credentials configured' })); return;
         }
-        const sessionToken = createSession(ms.memberId, creds.claudeApiKey, creds.jiraUrl, creds.jiraEmail, creds.jiraToken);
+        const sessionToken = createSession(ms.memberId, creds.jiraUrl, creds.jiraEmail, creds.jiraToken);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ sessionToken }));
       } catch (e) {
@@ -905,19 +879,14 @@ const server = http.createServer((req, res) => {
         res.end(JSON.stringify({ error: 'Too many attempts. Please wait 15 minutes.' })); return;
       }
       try {
-        const { memberId, claudeApiKey, jiraUrl, jiraEmail, jiraToken } = JSON.parse(body);
-        if (!claudeApiKey) {
-          res.writeHead(400, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'claudeApiKey is required' }));
-          return;
-        }
+        const { memberId, jiraUrl, jiraEmail, jiraToken } = JSON.parse(body);
         // Validate Jira URL if provided
         if (jiraUrl && !isValidJiraUrl(jiraUrl)) {
           res.writeHead(400, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'Invalid Jira URL. Must be a public HTTPS address.' }));
           return;
         }
-        const sessionToken = createSession(memberId, claudeApiKey, jiraUrl, jiraEmail, jiraToken);
+        const sessionToken = createSession(memberId, jiraUrl, jiraEmail, jiraToken);
         console.log('[Auth] Session created');
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ sessionToken }));
@@ -933,11 +902,9 @@ const server = http.createServer((req, res) => {
       const session = getSession(req);
       if (!session) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Authentication required' })); return; }
       try {
-        const parsed  = JSON.parse(body);
-        const claudeApiKey = session.claudeApiKey;
-        const { messages, system } = parsed;
+        const { messages, system } = JSON.parse(body);
         console.log('[AI]   Request received');
-        const text = await callClaude(messages, system, claudeApiKey);
+        const text = await callClaude(messages, system);
         console.log('[AI]   Done');
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ text }));
