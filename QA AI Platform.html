@@ -800,7 +800,7 @@ function BugsPage() {
   useEffect(()=>{
     const adminToken=sessionStorage.getItem(ADMIN_TOKEN_KEY)||"";
     fetch(API_BASE+"/api/admin/data",{headers:{"X-Admin-Token":adminToken}})
-      .then(r=>r.ok?r.json():null).then(d=>{if(d?.bugs)setBugs(d.bugs);setLoading(false);}).catch(()=>setLoading(false));
+      .then(r=>r.ok?r.json():null).then(d=>{if(d?.bugs)setBugs(d.bugs.map(b=>({...b,sev:b.sev||b.severity||"Medium",who:b.who||b.memberName||"—",jKey:b.jKey||b.jiraKey||null})));setLoading(false);}).catch(()=>setLoading(false));
   },[]);
   const shown=flt==="All"?bugs:bugs.filter(b=>b.sev===flt);
   const upd=(bid,s)=>{setBugs(prev=>prev.map(b=>b.bid===bid?{...b,status:s}:b));};
