@@ -684,10 +684,9 @@ const server = http.createServer((req, res) => {
         const token = crypto.randomBytes(32).toString('hex');
         memberSessions.set(token, { memberId: member.id, createdAt: Date.now() });
         console.log('[Member] Login:', member.name);
-        // Auto-create API session from server-side stored credentials (if configured)
-        let sessionToken = null;
+        // Always create an API session — Jira creds used if saved, otherwise session still works for AI via CLI
         const creds = decryptMemberCredentials(member);
-        if (creds) sessionToken = createSession(member.id, creds.jiraUrl, creds.jiraEmail, creds.jiraToken);
+        const sessionToken = createSession(member.id, creds?.jiraUrl||'', creds?.jiraEmail||'', creds?.jiraToken||'');
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ token, member: { id: member.id, name: member.name, email: member.email, role: member.role }, sessionToken }));
       } catch (e) {
