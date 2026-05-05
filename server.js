@@ -27,13 +27,12 @@ const path   = require('path');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 
-// In-memory session store: token -> { memberId, claudeApiKey, jiraUrl, jiraAuth, createdAt }
+// In-memory session store: token -> { memberId, jiraUrl, jiraAuth, createdAt }
 const sessions = new Map();
-function createSession(memberId, claudeApiKey, jiraUrl, jiraEmail, jiraToken) {
+function createSession(memberId, jiraUrl, jiraEmail, jiraToken) {
   const token = crypto.randomBytes(32).toString('hex');
   sessions.set(token, {
     memberId,
-    claudeApiKey,
     jiraUrl:  jiraUrl  || '',
     jiraAuth: (jiraEmail && jiraToken) ? Buffer.from(jiraEmail + ':' + jiraToken).toString('base64') : '',
     createdAt: Date.now()
@@ -42,13 +41,27 @@ function createSession(memberId, claudeApiKey, jiraUrl, jiraEmail, jiraToken) {
 }
 function getSession(req) {
   const token = req.headers['x-session-token'];
-  return token ? sessions.get(token) || null : null;
+  if (!token) return null;
+  const s = sessions.get(token);
+  if (!s) return null;
+  if (Date.now() - s.createdAt > API_SESSION_TTL) { sessions.delete(token); return null; }
+  return s;
 }
 
+// Hourly cleanup of expired sessions across all stores
+setInterval(() => {
+  const now = Date.now();
+  for (const [t, s] of sessions)      if (now - s.createdAt > API_SESSION_TTL)   sessions.delete(t);
+  for (const [t, s] of adminSessions) if (now - s.createdAt > ADMIN_SESSION_TTL) adminSessions.delete(t);
+  for (const [t, s] of memberSessions) if (now - (s.createdAt || 0) > ADMIN_SESSION_TTL) memberSessions.delete(t);
+}, 60 * 60 * 1000);
+
 /* ── Configuration ──────────────────────────────────────────────────────── */
-const PORT         = parseInt(process.env.PORT) || 3456;
-const MAX_BODY     = 20 * 1024 * 1024; // 20 MB per request
-const REQ_TIMEOUT  = 30000;            // 30 s for outgoing HTTP requests
+const PORT              = parseInt(process.env.PORT) || 3456;
+const MAX_BODY          = 20 * 1024 * 1024; // 20 MB per request
+const REQ_TIMEOUT       = 30000;            // 30 s for outgoing HTTP requests
+const API_SESSION_TTL   = 24 * 60 * 60 * 1000; // 24 h — API/Jira credential sessions
+const ADMIN_SESSION_TTL =  8 * 60 * 60 * 1000; // 8 h  — admin + member login sessions
 
 // Empty MCP config — prevents claude CLI from using MCP tools (e.g. Atlassian)
 const EMPTY_MCP = path.join(os.tmpdir(), 'qa-platform-no-mcp.json');
@@ -94,6 +107,47 @@ function isValidJiraUrl(s) {
 const DATA_DIR  = path.join(__dirname, 'data');
 const DATA_FILE = path.join(DATA_DIR, 'qa-platform-db.json');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+
+/* ── Credential encryption (AES-256-GCM, server key in data/server.key) ─── */
+const KEY_FILE = path.join(DATA_DIR, 'server.key');
+let _encKey;
+if (fs.existsSync(KEY_FILE)) {
+  _encKey = Buffer.from(fs.readFileSync(KEY_FILE, 'utf8').trim(), 'hex');
+} else {
+  _encKey = crypto.randomBytes(32);
+  fs.writeFileSync(KEY_FILE, _encKey.toString('hex'));
+  console.log('  ℹ  New encryption key generated at data/server.key — back this file up.');
+}
+function encryptField(text) {
+  const iv  = crypto.randomBytes(12);
+  const c   = crypto.createCipheriv('aes-256-gcm', _encKey, iv);
+  const enc = Buffer.concat([c.update(String(text), 'utf8'), c.final()]);
+  return iv.toString('hex') + ':' + c.getAuthTag().toString('hex') + ':' + enc.toString('hex');
+}
+function decryptField(stored) {
+  const [ivH, tagH, dataH] = stored.split(':');
+  const d = crypto.createDecipheriv('aes-256-gcm', _encKey, Buffer.from(ivH, 'hex'));
+  d.setAuthTag(Buffer.from(tagH, 'hex'));
+  return d.update(Buffer.from(dataH, 'hex')) + d.final('utf8');
+}
+function encryptMemberCredentials(jiraUrl, jiraEmail, jiraToken) {
+  return {
+    jiraUrl:   jiraUrl   ? encryptField(jiraUrl)   : '',
+    jiraEmail: jiraEmail ? encryptField(jiraEmail) : '',
+    jiraToken: jiraToken ? encryptField(jiraToken) : ''
+  };
+}
+function decryptMemberCredentials(member) {
+  const c = member.credentials;
+  if (!c) return null;
+  try {
+    return {
+      jiraUrl:   c.jiraUrl   ? decryptField(c.jiraUrl)   : '',
+      jiraEmail: c.jiraEmail ? decryptField(c.jiraEmail) : '',
+      jiraToken: c.jiraToken ? decryptField(c.jiraToken) : ''
+    };
+  } catch { return null; }
+}
 function loadServerDB() {
   try { if (fs.existsSync(DATA_FILE)) return JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')); } catch {}
   return { sessions: [], bugs: [], perfResults: [], coverage: [], members: [], adminPasswordHash: null, adminPasswordIsDefault: true };
@@ -105,11 +159,31 @@ function saveServerDB(db) {
 }
 let serverDB = loadServerDB();
 
-function hashPassword(p) { return crypto.createHash('sha256').update(p).digest('hex'); }
+function hashPasswordSecure(p) {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const hash = crypto.scryptSync(p, salt, 64).toString('hex');
+  return `scrypt:${salt}:${hash}`;
+}
+function verifyPassword(p, stored) {
+  if (!stored) return false;
+  if (stored.startsWith('scrypt:')) {
+    const parts = stored.split(':');
+    if (parts.length !== 3) return false;
+    const [, salt, hash] = parts;
+    try {
+      const derived = crypto.scryptSync(p, salt, 64).toString('hex');
+      return crypto.timingSafeEqual(Buffer.from(derived, 'hex'), Buffer.from(hash, 'hex'));
+    } catch { return false; }
+  }
+  // Legacy SHA-256 — constant-time compare
+  const legacy = crypto.createHash('sha256').update(p).digest('hex');
+  return legacy.length === stored.length &&
+    crypto.timingSafeEqual(Buffer.from(legacy, 'hex'), Buffer.from(stored, 'hex'));
+}
 
 // Set default admin password to 'admin' on first run
 if (!serverDB.adminPasswordHash) {
-  serverDB.adminPasswordHash = hashPassword('admin');
+  serverDB.adminPasswordHash = hashPasswordSecure('admin');
   serverDB.adminPasswordIsDefault = true;
   saveServerDB(serverDB);
   console.log('');
@@ -119,7 +193,7 @@ if (!serverDB.adminPasswordHash) {
 }
 // Migration: existing db without the isDefault flag — reset to admin so forced change runs
 if (serverDB.adminPasswordIsDefault === undefined) {
-  serverDB.adminPasswordHash = hashPassword('admin');
+  serverDB.adminPasswordHash = hashPasswordSecure('admin');
   serverDB.adminPasswordIsDefault = true;
   saveServerDB(serverDB);
   console.log('');
@@ -144,82 +218,27 @@ setInterval(() => {
   }
 }, 30 * 60 * 1000);
 
-/* ── Demo / mock AI responses (used when API key is "demo") ─────────────── */
-function mockClaude(messages) {
-  const prompt = (messages || []).map(m => m.content || '').join('\n');
-
-  // Test case generation — detect type from prompt text
-  if (/return only a valid json array/i.test(prompt) && /test cases/i.test(prompt)) {
-    const type = /negative/i.test(prompt) ? 'negative' : /edge/i.test(prompt) ? 'edge' : 'happy';
-    const platform = /mobile|ios|android/i.test(prompt) ? 'mobile' : 'web';
-    const cases = [
-      { id:'TC-001', title:`Verify successful ${type === 'happy' ? 'completion of main flow' : type === 'edge' ? 'behavior at input boundary' : 'error handling for invalid input'}`, type, platform, preconditions:'Application is running and user is on the relevant screen', steps:['Open the application','Navigate to the relevant feature','Perform the primary action','Observe the result'], expected:`System responds correctly and ${type === 'happy' ? 'completes the operation successfully' : type === 'edge' ? 'handles the boundary condition gracefully' : 'displays a clear error message'}`, automatable: true },
-      { id:'TC-002', title:`Verify ${type === 'happy' ? 'data is saved and displayed correctly' : type === 'edge' ? 'behavior with maximum allowed input length' : 'rejection of missing required fields'}`, type, platform, preconditions:'User has the required permissions', steps:['Navigate to the feature','Enter test data','Submit the form','Check the result'], expected:`${type === 'happy' ? 'Data is persisted and shown accurately' : type === 'edge' ? 'System accepts or rejects input at the defined limit' : 'Validation error is shown for each missing required field'}`, automatable: true },
-      { id:'TC-003', title:`Verify ${type === 'happy' ? 'UI elements are visible and functional' : type === 'edge' ? 'behavior with minimum allowed input' : 'access is denied for unauthorized users'}`, type, platform, preconditions:'Feature is accessible to the current user', steps:['Open the feature','Interact with the main elements','Verify the outcome'], expected:`${type === 'happy' ? 'All UI elements respond as expected' : type === 'edge' ? 'System handles minimum input without errors' : 'Unauthorized access attempt is blocked with appropriate message'}`, automatable: true },
-    ];
-    return Promise.resolve(JSON.stringify(cases));
-  }
-
-  // Playwright / mobile script generation
-  if (/playwright|describe\s*\(|test\s*\(|appium|xcuitest|espresso/i.test(prompt) || /generate.*script/i.test(prompt)) {
-    return Promise.resolve(`import { test, expect } from '@playwright/test';\n\n// [DEMO MODE] Replace with real scripts generated by Claude\n\ntest.describe('Demo Test Suite', () => {\n  test('TC-001 - Main flow', async ({ page }) => {\n    await page.goto('http://localhost:3000');\n    await expect(page).toHaveTitle(/.*/);\n  });\n\n  test('TC-002 - Form submission', async ({ page }) => {\n    await page.goto('http://localhost:3000');\n    // TODO: fill in test steps\n  });\n});\n`);
-  }
-
-  // Gap analysis
-  if (/gap|missing|coverage|not covered/i.test(prompt)) {
-    return Promise.resolve('[DEMO MODE] Gap analysis: The following areas may need additional test coverage:\n\n1. Error handling and edge cases for network failures\n2. Permission and role-based access controls\n3. Data validation on all input fields\n4. Session timeout and re-authentication flows\n5. Cross-browser / cross-device compatibility\n\nAdd a real Claude API key in Settings to get AI-powered gap analysis.');
-  }
-
-  // Coverage / summary
-  if (/coverage|summary|report/i.test(prompt)) {
-    return Promise.resolve('[DEMO MODE] Coverage summary: Test cases cover the primary user flows. Consider adding tests for error states, boundary conditions, and security scenarios. Add a real Claude API key in Settings for AI-generated coverage insights.');
-  }
-
-  // AI chat / anything else
-  return Promise.resolve('[DEMO MODE] This is a placeholder response. To get real AI responses, add your Claude API key in the Settings panel. You can get a free key at console.anthropic.com.');
-}
-
-/* ── Claude AI (direct Anthropic API) ──────────────────────────────────── */
-function callClaude(messages, system, claudeApiKey) {
-  if (claudeApiKey === 'demo') return mockClaude(messages);
+/* ── Claude AI (via Claude CLI — no API key required) ───────────────────── */
+function callClaude(messages, system) {
   return new Promise((resolve, reject) => {
-    if (!claudeApiKey) {
-      reject(new Error('No Claude API key configured. Please add your API key in Settings.'));
-      return;
-    }
-    const payload = JSON.stringify({
-      model: 'claude-sonnet-4-6',
-      max_tokens: 8192,
-      ...(system ? { system } : {}),
-      messages
+    const conversation = messages.map(m =>
+      (m.role === 'user' ? 'Human' : 'Assistant') + ': ' + m.content
+    ).join('\n\n');
+    const fullPrompt = system ? `[System: ${system}]\n\n${conversation}` : conversation;
+    const proc = spawn('claude', [
+      '-p', '--output-format', 'text',
+      '--strict-mcp-config', '--mcp-config', EMPTY_MCP
+    ], { shell: true, env: process.env });
+    let output = '', error = '';
+    proc.stdin.write(fullPrompt);
+    proc.stdin.end();
+    proc.stdout.on('data', d => output += d.toString());
+    proc.stderr.on('data', d => error  += d.toString());
+    proc.on('close', code => {
+      if (code === 0 && output.trim()) resolve(output.trim());
+      else reject(new Error(error.trim() || 'claude CLI returned no output (exit ' + code + ')'));
     });
-    const opts = {
-      hostname: 'api.anthropic.com',
-      path:     '/v1/messages',
-      method:   'POST',
-      timeout:  REQ_TIMEOUT,
-      headers:  {
-        'Content-Type':      'application/json',
-        'x-api-key':         claudeApiKey,
-        'anthropic-version': '2023-06-01',
-        'Content-Length':    Buffer.byteLength(payload)
-      }
-    };
-    const req = https.request(opts, res => {
-      let data = '';
-      res.on('data', d => data += d);
-      res.on('end', () => {
-        try {
-          const parsed = JSON.parse(data);
-          if (parsed.error) reject(new Error('Claude API: ' + (parsed.error.message || parsed.error.type)));
-          else resolve(parsed.content[0].text);
-        } catch (e) { reject(new Error('Failed to parse Claude API response: ' + data.slice(0, 120))); }
-      });
-    });
-    req.on('timeout', () => { req.destroy(new Error('Claude API request timed out')); });
-    req.on('error', reject);
-    req.write(payload);
-    req.end();
+    proc.on('error', err => reject(new Error('Could not start claude CLI: ' + err.message)));
   });
 }
 
@@ -319,11 +338,13 @@ function runPlaywrightTests(files) {
     try {
       fs.mkdirSync(tmpDir, { recursive: true });
       fs.writeFileSync(path.join(tmpDir, 'package.json'), JSON.stringify({ name:'qa-run', version:'1.0.0', private:true }));
+      const safeBase = path.resolve(tmpDir) + path.sep;
       for (const [filePath, content] of Object.entries(files || {})) {
         if (filePath.endsWith('.md')) continue;
-        const full = path.join(tmpDir, filePath);
+        const full = path.resolve(tmpDir, filePath);
+        if (!full.startsWith(safeBase)) { console.warn('[Playwright] Blocked path traversal:', filePath); continue; }
         fs.mkdirSync(path.dirname(full), { recursive: true });
-        fs.writeFileSync(full, content);
+        fs.writeFileSync(full, String(content));
       }
     } catch (e) { cleanup(); resolve({ lines:['Error writing test files: '+e.message], passed:[], failed:[], error:e.message }); return; }
 
@@ -388,7 +409,7 @@ function generateK6Script({ testType, method, apiUrl, vus, duration, ramp, p95Th
     baseHeaders['Authorization'] = 'Basic ' + Buffer.from(basicUsername + ':' + (basicPassword || '')).toString('base64');
 
   const bodyArg = ['post', 'put', 'patch'].includes(m) && requestBody
-    ? ', `' + (requestBody || '').replace(/`/g, '\\`') + '`'
+    ? `, ${JSON.stringify(String(requestBody))}`
     : '';
 
   let stages;
@@ -476,8 +497,20 @@ function runK6(scriptPath) {
 const server = http.createServer((req, res) => {
   // Security headers on every response
   res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('X-XSS-Protection', '1; mode=block');
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Content-Security-Policy',
+    "default-src 'none'; " +
+    "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com https://cdnjs.cloudflare.com; " +
+    "style-src 'self' 'unsafe-inline'; " +
+    "connect-src 'self' https://unpkg.com https://cdnjs.cloudflare.com; " +
+    "img-src 'self' data: blob:; " +
+    "font-src 'self'; " +
+    "object-src 'none'; " +
+    "base-uri 'self'; " +
+    "form-action 'self';"
+  );
 
   // CORS: only allow same-origin requests (app and API share the same host:port)
   const origin = req.headers['origin'];
@@ -521,8 +554,13 @@ const server = http.createServer((req, res) => {
       res.end(JSON.stringify({ error: 'Unauthorized' }));
       return;
     }
+    const safeDB = {
+      ...serverDB,
+      adminPasswordHash: undefined,
+      members: (serverDB.members || []).map(({ passwordHash, ...m }) => m)
+    };
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify(serverDB));
+    res.end(JSON.stringify(safeDB));
     return;
   }
 
@@ -634,15 +672,24 @@ const server = http.createServer((req, res) => {
         const { email, password } = JSON.parse(body);
         if (!serverDB.members) serverDB.members = [];
         const member = serverDB.members.find(m => m.email === email);
-        if (!member || hashPassword(password || '') !== member.passwordHash) {
+        if (!member || !verifyPassword(password || '', member.passwordHash)) {
           res.writeHead(401, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'Invalid credentials' })); return;
         }
+        // Upgrade legacy SHA-256 hash to scrypt on first login
+        if (!member.passwordHash.startsWith('scrypt:')) {
+          member.passwordHash = hashPasswordSecure(password);
+          saveServerDB(serverDB);
+        }
         const token = crypto.randomBytes(32).toString('hex');
-        memberSessions.set(token, { memberId: member.id });
+        memberSessions.set(token, { memberId: member.id, createdAt: Date.now() });
         console.log('[Member] Login:', member.name);
+        // Auto-create API session from server-side stored credentials (if configured)
+        let sessionToken = null;
+        const creds = decryptMemberCredentials(member);
+        if (creds) sessionToken = createSession(member.id, creds.jiraUrl, creds.jiraEmail, creds.jiraToken);
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ token, member: { id: member.id, name: member.name, email: member.email, role: member.role } }));
+        res.end(JSON.stringify({ token, member: { id: member.id, name: member.name, email: member.email, role: member.role }, sessionToken }));
       } catch (e) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'Invalid request' }));
@@ -672,13 +719,68 @@ const server = http.createServer((req, res) => {
           res.writeHead(400, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'A member with this email already exists' })); return;
         }
-        const member = { id: crypto.randomBytes(16).toString('hex'), name, email, role: role || 'QA Engineer', passwordHash: hashPassword(password), createdAt: Date.now() };
+        const member = { id: crypto.randomBytes(16).toString('hex'), name, email, role: role || 'QA Engineer', passwordHash: hashPasswordSecure(password), createdAt: Date.now() };
         serverDB.members.push(member);
         saveServerDB(serverDB);
         console.log('[Member] Created:', name);
         const { passwordHash, ...safe } = member;
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(safe));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Invalid request' }));
+      }
+      return;
+    }
+
+    /* ── /api/members/:id/credentials (POST — member stores own credentials) ── */
+    if (req.method === 'POST' && /^\/api\/members\/[^/]+\/credentials$/.test(req.url)) {
+      try {
+        const memberToken = req.headers['x-member-token'];
+        const ms = memberToken ? memberSessions.get(memberToken) : null;
+        if (!ms || Date.now() - ms.createdAt > ADMIN_SESSION_TTL) {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Unauthorized' })); return;
+        }
+        const memberId = req.url.split('/')[3];
+        if (ms.memberId !== memberId) {
+          res.writeHead(403, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Forbidden' })); return;
+        }
+        const { jiraUrl, jiraEmail, jiraToken } = JSON.parse(body);
+        const member = (serverDB.members || []).find(m => m.id === memberId);
+        if (!member) { res.writeHead(404, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Member not found' })); return; }
+        member.credentials = encryptMemberCredentials(jiraUrl || '', jiraEmail || '', jiraToken || '');
+        saveServerDB(serverDB);
+        const sessionToken = createSession(memberId, jiraUrl, jiraEmail, jiraToken);
+        console.log('[Member] Credentials saved:', member.name);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, sessionToken }));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Invalid request' }));
+      }
+      return;
+    }
+
+    /* ── /api/members/session/refresh (POST — renew API session from stored creds) ── */
+    if (req.method === 'POST' && req.url === '/api/members/session/refresh') {
+      try {
+        const memberToken = req.headers['x-member-token'];
+        const ms = memberToken ? memberSessions.get(memberToken) : null;
+        if (!ms || Date.now() - ms.createdAt > ADMIN_SESSION_TTL) {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Unauthorized — please log in again' })); return;
+        }
+        const member = (serverDB.members || []).find(m => m.id === ms.memberId);
+        const creds = member ? decryptMemberCredentials(member) : null;
+        if (!creds) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'No credentials configured' })); return;
+        }
+        const sessionToken = createSession(ms.memberId, creds.jiraUrl, creds.jiraEmail, creds.jiraToken);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ sessionToken }));
       } catch (e) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'Invalid request' }));
@@ -717,10 +819,15 @@ const server = http.createServer((req, res) => {
       }
       try {
         const { password } = JSON.parse(body);
-        if (hashPassword(password || '') !== serverDB.adminPasswordHash) {
+        if (!verifyPassword(password || '', serverDB.adminPasswordHash)) {
           res.writeHead(401, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'Invalid credentials' }));
           return;
+        }
+        // Upgrade legacy SHA-256 hash to scrypt on first login
+        if (!serverDB.adminPasswordHash.startsWith('scrypt:')) {
+          serverDB.adminPasswordHash = hashPasswordSecure(password);
+          saveServerDB(serverDB);
         }
         const token = crypto.randomBytes(32).toString('hex');
         adminSessions.set(token, { createdAt: Date.now() });
@@ -743,7 +850,7 @@ const server = http.createServer((req, res) => {
           res.end(JSON.stringify({ error: 'Unauthorized' })); return;
         }
         const { currentPassword, newPassword } = JSON.parse(body);
-        if (hashPassword(currentPassword || '') !== serverDB.adminPasswordHash) {
+        if (!verifyPassword(currentPassword || '', serverDB.adminPasswordHash)) {
           res.writeHead(400, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'Current password is incorrect' })); return;
         }
@@ -751,7 +858,7 @@ const server = http.createServer((req, res) => {
           res.writeHead(400, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'New password must be at least 8 characters' })); return;
         }
-        serverDB.adminPasswordHash = hashPassword(newPassword);
+        serverDB.adminPasswordHash = hashPasswordSecure(newPassword);
         serverDB.adminPasswordIsDefault = false;
         saveServerDB(serverDB);
         console.log('[Admin] Password changed');
@@ -766,25 +873,20 @@ const server = http.createServer((req, res) => {
 
     /* ── /api/auth/session ── */
     if (req.method === 'POST' && req.url === '/api/auth/session') {
+      const ip = req.socket.remoteAddress || 'unknown';
+      if (!checkRateLimit(ip)) {
+        res.writeHead(429, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Too many attempts. Please wait 15 minutes.' })); return;
+      }
       try {
-        const { memberId, claudeApiKey, jiraUrl, jiraEmail, jiraToken } = JSON.parse(body);
-        if (!claudeApiKey) {
-          res.writeHead(400, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'claudeApiKey is required' }));
-          return;
-        }
-        if (claudeApiKey !== 'demo' && claudeApiKey.length < 20) {
-          res.writeHead(400, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'Invalid API key format. Use your real key or enter "demo" for mock mode.' }));
-          return;
-        }
+        const { memberId, jiraUrl, jiraEmail, jiraToken } = JSON.parse(body);
         // Validate Jira URL if provided
         if (jiraUrl && !isValidJiraUrl(jiraUrl)) {
           res.writeHead(400, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'Invalid Jira URL. Must be a public HTTPS address.' }));
           return;
         }
-        const sessionToken = createSession(memberId, claudeApiKey, jiraUrl, jiraEmail, jiraToken);
+        const sessionToken = createSession(memberId, jiraUrl, jiraEmail, jiraToken);
         console.log('[Auth] Session created');
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ sessionToken }));
@@ -797,13 +899,12 @@ const server = http.createServer((req, res) => {
 
     /* ── /api/ai ── */
     if (req.method === 'POST' && req.url === '/api/ai') {
+      const session = getSession(req);
+      if (!session) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Authentication required' })); return; }
       try {
-        const session = getSession(req);
-        const parsed  = JSON.parse(body);
-        const claudeApiKey = session?.claudeApiKey || parsed.claudeApiKey;
-        const { messages, system } = parsed;
+        const { messages, system } = JSON.parse(body);
         console.log('[AI]   Request received');
-        const text = await callClaude(messages, system, claudeApiKey);
+        const text = await callClaude(messages, system);
         console.log('[AI]   Done');
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ text }));
@@ -817,11 +918,12 @@ const server = http.createServer((req, res) => {
 
     /* ── /api/jira ── */
     if (req.method === 'POST' && req.url === '/api/jira') {
+      const session = getSession(req);
+      if (!session) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Authentication required' })); return; }
       try {
-        const session  = getSession(req);
         const parsed   = JSON.parse(body);
-        const jiraUrl  = session?.jiraUrl  || parsed.jiraUrl;
-        const auth     = session?.jiraAuth || parsed.auth;
+        const jiraUrl  = session.jiraUrl;
+        const auth     = session.jiraAuth;
         const { path: jiraPath, method: jiraMethod, body: jiraBody } = parsed;
         console.log('[Jira] Request —', jiraMethod, jiraPath);
         const data = await proxyJira(jiraUrl, jiraPath, jiraMethod, auth, jiraBody);
@@ -838,11 +940,12 @@ const server = http.createServer((req, res) => {
 
     /* ── /api/jira/attach ── */
     if (req.method === 'POST' && req.url === '/api/jira/attach') {
+      const session = getSession(req);
+      if (!session) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Authentication required' })); return; }
       try {
-        const session = getSession(req);
         const parsed  = JSON.parse(body);
-        const jiraUrl = session?.jiraUrl  || parsed.jiraUrl;
-        const auth    = session?.jiraAuth || parsed.auth;
+        const jiraUrl = session.jiraUrl;
+        const auth    = session.jiraAuth;
         const { issueKey, files } = parsed;
         if (!issueKey || !Array.isArray(files) || files.length === 0) {
           res.writeHead(400, { 'Content-Type': 'application/json' });
