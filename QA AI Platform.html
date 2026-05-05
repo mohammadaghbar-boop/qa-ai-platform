@@ -845,14 +845,29 @@ function BugsPage() {
 /* ─── ADF text extractor (recursive) ────────────────────────────────────── */
 function adfToText(node) {
   if (!node) return '';
+  if (typeof node === 'string') return node;
   if (node.type === 'text') {
     const link = (node.marks||[]).find(m=>m.type==='link');
     return link ? `${node.text||''} (${link.attrs?.href||''})` : (node.text||'');
   }
+  // Inline nodes that store their text in attrs, not content
+  if (node.type === 'mention') return node.attrs?.text || node.attrs?.displayName || '';
+  if (node.type === 'emoji') return node.attrs?.text || node.attrs?.shortName || '';
+  if (node.type === 'status') return `[${node.attrs?.text||''}]`;
+  if (node.type === 'date') return node.attrs?.text || '';
   if (node.type === 'inlineCard' || node.type === 'blockCard' || node.type === 'embedCard') return node.attrs?.url||'';
-  if (node.type === 'hardBreak') return '\n';
+  if (node.type === 'hardBreak' || node.type === 'rule') return '\n';
   const inner = (node.content||[]).map(adfToText).join('');
-  return ['paragraph','heading','listItem','bulletList','orderedList','blockquote','panel','rule'].includes(node.type) ? inner+'\n' : inner;
+  const blockTypes = ['paragraph','heading','listItem','bulletList','orderedList','blockquote','panel','codeBlock','expand','nestedExpand','tableRow'];
+  return blockTypes.includes(node.type) ? inner+'\n' : inner;
+}
+/* Strip HTML tags + decode entities (used as fallback when ADF yields nothing) */
+function htmlToText(html) {
+  return html
+    .replace(/<br\s*\/?>/gi,'\n').replace(/<\/?(p|div|li|tr|td|th|h[1-6])[^>]*>/gi,'\n')
+    .replace(/<[^>]+>/g,'')
+    .replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&#39;/g,"'").replace(/&nbsp;/g,' ')
+    .replace(/\n{3,}/g,'\n\n').trim();
 }
 
 /* ─── Coverage charts ────────────────────────────────────────────────────── */
@@ -1035,7 +1050,7 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
   const doFetch=async()=>{
     setLoading(true); setLmsg("Fetching story from Jira…"); setFetchError("");
     try {
-      const d=await callJira(proj,"GET","/issue/"+sid+"?fields=summary,description,labels,issuetype,status,assignee,priority");
+      const d=await callJira(proj,"GET","/issue/"+sid+"?fields=summary,description,labels,issuetype,status,assignee,priority&expand=renderedFields");
       const flds=d.fields||{}; let desc="";
       if(flds.description){
         if(typeof flds.description==="string"){
@@ -1043,6 +1058,10 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
         } else {
           desc=adfToText(flds.description).trim();
         }
+      }
+      // Fallback: use Jira's own HTML rendering when ADF extraction yields nothing
+      if(!desc && d.renderedFields?.description){
+        desc=htmlToText(d.renderedFields.description);
       }
       const sd={key:d.key,summary:flds.summary||sid,description:desc,labels:flds.labels||[],type:flds.issuetype?.name||"Story",status:flds.status?.name||"",assignee:flds.assignee?.displayName||"—",priority:flds.priority?.name||"Medium"};
       setSdata(sd); const pp=proj.platform||"web"; setPlatform(pp==="both"?"web":pp);
