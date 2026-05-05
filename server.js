@@ -881,6 +881,17 @@ const server = http.createServer((req, res) => {
       }
       try {
         const { memberId, jiraUrl, jiraEmail, jiraToken } = JSON.parse(body);
+        // Require a valid member session — prevents unauthenticated session creation
+        const memberToken = req.headers['x-member-token'];
+        const ms = memberToken ? memberSessions.get(memberToken) : null;
+        if (!ms || Date.now() - ms.createdAt > ADMIN_SESSION_TTL) {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Unauthorized — please log in first' })); return;
+        }
+        if (ms.memberId !== memberId) {
+          res.writeHead(403, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Forbidden' })); return;
+        }
         // Validate Jira URL if provided
         if (jiraUrl && !isValidJiraUrl(jiraUrl)) {
           res.writeHead(400, { 'Content-Type': 'application/json' });

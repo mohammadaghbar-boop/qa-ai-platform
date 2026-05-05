@@ -580,7 +580,7 @@ function MembersPage() {
         <div><Lbl>Full name</Lbl><input style={inp} value={f.name} onChange={e=>setF(p=>({...p,name:e.target.value}))} placeholder="Jane Smith"/></div>
         <div><Lbl>Role</Lbl><select style={sel} value={f.role} onChange={e=>setF(p=>({...p,role:e.target.value}))}>{["QA Engineer","Senior QA Engineer","QA Automation Engineer","Lead QA"].map(r=><option key={r}>{r}</option>)}</select></div>
         <div><Lbl>Email</Lbl><input style={inp} value={f.email} onChange={e=>setF(p=>({...p,email:e.target.value}))} placeholder="jane@co.com"/></div>
-        <div><Lbl>Password</Lbl><input type="password" style={inp} value={f.password} onChange={e=>setF(p=>({...p,password:e.target.value}))} placeholder="Min. 6 characters"/></div>
+        <div><Lbl>Password</Lbl><input type="password" style={inp} value={f.password} onChange={e=>setF(p=>({...p,password:e.target.value}))} placeholder="Min. 8 characters"/></div>
       </div>
       {err&&<div style={{color:"var(--color-text-danger)",fontSize:13,marginBottom:10}}>{err}</div>}
       <Btn v="primary" onClick={add} disabled={busy}>{busy?"Adding…":"Add member"}</Btn>
@@ -796,9 +796,14 @@ function DashboardPage() {
 }
 
 function BugsPage() {
-  const [bugs,setBugs]=useState([...DB.bugs]); const [flt,setFlt]=useState("All");
+  const [bugs,setBugs]=useState([]); const [flt,setFlt]=useState("All"); const [loading,setLoading]=useState(true);
+  useEffect(()=>{
+    const adminToken=sessionStorage.getItem(ADMIN_TOKEN_KEY)||"";
+    fetch(API_BASE+"/api/admin/data",{headers:{"X-Admin-Token":adminToken}})
+      .then(r=>r.ok?r.json():null).then(d=>{if(d?.bugs)setBugs(d.bugs);setLoading(false);}).catch(()=>setLoading(false));
+  },[]);
   const shown=flt==="All"?bugs:bugs.filter(b=>b.sev===flt);
-  const upd=(bid,s)=>{ const b=DB.bugs.find(x=>x.bid===bid); if(b){b.status=s;saveDB();setBugs([...DB.bugs]);} };
+  const upd=(bid,s)=>{setBugs(prev=>prev.map(b=>b.bid===bid?{...b,status:s}:b));};
   const th={textAlign:"left",padding:"8px 12px",borderBottom:"1px solid var(--color-border-tertiary)",fontSize:12,fontWeight:500,color:"var(--color-text-secondary)"};
   const td={padding:"10px 12px",borderBottom:"1px solid var(--color-border-tertiary)"};
   return <div>
@@ -806,7 +811,7 @@ function BugsPage() {
     <div style={{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap"}}>
       {["All","Critical","High","Medium","Low"].map(s=><button key={s} onClick={()=>setFlt(s)} style={{padding:"6px 14px",borderRadius:8,border:`1px solid ${flt===s?"transparent":"var(--color-border-secondary)"}`,background:flt===s?"var(--color-text-info)":"transparent",cursor:"pointer",fontSize:13,fontWeight:500,color:flt===s?"#fff":"var(--color-text-secondary)"}}>{s}</button>)}
     </div>
-    <div style={card}>{shown.length===0?<div style={{color:"var(--color-text-tertiary)",fontSize:14}}>No bugs.</div>:
+    <div style={card}>{loading?<div style={{color:"var(--color-text-tertiary)",fontSize:14}}>Loading…</div>:shown.length===0?<div style={{color:"var(--color-text-tertiary)",fontSize:14}}>No bugs.</div>:
       <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
         <thead><tr><th style={th}>Bug</th><th style={th}>Story</th><th style={th}>Summary</th><th style={th}>Sev</th><th style={th}>Status</th><th style={th}>Filed by</th></tr></thead>
         <tbody>{shown.map((b,i)=><tr key={i}><td style={td}><Tag c="red">{b.bid}</Tag></td><td style={td}><Tag c="blue">{b.sid}</Tag></td><td style={td}><span style={{fontSize:12}}>{b.summary}</span></td><td style={td}><Tag c={b.sev==="Critical"||b.sev==="High"?"red":"amber"}>{b.sev}</Tag></td>
@@ -1039,7 +1044,7 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
 
   const doGap=async()=>{
     setLoading(true); setLmsg("Running GAP analysis…");
-    const ctx=sdata&&!sdata.sim?`STORY TITLE: ${sdata.summary}\n\nSTORY CONTENT:\n${sdata.description?.slice(0,2000)||"(no description available)"}`:`STORY TITLE: Simulated ${platform} feature for project ${proj.jiraProjKey}\n\nSTORY CONTENT:\nAs a user I want to perform a core action so that I gain value. Acceptance Criteria: 1. The feature works on valid input. 2. Errors are shown for invalid input. 3. The UI is responsive.`;
+    const ctx=sdata&&!sdata.sim?`STORY TITLE: ${sdata.summary}\n\nSTORY CONTENT:\n${sdata.description?.slice(0,6000)||"(no description available)"}`:`STORY TITLE: Simulated ${platform} feature for project ${proj.jiraProjKey}\n\nSTORY CONTENT:\nAs a user I want to perform a core action so that I gain value. Acceptance Criteria: 1. The feature works on valid input. 2. Errors are shown for invalid input. 3. The UI is responsive.`;
     try {
       const r=await callAI([{role:"user",content:`You are a senior QA engineer. All data is provided below — do NOT access Jira or any external service. Perform a thorough story review and GAP analysis using ONLY the text below.\n\nStory ID: ${sid} | Platform: ${platform}\n${ctx}\n\nIMPORTANT: Write in plain text only. No markdown, no --- separators, no ** bold **, no > quotes, no tables, no backticks, no # headings. Use emoji + colon for section titles. Use numbered lists or dashes for items.\n\nStructure your response exactly like this:\n\n📋 Story Summary:\n[2-3 sentence summary]\n\n✅ Acceptance Criteria Review:\n[For each AC: ✓ Clear / ⚠ Needs clarification / ✗ Missing — with explanation]\n\n🔍 GAP Analysis:\n[List missing scenarios, boundary conditions, untested areas]\n\n⚠️ Risk Areas:\n[Each risk with rating: 🔴 High / 🟡 Medium / 🟢 Low]\n\n💡 Recommendations:\n[Actionable steps to improve story quality]\n\n📊 Test Coverage Estimate:\n[Breakdown: Happy flows / Edge cases / Negative cases / Automation %]`}],SYS,4000,"");
       const cleanGap = t => t.replace(/^#{1,6}\s*/gm,"").replace(/\*{1,2}([^*]+)\*{1,2}/g,"$1").replace(/^[-─]{3,}\s*$/gm,"").replace(/^\|.*\|$/gm,"").replace(/^>\s*/gm,"").replace(/`([^`]*)`/g,"$1").trim();
@@ -2233,7 +2238,7 @@ function AdminChangePasswordModal({onClose,forced}) {
   const submit=async()=>{
     if(!f.current||!f.next||!f.confirm){setErr("All fields are required.");return;}
     if(f.next!==f.confirm){setErr("New passwords do not match.");return;}
-    if(f.next.length<6){setErr("New password must be at least 6 characters.");return;}
+    if(f.next.length<8){setErr("New password must be at least 8 characters.");return;}
     setBusy(true); setErr("");
     try{
       const adminToken=sessionStorage.getItem(ADMIN_TOKEN_KEY)||"";
@@ -2258,7 +2263,7 @@ function AdminChangePasswordModal({onClose,forced}) {
         <Btn v="primary" onClick={onClose}>Continue to Dashboard</Btn>
       </div>:<div style={{display:"flex",flexDirection:"column",gap:10}}>
         <div><Lbl>Current Password</Lbl><input type="password" style={inp} value={f.current} onChange={e=>setF(p=>({...p,current:e.target.value}))} placeholder={forced?"Enter: admin":"Current password"}/></div>
-        <div><Lbl>New Password</Lbl><input type="password" style={inp} value={f.next} onChange={e=>setF(p=>({...p,next:e.target.value}))} placeholder="Min. 6 characters"/></div>
+        <div><Lbl>New Password</Lbl><input type="password" style={inp} value={f.next} onChange={e=>setF(p=>({...p,next:e.target.value}))} placeholder="Min. 8 characters"/></div>
         <div><Lbl>Confirm New Password</Lbl><input type="password" style={inp} value={f.confirm} onChange={e=>setF(p=>({...p,confirm:e.target.value}))} placeholder="Repeat new password"/></div>
         {err&&<div style={{color:"var(--color-text-danger)",fontSize:13}}>{err}</div>}
         <div style={{display:"flex",gap:8,justifyContent:"flex-end",marginTop:4}}>
@@ -2284,7 +2289,8 @@ function MemberConfigDialog({memberId, onClose}) {
     if(!f.jiraUrl||!f.jiraToken||!f.jiraEmail){setTestMsg("Fill in all three fields first.");return;}
     setTesting(true);setTestMsg("");
     try{
-      const sr=await fetch(API_BASE+"/api/auth/session",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({memberId,jiraUrl:f.jiraUrl,jiraEmail:f.jiraEmail,jiraToken:f.jiraToken})});
+      const mt=sessionStorage.getItem(MEMBER_TOKEN_KEY)||"";
+      const sr=await fetch(API_BASE+"/api/auth/session",{method:"POST",headers:{"Content-Type":"application/json","X-Member-Token":mt},body:JSON.stringify({memberId,jiraUrl:f.jiraUrl,jiraEmail:f.jiraEmail,jiraToken:f.jiraToken})});
       const sd=await sr.json();
       if(!sd.sessionToken)throw new Error("Could not create test session");
       const r=await fetch(API_BASE+"/api/jira",{method:"POST",headers:{"Content-Type":"application/json","X-Session-Token":sd.sessionToken},body:JSON.stringify({path:"/myself",method:"GET"})});
@@ -2371,7 +2377,7 @@ function loadSession(){
 }
 function App() {
   const [user,setUser]=useState(()=>{const u=loadSession();if(u?.role==="member")_currentMemberId=u.id;return u;}); const [page,setPage]=useState(()=>{const u=loadSession();return u?.role==="admin"?"dashboard":"workspace";}); const [,tick]=useState(0);
-  const [showConfig,setShowConfig]=useState(false);
+  const [showConfig,setShowConfig]=useState(()=>{const u=loadSession();return !!(u?.role==="member"&&!sessionStorage.getItem(SESSION_TOKEN_KEY));});
   const [showChangePwd,setShowChangePwd]=useState(false);
   const [savedStories,setSavedStories]=useState(()=>[...DB.savedStories]);
   const [restoreTarget,setRestoreTarget]=useState(null);
