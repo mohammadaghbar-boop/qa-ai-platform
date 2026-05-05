@@ -271,7 +271,17 @@ function proxyJira(jiraUrl, jiraPath, method, auth, body) {
         if (res.statusCode >= 400) {
           reject(new Error('Jira ' + res.statusCode + ': ' + data.slice(0, 200)));
         } else {
-          try { resolve(JSON.parse(data)); }
+          try {
+            const parsed = JSON.parse(data);
+            // Debug: log description field info to server console
+            if (parsed && parsed.fields !== undefined) {
+              const desc = parsed.fields.description;
+              const rendered = parsed.renderedFields?.description;
+              console.log('[Jira] fields.description:', desc === null ? 'NULL' : desc === undefined ? 'UNDEFINED' : (typeof desc === 'string' ? `string(${desc.length})` : `ADF(${JSON.stringify(desc).length}b)`));
+              console.log('[Jira] renderedFields.description:', rendered == null ? 'ABSENT' : `html(${rendered.length})`);
+            }
+            resolve(parsed);
+          }
           catch (e) { reject(new Error('Jira response parse error: ' + e.message)); }
         }
       });

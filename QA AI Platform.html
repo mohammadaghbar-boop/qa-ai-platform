@@ -1049,14 +1049,18 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
 
   const extractDesc=(d)=>{
     const flds=d.fields||{}; let desc="";
-    if(flds.description){
+    // Priority 1: Jira's own HTML rendering — most reliable, handles every ADF node type
+    if(d.renderedFields?.description){
+      desc=htmlToText(d.renderedFields.description);
+    }
+    // Priority 2: Parse ADF / wiki-markup manually
+    if(!desc && flds.description){
       if(typeof flds.description==="string"){
         desc=flds.description.replace(/\[([^\]]+)\]\(([^)]+)\)/g,"$1 ($2)").trim();
       } else {
         desc=adfToText(flds.description).trim();
       }
     }
-    if(!desc && d.renderedFields?.description) desc=htmlToText(d.renderedFields.description);
     return {flds,desc};
   };
   const doFetch=async()=>{
