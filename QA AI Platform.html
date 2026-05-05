@@ -1088,23 +1088,23 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
   };
 
   const doScripts=async()=>{
-    const selKey=[...selectedForScripts].sort().join(",");
-    // Cache hit — same selection already generated, skip AI entirely
+    const selCases=cases.filter(c=>selectedForScripts.includes(c.id));
+    // Cache key includes case content so edits to steps/expected invalidate the cache
+    const selKey=[...selectedForScripts].sort().join(",")+"|"+selCases.map(c=>`${(c.steps||[]).length}:${c.expected}`).join(";");
+    // Cache hit — same selection and content already generated, skip AI entirely
     if(scriptCache[selKey]){
       const hit=scriptCache[selKey];
       setScripts(hit.scripts); setTab(hit.tab); setProjFiles(hit.projFiles); setFixed(false); setPhase("autoReady");
       return;
     }
     setLoading(true); setLmsg("Generating "+fwName(platform)+" scripts…");
-    const selCases=cases.filter(c=>selectedForScripts.includes(c.id));
     const cl=selCases.map(c=>[
       `${c.id}: ${c.title} [${c.type}]`,
       c.preconditions?`  Preconditions: ${c.preconditions}`:'',
       `  Steps:\n${(c.steps||[]).map((s,i)=>`    ${i+1}. ${s}`).join('\n')}`,
       `  *** EXPECTED RESULT (MUST BE ASSERTED): ${c.expected} ***`
     ].filter(Boolean).join('\n')).join("\n\n");
-    const assertionRules=`\nCRITICAL ASSERTION RULES — follow exactly:\n1. Every test MUST assert the EXACT "EXPECTED RESULT" stated — this is the most important assertion.\n2. Use specific assertions: toHaveURL(), toHaveText(), toContainText(), toHaveValue(), toBeChecked(), toHaveCount() — not generic toBeVisible() alone.\n3. Add assertions after every step that produces a verifiable state change (navigation, form submit, error message shown, data saved).\n4. The final assertion in each test must directly validate the Expected Result text.\n5. NEVER write a test that can pass without actually verifying the expected outcome.`;
-    const mc="";
+    const assertionRules=`\nCRITICAL ASSERTION RULES — follow exactly:\n1. Every test MUST assert the EXACT "EXPECTED RESULT" stated — this is the most important assertion.\n2. Use specific assertions: toHaveURL(), toHaveText(), toContainText(), toHaveValue(), toBeChecked(), toHaveCount() — not generic toBeVisible() alone.\n3. Add assertions after every step that produces a verifiable state change (navigation, form submit, error message shown, data saved).\n4. The final assertion in each test must directly validate the Expected Result text.\n5. NEVER write a test that can pass without actually verifying the expected outcome.\n6. NAMING: every test()/it() title MUST start with the TC ID exactly as given (e.g., test('TC-001: Login with valid credentials', ...)) — this is required for result matching.`;
     try {
       let newScripts,newTab,newFiles;
       if(platform==="mobile"){
@@ -1136,7 +1136,10 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
     try {
       const failedCl=failed.map(c=>`${c.id}: ${c.title}\n  Steps:\n${(c.steps||[]).map((s,i)=>`    ${i+1}. ${s}`).join('\n')}\n  Expected Result (must be asserted): ${c.expected}\n  Error: ${c._pwError||"TimeoutError"}`).join("\n\n");
       const r=await callAI([{role:"user",content:`Fix failing Playwright tests for ${sid}.\nFailed test cases:\n${failedCl}\nCurrent script:\n${cur}\nFix locators, add proper waits, and ensure each test asserts its EXACT Expected Result using specific assertions (toHaveText, toHaveURL, toContainText, toHaveValue) — not generic toBeVisible(). Return complete fixed script only, no explanations.`}],SYS,8000,"");
-      if(platform==="mobile"){if(tab==="ios")setScripts(s=>({...s,ios:r}));else setScripts(s=>({...s,android:r}));}else setScripts(s=>({...s,web:r}));
+      if(platform==="mobile"){
+        if(tab==="ios"){setScripts(s=>({...s,ios:r}));setProjFiles(f=>({...f,[`tests/ios/${sid}.spec.js`]:r}));}
+        else{setScripts(s=>({...s,android:r}));setProjFiles(f=>({...f,[`tests/android/${sid}.spec.js`]:r}));}
+      }else{setScripts(s=>({...s,web:r}));setProjFiles(f=>({...f,[`tests/${sid}.spec.js`]:r}));}
       setFixed(true); setPhase("autoReady");
     } catch(e){alert(e.message);}
     setLoading(false);
