@@ -353,6 +353,9 @@ function runPlaywrightTests(files) {
     try {
       fs.mkdirSync(tmpDir, { recursive: true });
       fs.writeFileSync(path.join(tmpDir, 'package.json'), JSON.stringify({ name:'qa-run', version:'1.0.0', private:true }));
+      // Playwright config: disable browser download, set testDir, use JSON reporter
+      const pwConfig = `module.exports = { testDir: '.', timeout: 60000, use: { headless: true } };`;
+      fs.writeFileSync(path.join(tmpDir, 'playwright.config.js'), pwConfig);
       const safeBase = path.resolve(tmpDir) + path.sep;
       for (const [filePath, content] of Object.entries(files || {})) {
         if (filePath.endsWith('.md')) continue;
@@ -365,13 +368,40 @@ function runPlaywrightTests(files) {
 
     const lines = [];
     let jsonOutput = '';
-    const proc = spawn('npx', ['playwright', 'test', '--reporter=json'], { cwd: tmpDir, shell: true });
+    // CI=1 prevents Playwright from waiting for interactive input.
+    // stdio: ignore stdin so npx/playwright never block waiting for keyboard input on Windows.
+    const spawnEnv = { ...process.env, CI: '1', PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1', NPM_CONFIG_YES: 'true' };
+    // Help Node resolve @playwright/test from wherever it is installed (global npm, etc.)
+    try {
+      const pwResolved = require.resolve('@playwright/test');
+      const nmDir = pwResolved.slice(0, pwResolved.indexOf(path.sep + '@playwright' + path.sep + 'test'));
+      if (nmDir) spawnEnv.NODE_PATH = nmDir + (process.env.NODE_PATH ? path.delimiter + process.env.NODE_PATH : '');
+    } catch {}
+    // Also try global npm node_modules on Windows
+    if (!spawnEnv.NODE_PATH && process.platform === 'win32' && process.env.APPDATA) {
+      const globalNm = path.join(process.env.APPDATA, 'npm', 'node_modules');
+      if (fs.existsSync(globalNm)) spawnEnv.NODE_PATH = globalNm + (process.env.NODE_PATH ? path.delimiter + process.env.NODE_PATH : '');
+    }
+    const proc = spawn('npx', ['--yes', 'playwright', 'test', '--reporter=json'], {
+      cwd: tmpDir, shell: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: spawnEnv
+    });
     proc.stdout.on('data', d => jsonOutput += d.toString());
     proc.stderr.on('data', d => d.toString().split('\n').filter(l=>l.trim()).forEach(l=>lines.push(l)));
 
+    const killProc = () => {
+      try {
+        if (process.platform === 'win32') {
+          spawn('taskkill', ['/F', '/T', '/PID', String(proc.pid)], { shell: true, stdio: 'ignore' });
+        } else {
+          proc.kill('SIGTERM');
+        }
+      } catch {}
+    };
+
     const timer = setTimeout(() => {
-      try { proc.kill('SIGTERM'); } catch {}
-      cleanup();
+      killProc(); cleanup();
       resolve({ lines:[...lines,'✗ Test run timed out after 5 minutes'], passed:[], failed:[], error:'timeout' });
     }, 300000);
 

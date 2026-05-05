@@ -1318,11 +1318,17 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
       addLine("▶ Starting Playwright runner…");
       addLine("→ Uploading "+Object.keys(projFiles).filter(f=>!f.endsWith(".md")).length+" test file(s) to server…");
       try{
-        const r=await fetch(API_BASE+"/api/playwright/run",{method:"POST",headers:{"Content-Type":"application/json","X-Session-Token":sessionStorage.getItem(SESSION_TOKEN_KEY)||""},body:JSON.stringify({files:projFiles})});
+        const abortCtrl=new AbortController();
+        const fetchTimeout=setTimeout(()=>abortCtrl.abort(),360000); // 6-min safety net
+        const r=await fetch(API_BASE+"/api/playwright/run",{method:"POST",headers:{"Content-Type":"application/json","X-Session-Token":sessionStorage.getItem(SESSION_TOKEN_KEY)||""},body:JSON.stringify({files:projFiles}),signal:abortCtrl.signal});
+        clearTimeout(fetchTimeout);
         const data=await r.json();
         if(data.error==="not_installed"){
           addLine(""); addLine("✗ Playwright is not installed on the server.");
-          addLine("  To install: npm install -D @playwright/test && npx playwright install");
+          addLine("  Run these commands in the server terminal to install:");
+          addLine("    npm install -D @playwright/test");
+          addLine("    npx playwright install chromium");
+          addLine("  Then restart the server and try again.");
           setResult({pass:[],fail:pool,failedCases:pool,total:pool.length}); setPhase("result"); return;
         }
         (data.lines||[]).forEach(l=>addLine(l));
