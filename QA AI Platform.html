@@ -4,11 +4,13 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline'; connect-src 'self' https://unpkg.com https://cdnjs.cloudflare.com; img-src 'self' data: blob:; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self';"/>
+
 <title>QA AI Platform</title>
 <script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js" crossorigin="anonymous"></script>
 <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js" crossorigin="anonymous"></script>
 <script src="https://unpkg.com/@babel/standalone@7.26.5/babel.min.js" crossorigin="anonymous"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js" crossorigin="anonymous"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js" crossorigin="anonymous"></script>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f5f0; color: #1a1a18; min-height: 100vh; }
@@ -196,6 +198,48 @@ function exportCSV(cases, sid) {
   ]);
   const csv = [h,...rows].map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(",")).join("\n");
   dlFile("\uFEFF"+csv,"AIO_"+sid+".csv","text/csv;charset=utf-8");
+}
+function exportExcel(cases, sid) {
+  const approved = cases.filter(c => c.status === "approved");
+  const header = ["ID","Title","Description","Pre-condition","Test Data","Type","Priority","Test Steps","Expected Result"];
+  const rows = [header];
+  approved.forEach(c => {
+    const steps = c.steps || [];
+    const stepResults = c.stepResults || [];
+    const priority = c.priority || "Medium";
+    if (steps.length === 0) {
+      rows.push([c.id, c.title, c.description||"", c.preconditions||"", c.testData||"", c.type||"", priority, "", c.expected||""]);
+      return;
+    }
+    steps.forEach((step, i) => {
+      const expected = stepResults[i] || (i === steps.length - 1 ? c.expected || "" : "");
+      rows.push([
+        i === 0 ? c.id : "",
+        i === 0 ? c.title : "",
+        i === 0 ? (c.description || "") : "",
+        i === 0 ? (c.preconditions || "") : "",
+        i === 0 ? (c.testData || "") : "",
+        i === 0 ? (c.type || "") : "",
+        i === 0 ? priority : "",
+        step,
+        expected
+      ]);
+    });
+  });
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  // Column widths
+  ws["!cols"] = [
+    {wch:10},{wch:40},{wch:40},{wch:30},{wch:25},{wch:15},{wch:10},{wch:50},{wch:50}
+  ];
+  // Header row style (bold)
+  const range = XLSX.utils.decode_range(ws["!ref"]);
+  for (let c = range.s.c; c <= range.e.c; c++) {
+    const cell = ws[XLSX.utils.encode_cell({r:0, c})];
+    if (cell) cell.s = {font:{bold:true}, fill:{fgColor:{rgb:"D9E1F2"}}, alignment:{wrapText:true,vertical:"center"}};
+  }
+  XLSX.utils.book_append_sheet(wb, ws, "Test Cases");
+  XLSX.writeFile(wb, "AIO_TestCases_" + sid + ".xlsx");
 }
 
 /* ─── CSV user-data parser ───────────────────────────────────────────────── */
@@ -986,6 +1030,24 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
   };
 
   const WS_SNAP=`qa_ws_${member.id}`;
+  const STORIES_CACHE_KEY=`qa_stories_${member.id}`;
+
+  // Per-story cache helpers — save/restore state keyed by story ID
+  const saveStoryToCache=(storyId,storyState)=>{
+    if(!storyId)return;
+    try{
+      const cache=JSON.parse(localStorage.getItem(STORIES_CACHE_KEY)||"{}");
+      cache[storyId]=storyState;
+      // Keep only last 15 stories to avoid bloating localStorage
+      const keys=Object.keys(cache);
+      if(keys.length>15)delete cache[keys[0]];
+      localStorage.setItem(STORIES_CACHE_KEY,JSON.stringify(cache));
+    }catch{}
+  };
+  const restoreStoryFromCache=(storyId)=>{
+    try{const cache=JSON.parse(localStorage.getItem(STORIES_CACHE_KEY)||"{}");return cache[storyId]||null;}catch{return null;}
+  };
+
   // Restore workspace state on mount (survives logout/login and page refresh)
   useEffect(()=>{
     try{
@@ -1004,6 +1066,8 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
   useEffect(()=>{
     if(phase==="input"||phase==="testType"){localStorage.removeItem(WS_SNAP);return;}
     try{localStorage.setItem(WS_SNAP,JSON.stringify({phase,testKind,sid,sdata,platform,ctypes,gapText,cases,scripts,tab,result,execLines,coverageText,sessionBugs,selectedForScripts,appUrl,perfForm,perfResult}));}catch{}
+    // Also keep per-story cache up to date
+    if(sid&&sdata)saveStoryToCache(sid,{phase,sdata,platform,ctypes,gapText,cases,scripts,result,sessionBugs,coverageText,appUrl});
   },[phase,sid,sdata,platform,ctypes,gapText,cases,scripts,tab,result,execLines,coverageText,sessionBugs,selectedForScripts,appUrl]);
 
   // Poll codegen session status while recording
@@ -1064,7 +1128,27 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
     return {flds,desc};
   };
   const doFetch=async()=>{
+    // Save current story state before switching to a new one
+    if(sdata?.key && sdata.key!==sid){
+      saveStoryToCache(sdata.key,{phase,sdata,platform,ctypes,gapText,cases,scripts,result,sessionBugs,coverageText,appUrl});
+    }
     setLoading(true); setLmsg("Fetching story from Jira…"); setFetchError("");
+    // Check per-story cache first — if we have state for this story, restore it immediately
+    const cached=restoreStoryFromCache(sid);
+    if(cached&&cached.sdata){
+      setSdata(cached.sdata);
+      setPlatform(cached.platform||proj?.platform||"web");
+      setGapText(cached.gapText||"");
+      setCases(cached.cases||[]);
+      setCtypes(cached.ctypes||[]);
+      setScripts(cached.scripts||{web:"",ios:"",android:""});
+      setResult(cached.result||null);
+      setSessionBugs(cached.sessionBugs||[]);
+      setCoverageText(cached.coverageText||"");
+      setAppUrl(cached.appUrl||"");
+      const safePhase=["mode","gap","ctype","ready","review","jira","urlPrompt","scriptSelect","autoReady","result","bugReport","coverage"].includes(cached.phase)?cached.phase:"mode";
+      setPhase(safePhase); setLoading(false); return;
+    }
     try {
       // Try with renderedFields expansion; some Jira instances reject it — fall back without
       let d;
@@ -1076,6 +1160,7 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
       const {flds,desc}=extractDesc(d);
       const sd={key:d.key,summary:flds.summary||sid,description:desc,labels:flds.labels||[],type:flds.issuetype?.name||"Story",status:flds.status?.name||"",assignee:flds.assignee?.displayName||"—",priority:flds.priority?.name||"Medium"};
       setSdata(sd); const pp=proj.platform||"web"; setPlatform(pp==="both"?"web":pp);
+      setGapText(""); setCases([]); setCtypes([]); setResult(null); setSessionBugs([]); setCoverageText(""); setAppUrl("");
       setPhase("mode"); setLoading(false);
     } catch(e) {
       if(jiraConfigured){
@@ -1087,6 +1172,7 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
       }
       setSdata({key:sid,summary:"Story "+sid,description:"",labels:[],type:"Story",status:"In Progress",assignee:"—",priority:"Medium",sim:true});
       const pp=proj?.platform||"web"; setPlatform(pp==="both"?"web":pp);
+      setGapText(""); setCases([]); setCtypes([]); setResult(null); setSessionBugs([]); setCoverageText(""); setAppUrl("");
       setPhase("mode"); setLoading(false);
     }
   };
@@ -1119,7 +1205,7 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
       negative:"INVALID inputs and ERROR conditions only — wrong passwords, unauthorized access, missing required fields, incorrect data formats, network errors, permission denied. Do NOT duplicate edge/boundary cases."
     };
     try {
-      const requests=newTypes.map(type=>callAI([{role:"user",content:`You are a senior QA engineer. Your task is to generate comprehensive ${type} test cases for the story below.\n\nPlatform: ${platform}\n${ctx}\n\nTYPE: ${type.toUpperCase()} — ${typeGuide[type]||""}\n\nSTEP 1 — Extract ALL Acceptance Criteria:\nRead the full description above and number every acceptance criterion you find (AC-1, AC-2, AC-3, …). Do not skip any.\n\nSTEP 2 — Generate test cases:\nFor EACH AC you identified, generate at least 2-3 ${type} test cases that specifically verify that AC.\nRules:\n- Every AC must have at least one test case — missing an AC is a defect.\n- No limit on total number of cases — completeness is required.\n- Each title must be unique and clearly reference what it tests.\n- automatable:false only for offline/camera/biometrics/hardware-dependent tests.\n\nReturn ONLY a valid JSON array with no markdown or explanation:\n[{"id":"TC-001","title":"...","type":"${type}","platform":"${platform}","preconditions":"...","steps":["Step 1","Step 2","Step 3"],"expected":"...","automatable":true}]`}],SYS,8000,proj.anthropicKey||""));
+      const requests=newTypes.map(type=>callAI([{role:"user",content:`You are a senior QA engineer. Your task is to generate comprehensive ${type} test cases for the story below.\n\nPlatform: ${platform}\n${ctx}\n\nTYPE: ${type.toUpperCase()} — ${typeGuide[type]||""}\n\nSTEP 1 — Extract ALL Acceptance Criteria:\nRead the full description above and number every acceptance criterion you find (AC-1, AC-2, AC-3, …). Do not skip any.\n\nSTEP 2 — Generate test cases:\nFor EACH AC you identified, generate at least 2-3 ${type} test cases that specifically verify that AC.\nRules:\n- Every title must start with "Verify".\n- No duplicate test case titles.\n- Every AC must have at least one test case — missing an AC is a defect.\n- No limit on total number of cases — completeness is required.\n- automatable:false only for offline/camera/biometrics/hardware-dependent tests.\n- priority: one of "Critical", "High", "Medium", "Low" based on risk and importance.\n- description: one sentence describing what this test case validates.\n- testData: specific values, credentials, or inputs needed (empty string if none).\n- preconditions: system state required before executing (e.g. "User is logged in as admin").\n- steps: array of action strings (what the tester does).\n- stepResults: array of expected results — SAME LENGTH as steps, one per step describing what should happen after that step.\n- expected: the overall final expected outcome of the test case.\n\nReturn ONLY a valid JSON array with no markdown or explanation:\n[{"id":"TC-001","title":"Verify ...","description":"...","type":"${type}","platform":"${platform}","priority":"High","preconditions":"...","testData":"...","steps":["Step 1","Step 2","Step 3"],"stepResults":["Expected after step 1","Expected after step 2","Expected after step 3"],"expected":"...","automatable":true}]`}],SYS,8000,proj.anthropicKey||""));
       const results=await Promise.all(requests);
       const rawNew=results.flatMap((r,i)=>{
         const match=r.replace(/```json|```/g,"").trim().match(/\[[\s\S]*\]/);
@@ -1209,7 +1295,7 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
       }
       setJKey(issueKey||sid+"-ST");
     } catch(e) { alert("Failed to create Jira issue: "+e.message); setJKey(null); setLoading(false); return; }
-    exportCSV(cases,sid); setPhase("jiraDone"); setLoading(false);
+    exportExcel(cases,sid); setPhase("jiraDone"); setLoading(false);
   };
 
   const doFileBug=async()=>{
@@ -1351,8 +1437,8 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
     if(i===1){setPhase("testType");return;}
     if(testKind==="non-functional"){if(i===2){setPhase("perfTest");return;}return;}
     if(i===2){setPhase("input");return;}
-    if(i===3&&sdata){setPhase("mode");return;}
-    if(i===4&&sdata){const et=[...new Set(cases.map(c=>c.type))];setCtypes(et.length>0?et:[]);setPhase("ctype");return;}
+    if(i===3&&sdata){setPhase(gapText?"gap":"mode");return;}
+    if(i===4&&sdata){if(cases.length>0){setPhase("review");return;}const et=[...new Set(cases.map(c=>c.type))];setCtypes(et.length>0?et:[]);setPhase("ctype");return;}
     if(i===5&&cases.length>0){setPhase("review");return;}
     if(i===6&&approved.length>0){setPhase("jira");return;}
     if(i===7){setPhase(projFiles?"autoReady":"urlPrompt");return;}
@@ -1724,15 +1810,24 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
           {proj.platform==="both"&&<div style={{...card,marginBottom:12}}><H2>Select platform for this story</H2><div style={{display:"flex",gap:12,marginTop:12}}>{[{v:"web",icon:"🌐",label:"Web",sub:"Playwright"},{v:"mobile",icon:"📱",label:"Mobile",sub:"Appium"}].map(o=><button key={o.v} onClick={()=>setPlatform(o.v)} style={{flex:1,padding:16,borderRadius:12,border:"2px solid "+(platform===o.v?"var(--color-text-info)":"var(--color-border-secondary)"),background:platform===o.v?"var(--color-background-info)":"var(--color-background-primary)",cursor:"pointer",textAlign:"left"}}><div style={{fontSize:22,marginBottom:4}}>{o.icon}</div><div style={{fontWeight:500,fontSize:14}}>{o.label}</div><div style={{fontSize:12,color:"var(--color-text-secondary)",marginTop:2}}>{o.sub}</div></button>)}</div></div>}
           <div style={card}><div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:16}}>Story: <b>{sid}</b></div><H2>What would you like to do?</H2>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-              {[{icon:"🔍",title:"Story review + GAP analysis",desc:"Analyze ACs for gaps and missing scenarios.",fn:doGap},{icon:"📝",title:"Write test cases",desc:"Generate structured manual test cases.",fn:()=>setPhase("ctype")}].map(o=><button key={o.title} onClick={o.fn} style={{padding:20,borderRadius:12,border:"1px solid var(--color-border-secondary)",background:"var(--color-background-primary)",cursor:"pointer",textAlign:"left"}}>
-                <div style={{fontSize:24,marginBottom:8}}>{o.icon}</div><div style={{fontWeight:500,fontSize:15,marginBottom:4}}>{o.title}</div><div style={{fontSize:13,color:"var(--color-text-secondary)",lineHeight:1.5}}>{o.desc}</div>
+              {[
+                {icon:"🔍",title:"Story review + GAP analysis",desc:gapText?"View saved GAP analysis (already done)":"Analyze ACs for gaps and missing scenarios.",fn:gapText?()=>setPhase("gap"):doGap,done:!!gapText},
+                {icon:"📝",title:"Write test cases",desc:cases.length>0?`Resume — ${cases.length} test cases already generated`:"Generate structured manual test cases.",fn:()=>cases.length>0?setPhase("review"):setPhase("ctype"),done:cases.length>0}
+              ].map(o=><button key={o.title} onClick={o.fn} style={{padding:20,borderRadius:12,border:"1px solid "+(o.done?"var(--color-text-success)":"var(--color-border-secondary)"),background:o.done?"var(--color-background-success)":"var(--color-background-primary)",cursor:"pointer",textAlign:"left"}}>
+                <div style={{fontSize:24,marginBottom:8}}>{o.icon}{o.done&&<span style={{fontSize:14,marginLeft:6,color:"var(--color-text-success)"}}>✓</span>}</div><div style={{fontWeight:500,fontSize:15,marginBottom:4}}>{o.title}</div><div style={{fontSize:13,color:o.done?"var(--color-text-success)":"var(--color-text-secondary)",lineHeight:1.5}}>{o.desc}</div>
               </button>)}
             </div>
           </div>
         </div>}
 
         {!loading&&phase==="gap"&&<div>
-          <div style={card}><div style={{display:"flex",gap:8,marginBottom:14,alignItems:"center"}}><Tag c="blue">{sid}</Tag><span style={{fontWeight:500}}>GAP Analysis</span></div><div style={{whiteSpace:"pre-wrap",fontSize:14,lineHeight:1.85}}>{gapText}</div></div>
+          <div style={card}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+              <div style={{display:"flex",gap:8,alignItems:"center"}}><Tag c="blue">{sid}</Tag><span style={{fontWeight:500}}>GAP Analysis</span></div>
+              <button onClick={doGap} style={{...ghostBtn,fontSize:12,padding:"4px 10px"}}>🔄 Regenerate</button>
+            </div>
+            <div style={{whiteSpace:"pre-wrap",fontSize:14,lineHeight:1.85}}>{gapText}</div>
+          </div>
           <Confirm icon="📝" title="Would you like to write test cases?" onYes={()=>setPhase("ctype")} yesLabel="Yes, write test cases"/>
         </div>}
 
@@ -1820,7 +1915,8 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
           <div style={{...card,padding:"16px 20px"}}>
             <div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:14}}>Story <b>{sid}</b> · <b>{approved.length}</b> approved cases · <Tag c={platform==="mobile"?"amber":"blue"}>{platform}</Tag></div>
             <div style={{display:"flex",gap:10}}>
-              <Btn v="primary" onClick={()=>{exportCSV(cases,sid);setAppUrl("");setPhase("urlPrompt");}}>⬇ Export AIO CSV</Btn>
+              <Btn v="primary" onClick={()=>{exportExcel(cases,sid);setAppUrl("");setPhase("urlPrompt");}}>⬇ Export AIO Excel</Btn>
+              <Btn v="ghost" onClick={()=>{exportCSV(cases,sid);setAppUrl("");setPhase("urlPrompt");}}>⬇ Export AIO CSV</Btn>
               <button onClick={()=>{setAppUrl("");setPhase("urlPrompt");}} style={ghostBtn}>Skip</button>
             </div>
           </div>
@@ -2342,8 +2438,9 @@ function MemberConfigDialog({memberId, onClose}) {
     setTesting(true);setTestMsg("");
     try{
       const mt=sessionStorage.getItem(MEMBER_TOKEN_KEY)||"";
+      const st=sessionStorage.getItem(SESSION_TOKEN_KEY)||"";
       const cleanUrl=(()=>{try{return new URL(f.jiraUrl.trim()).origin;}catch{return f.jiraUrl.trim();}})();
-      const sr=await fetch(API_BASE+"/api/auth/session",{method:"POST",headers:{"Content-Type":"application/json","X-Member-Token":mt},body:JSON.stringify({memberId,jiraUrl:cleanUrl,jiraEmail:f.jiraEmail,jiraToken:f.jiraToken})});
+      const sr=await fetch(API_BASE+"/api/auth/session",{method:"POST",headers:{"Content-Type":"application/json","X-Member-Token":mt,"X-Session-Token":st},body:JSON.stringify({memberId,jiraUrl:cleanUrl,jiraEmail:f.jiraEmail,jiraToken:f.jiraToken})});
       const sd=await sr.json();
       if(!sd.sessionToken)throw new Error("Could not create test session");
       const r=await fetch(API_BASE+"/api/jira",{method:"POST",headers:{"Content-Type":"application/json","X-Session-Token":sd.sessionToken},body:JSON.stringify({path:"/myself",method:"GET"})});
