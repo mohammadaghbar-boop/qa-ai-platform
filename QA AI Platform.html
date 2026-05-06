@@ -1343,13 +1343,20 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
     const pool=cases.filter(c=>selectedForScripts.includes(c.id));
     const addLine=l=>setExecLines(ls=>[...ls,l]);
 
-    if(platform==="web"&&projFiles){
+    // Reconstruct projFiles from saved script if not in memory (e.g. after session restore)
+    let effectiveProjFiles=projFiles;
+    if(!effectiveProjFiles&&platform==="web"&&scripts.web){
+      const baseURL=appUrl||"http://localhost:3000";
+      effectiveProjFiles={"test.config.js":`module.exports={testDir:"./tests",use:{baseURL:"${baseURL}"}};`,[`tests/${sid}.spec.js`]:scripts.web,"README.md":`# Web Tests — ${sid}\n\nnpm install && npm test`};
+      setProjFiles(effectiveProjFiles);
+    }
+    if(platform==="web"&&effectiveProjFiles){
       addLine("▶ Starting Playwright runner…");
-      addLine("→ Uploading "+Object.keys(projFiles).filter(f=>!f.endsWith(".md")).length+" test file(s) to server…");
+      addLine("→ Uploading "+Object.keys(effectiveProjFiles).filter(f=>!f.endsWith(".md")).length+" test file(s) to server…");
       try{
         const abortCtrl=new AbortController();
         const fetchTimeout=setTimeout(()=>abortCtrl.abort(),360000); // 6-min safety net
-        const r=await fetch(API_BASE+"/api/playwright/run",{method:"POST",headers:{"Content-Type":"application/json","X-Session-Token":sessionStorage.getItem(SESSION_TOKEN_KEY)||""},body:JSON.stringify({files:projFiles}),signal:abortCtrl.signal});
+        const r=await fetch(API_BASE+"/api/playwright/run",{method:"POST",headers:{"Content-Type":"application/json","X-Session-Token":sessionStorage.getItem(SESSION_TOKEN_KEY)||""},body:JSON.stringify({files:effectiveProjFiles}),signal:abortCtrl.signal});
         clearTimeout(fetchTimeout);
         const data=await r.json();
         if(data.error==="not_installed"){
@@ -1435,7 +1442,7 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
       return;
     }
     const existing=DB.savedStories.find(s=>s.sid===sid);
-    const snap={id:existing?.id||uid(),name,categoryId:categoryId||null,phase,sid,sdata,cases:[...cases],gapText,platform,ctypes:[...ctypes],scripts:{...scripts},result,sessionBugs:[...sessionBugs],coverageText,savedAt:Date.now()};
+    const snap={id:existing?.id||uid(),name,categoryId:categoryId||null,phase,sid,sdata,cases:[...cases],gapText,platform,ctypes:[...ctypes],scripts:{...scripts},result,sessionBugs:[...sessionBugs],coverageText,selectedForScripts:[...selectedForScripts],appUrl,savedAt:Date.now()};
     if(existing){DB.savedStories=DB.savedStories.map(s=>s.sid===sid?snap:s);}
     else{DB.savedStories.unshift(snap);}
     saveDB(); if(refreshSaved)refreshSaved(); setHasSaved(true); setSaveModal(null); showToast("Session saved successfully");
@@ -1443,7 +1450,7 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
   const saveAndReset=()=>{
     if(sid&&sdata){
       const existing=DB.savedStories.find(s=>s.sid===sid);
-      const snap={id:existing?.id||uid(),name:existing?.name||(sdata?.summary||sid),categoryId:existing?.categoryId||null,phase,sid,sdata,cases:[...cases],gapText,platform,ctypes:[...ctypes],scripts:{...scripts},result,sessionBugs:[...sessionBugs],coverageText,savedAt:Date.now()};
+      const snap={id:existing?.id||uid(),name:existing?.name||(sdata?.summary||sid),categoryId:existing?.categoryId||null,phase,sid,sdata,cases:[...cases],gapText,platform,ctypes:[...ctypes],scripts:{...scripts},result,sessionBugs:[...sessionBugs],coverageText,selectedForScripts:[...selectedForScripts],appUrl,savedAt:Date.now()};
       if(existing){DB.savedStories=DB.savedStories.map(s=>s.sid===sid?snap:s);}
       else{DB.savedStories.unshift(snap);}
       saveDB(); if(refreshSaved)refreshSaved();
@@ -1451,7 +1458,7 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
     reset();
   };
   const restoreStory=snap=>{
-    setSid(snap.sid);setSdata(snap.sdata);setPlatform(snap.platform);setCtypes(snap.ctypes||[]);setGapText(snap.gapText||"");setCases(snap.cases||[]);setScripts(snap.scripts||{web:"",ios:"",android:""});setResult(snap.result||null);setSessionBugs(snap.sessionBugs||[]);setCoverageText(snap.coverageText||"");setSelectedForScripts([]);setExecLines([]);setJKey(null);setBugDone(null);setShowBugForm(false);setFixed(false);setEditOn(false);setChat(false);setShowAddCase(false);
+    setSid(snap.sid);setSdata(snap.sdata);setPlatform(snap.platform);setCtypes(snap.ctypes||[]);setGapText(snap.gapText||"");setCases(snap.cases||[]);setScripts(snap.scripts||{web:"",ios:"",android:""});setResult(snap.result||null);setSessionBugs(snap.sessionBugs||[]);setCoverageText(snap.coverageText||"");setSelectedForScripts(snap.selectedForScripts||[]);setAppUrl(snap.appUrl||"");setExecLines([]);setJKey(null);setBugDone(null);setShowBugForm(false);setFixed(false);setEditOn(false);setChat(false);setShowAddCase(false);
     const lastPhase=snap.phase||(snap.coverageText?"coverage":snap.result?"result":snap.cases?.some(c=>c.status==="approved")?"review":"ctype");
     setPhase(lastPhase);
   };
@@ -1462,7 +1469,7 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
   React.useEffect(()=>{
     if(!sid||!sdata)return;
     const existing=DB.savedStories.find(s=>s.sid===sid);
-    const snap={id:existing?.id||uid(),name:existing?.name||(sdata?.summary||sid),categoryId:existing?.categoryId||null,phase,sid,sdata,cases:[...cases],gapText,platform,ctypes:[...ctypes],scripts:{...scripts},result,sessionBugs:[...sessionBugs],coverageText,savedAt:Date.now()};
+    const snap={id:existing?.id||uid(),name:existing?.name||(sdata?.summary||sid),categoryId:existing?.categoryId||null,phase,sid,sdata,cases:[...cases],gapText,platform,ctypes:[...ctypes],scripts:{...scripts},result,sessionBugs:[...sessionBugs],coverageText,selectedForScripts:[...selectedForScripts],appUrl,savedAt:Date.now()};
     if(existing){DB.savedStories=DB.savedStories.map(s=>s.sid===sid?snap:s);}
     else{DB.savedStories.unshift(snap);}
     saveDB();if(refreshSaved)refreshSaved();
@@ -1477,7 +1484,7 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
     if(i===4&&sdata){if(cases.length>0){setPhase("review");return;}const et=[...new Set(cases.map(c=>c.type))];setCtypes(et.length>0?et:[]);setPhase("ctype");return;}
     if(i===5&&cases.length>0){setPhase("review");return;}
     if(i===6&&approved.length>0){setPhase("jira");return;}
-    if(i===7){setPhase(projFiles?"autoReady":"urlPrompt");return;}
+    if(i===7){setPhase((scripts.web||scripts.ios||scripts.android)?"autoReady":"urlPrompt");return;}
     if(i===8&&result){setPhase("result");return;}
     if(i===9){setPhase("bugReport");return;}
     if(i===10){setPhase("coverage");return;}
