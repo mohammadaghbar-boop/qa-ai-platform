@@ -50,7 +50,7 @@ async function suite(name, fn) {
 
 /** Mirror of the JSON walk in runPlaywrightTests (server.js) */
 function parsePlaywrightResults(jsonOutput) {
-  const pw_passed = [], pw_failed = [];
+  const pw_passed = [], pw_failed = [], globalErrors = [];
   try {
     const s = jsonOutput.indexOf('{'), e = jsonOutput.lastIndexOf('}');
     if (s >= 0 && e > s) {
@@ -66,9 +66,10 @@ function parsePlaywrightResults(jsonOutput) {
         }
       };
       walk(results.suites);
+      for (const err of results.errors || []) globalErrors.push((err.message || String(err)).slice(0, 400));
     }
   } catch {}
-  return { passed: pw_passed, failed: pw_failed };
+  return { passed: pw_passed, failed: pw_failed, globalErrors };
 }
 
 /** Mirror of path-traversal guard in runPlaywrightTests (server.js) */
@@ -152,7 +153,7 @@ async function isServerRunning() {
 
     await test('empty string → empty arrays', () => {
       const r = parsePlaywrightResults('');
-      assert.deepStrictEqual(r, { passed: [], failed: [] });
+      assert.deepStrictEqual(r, { passed: [], failed: [], globalErrors: [] });
     });
 
     await test('single passing spec → in passed array with full title', () => {
@@ -221,7 +222,7 @@ async function isServerRunning() {
     await test('malformed JSON → empty arrays, no throw', () => {
       assert.doesNotThrow(() => {
         const r = parsePlaywrightResults('{ "suites": [INVALID] }');
-        assert.deepStrictEqual(r, { passed: [], failed: [] });
+        assert.deepStrictEqual(r, { passed: [], failed: [], globalErrors: [] });
       });
     });
 
@@ -259,6 +260,33 @@ async function isServerRunning() {
       });
       const r = parsePlaywrightResults(json);
       assert.strictEqual(r.passed.length, 2);
+    });
+
+    await test('results.errors are collected (file-load / import failures)', () => {
+      const json = JSON.stringify({
+        suites: [],
+        errors: [
+          { message: "Cannot find module '@playwright/test'" },
+          { message: 'SyntaxError: Unexpected token' }
+        ]
+      });
+      const r = parsePlaywrightResults(json);
+      assert.strictEqual(r.passed.length, 0);
+      assert.strictEqual(r.failed.length, 0);
+      assert.strictEqual(r.globalErrors.length, 2);
+      assert.ok(r.globalErrors[0].includes('@playwright/test'));
+    });
+
+    await test('results.errors absent → globalErrors is empty array', () => {
+      const json = JSON.stringify({ suites: [] });
+      const r = parsePlaywrightResults(json);
+      assert.deepStrictEqual(r.globalErrors, []);
+    });
+
+    await test('results.errors message is capped at 400 chars', () => {
+      const json = JSON.stringify({ suites: [], errors: [{ message: 'E'.repeat(500) }] });
+      const r = parsePlaywrightResults(json);
+      assert.strictEqual(r.globalErrors[0].length, 400);
     });
   });
 

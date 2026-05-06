@@ -393,7 +393,20 @@ function runPlaywrightTests(files) {
       const globalNm = path.join(process.env.APPDATA, 'npm', 'node_modules');
       if (fs.existsSync(globalNm)) spawnEnv.NODE_PATH = globalNm + (process.env.NODE_PATH ? path.delimiter + process.env.NODE_PATH : '');
     }
-    const proc = spawn('npx', ['--yes', 'playwright', 'test', '--reporter=json'], {
+    // Pre-check: verify playwright CLI is reachable (fast fail — no download)
+    const { spawnSync } = require('child_process');
+    const preCheck = spawnSync('npx', ['playwright', '--version'], {
+      cwd: tmpDir, shell: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: spawnEnv, timeout: 15000
+    });
+    if (preCheck.status !== 0 || preCheck.error) {
+      cleanup();
+      resolve({ lines: [], passed: [], failed: [], error: 'not_installed' });
+      return;
+    }
+
+    const proc = spawn('npx', ['playwright', 'test', '--reporter=json'], {
       cwd: tmpDir, shell: true,
       stdio: ['ignore', 'pipe', 'pipe'],
       env: spawnEnv
@@ -416,9 +429,10 @@ function runPlaywrightTests(files) {
       resolve({ lines:[...lines,'✗ Test run timed out after 5 minutes'], passed:[], failed:[], error:'timeout' });
     }, 300000);
 
-    proc.on('close', () => {
+    proc.on('close', (code) => {
       clearTimeout(timer); cleanup();
       let passed = [], failed = [];
+      const globalErrors = [];
       try {
         const s = jsonOutput.indexOf('{'), e = jsonOutput.lastIndexOf('}');
         if (s >= 0 && e > s) {
@@ -434,8 +448,26 @@ function runPlaywrightTests(files) {
             }
           };
           walk(results.suites);
+          // Collect global errors — e.g. test file failed to load (import errors go here, not suites)
+          for (const err of results.errors || []) {
+            globalErrors.push((err.message || String(err)).slice(0, 400));
+          }
         }
       } catch {}
+
+      // Surface global errors so the user knows WHY 0 tests ran
+      if (globalErrors.length > 0) {
+        lines.unshift('');
+        globalErrors.forEach(e => lines.unshift('✗ ' + e));
+        lines.unshift('Playwright reported global errors:');
+        // Detect @playwright/test module not found — treat as not_installed
+        const errText = globalErrors.join('\n').toLowerCase();
+        if (errText.includes("cannot find module") && errText.includes('playwright')) {
+          resolve({ lines, passed: [], failed: [], error: 'not_installed' });
+          return;
+        }
+      }
+
       lines.push(''); lines.push('Results: '+passed.length+' passed, '+failed.length+' failed');
       resolve({ lines, passed, failed, error: null });
     });
