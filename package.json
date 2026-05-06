@@ -1,0 +1,9 @@
+{
+  "name": "qa-ai-platform",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "start": "node server.js",
+    "test": "node tests/qa-platform.test.js"
+  }
+}
