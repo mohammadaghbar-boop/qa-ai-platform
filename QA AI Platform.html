@@ -1179,11 +1179,48 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
 
   const doGap=async()=>{
     setLoading(true); setLmsg("Running GAP analysis…");
-    const ctx=sdata&&!sdata.sim?`STORY TITLE: ${sdata.summary}\n\nSTORY CONTENT:\n${sdata.description?.slice(0,6000)||"(no description available)"}`:`STORY TITLE: Simulated ${platform} feature for project ${proj.jiraProjKey}\n\nSTORY CONTENT:\nAs a user I want to perform a core action so that I gain value. Acceptance Criteria: 1. The feature works on valid input. 2. Errors are shown for invalid input. 3. The UI is responsive.`;
+    const ctx=sdata&&!sdata.sim?`STORY TITLE: ${sdata.summary}\n\nSTORY CONTENT:\n${sdata.description?.slice(0,8000)||"(no description available)"}`:`STORY TITLE: Simulated ${platform} feature for project ${proj.jiraProjKey}\n\nSTORY CONTENT:\nAs a user I want to perform a core action so that I gain value. Acceptance Criteria: 1. The feature works on valid input. 2. Errors are shown for invalid input. 3. The UI is responsive.`;
+    const GAP_PROMPT=`You are a senior QA analyst. Your task is to perform a professional gap analysis on the user story below.
+
+STRICT RULES:
+- Read the FULL story content including description, business rules, edge cases, acceptance criteria, and preconditions.
+- Do NOT generate generic gaps. Every gap you raise must reference a SPECIFIC section, rule, or AC number from the actual story.
+- For every gap: state what is missing, which section it relates to, and why it matters for testing.
+- Do NOT flag something as a gap if it is already covered anywhere in the story.
+- List only REAL gaps that the BA must clarify before test cases can be written.
+
+Story ID: ${sid} | Platform: ${platform}
+${ctx}
+
+IMPORTANT: Write in plain text only. No markdown symbols, no **, no ##, no ---, no backticks, no > quotes. Use CAPS for section titles. Use numbered lists for gaps.
+
+Output this EXACT structure:
+
+STORY SUMMARY:
+[2-3 sentence summary of what this story actually does, based on what you read]
+
+REAL GAPS FOUND:
+[For each gap, use this format:]
+GAP [number]: [Short gap title]
+Section reference: [Exact section name or AC number from the story]
+What is missing: [Specific description of what is not defined or unclear]
+Why it matters: [Why QA cannot test without this being clarified]
+Risk: [HIGH / MEDIUM / LOW]
+
+[If no real gaps found, write: No gaps found — story is complete for QA.]
+
+ACs THAT NEED CLARIFICATION:
+[List each AC that is unclear using this format:]
+AC[number]: [What specifically is unclear or ambiguous in that AC]
+
+[If all ACs are clear, write: All ACs are clearly defined.]
+
+OVERALL STORY READINESS FOR QA:
+[One of: Ready / Needs clarification / Not ready]
+[One sentence explaining why]`;
     try {
-      const r=await callAI([{role:"user",content:`You are a senior QA engineer. All data is provided below — do NOT access Jira or any external service. Perform a thorough story review and GAP analysis using ONLY the text below.\n\nStory ID: ${sid} | Platform: ${platform}\n${ctx}\n\nIMPORTANT: Write in plain text only. No markdown, no --- separators, no ** bold **, no > quotes, no tables, no backticks, no # headings. Use emoji + colon for section titles. Use numbered lists or dashes for items.\n\nStructure your response exactly like this:\n\n📋 Story Summary:\n[2-3 sentence summary]\n\n✅ Acceptance Criteria Review:\n[For each AC: ✓ Clear / ⚠ Needs clarification / ✗ Missing — with explanation]\n\n🔍 GAP Analysis:\n[List missing scenarios, boundary conditions, untested areas]\n\n⚠️ Risk Areas:\n[Each risk with rating: 🔴 High / 🟡 Medium / 🟢 Low]\n\n💡 Recommendations:\n[Actionable steps to improve story quality]\n\n📊 Test Coverage Estimate:\n[Breakdown: Happy flows / Edge cases / Negative cases / Automation %]`}],SYS,4000,"");
-      const cleanGap = t => t.replace(/^#{1,6}\s*/gm,"").replace(/\*{1,2}([^*]+)\*{1,2}/g,"$1").replace(/^[-─]{3,}\s*$/gm,"").replace(/^\|.*\|$/gm,"").replace(/^>\s*/gm,"").replace(/`([^`]*)`/g,"$1").trim();
-      setGapText(cleanGap(r));
+      const r=await callAI([{role:"user",content:GAP_PROMPT}],SYS,5000,"");
+      setGapText(r.replace(/\*{1,3}([^*]+)\*{1,3}/g,"$1").replace(/^#{1,6}\s*/gm,"").replace(/^[-─]{3,}\s*$/gm,"").replace(/^>\s*/gm,"").replace(/`([^`]*)`/g,"$1").trim());
       setPhase("gap");
     } catch(e){alert(e.message);}
     setLoading(false);
