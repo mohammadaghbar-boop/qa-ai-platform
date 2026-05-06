@@ -236,11 +236,22 @@ function callClaude(messages, system) {
     proc.stdin.end();
     proc.stdout.on('data', d => output += d.toString());
     proc.stderr.on('data', d => error  += d.toString());
+    const timer = setTimeout(() => {
+      try {
+        if (process.platform === 'win32') {
+          spawn('taskkill', ['/F', '/T', '/PID', String(proc.pid)], { shell: true, stdio: 'ignore' });
+        } else {
+          proc.kill('SIGTERM');
+        }
+      } catch {}
+      reject(new Error('AI request timed out after 5 minutes. Try selecting fewer test cases at once.'));
+    }, 300000);
     proc.on('close', code => {
+      clearTimeout(timer);
       if (code === 0 && output.trim()) resolve(output.trim());
       else reject(new Error(error.trim() || 'claude CLI returned no output (exit ' + code + ')'));
     });
-    proc.on('error', err => reject(new Error('Could not start claude CLI: ' + err.message)));
+    proc.on('error', err => { clearTimeout(timer); reject(new Error('Could not start claude CLI: ' + err.message)); });
   });
 }
 

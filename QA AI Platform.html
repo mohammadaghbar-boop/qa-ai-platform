@@ -1233,18 +1233,21 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
       setScripts(hit.scripts); setTab(hit.tab); setProjFiles(hit.projFiles); setFixed(false); setPhase("autoReady");
       return;
     }
-    setLoading(true); setLmsg("Generating "+fwName(platform)+" scripts…");
-    const cl=selCases.map(c=>[
+    const assertionRules=`\nCRITICAL ASSERTION RULES — follow exactly:\n1. Every test MUST assert the EXACT "EXPECTED RESULT" stated — this is the most important assertion.\n2. Use specific assertions: toHaveURL(), toHaveText(), toContainText(), toHaveValue(), toBeChecked(), toHaveCount() — not generic toBeVisible() alone.\n3. Add assertions after every step that produces a verifiable state change (navigation, form submit, error message shown, data saved).\n4. The final assertion in each test must directly validate the Expected Result text.\n5. NEVER write a test that can pass without actually verifying the expected outcome.\n6. NAMING: every test()/it() title MUST start with the TC ID exactly as given (e.g., test('TC-001: Login with valid credentials', ...)) — this is required for result matching.`;
+    const makeCl=tcList=>tcList.map(c=>[
       `${c.id}: ${c.title} [${c.type}]`,
       c.preconditions?`  Preconditions: ${c.preconditions}`:'',
       `  Steps:\n${(c.steps||[]).map((s,i)=>`    ${i+1}. ${s}`).join('\n')}`,
       `  *** EXPECTED RESULT (MUST BE ASSERTED): ${c.expected} ***`
     ].filter(Boolean).join('\n')).join("\n\n");
-    const assertionRules=`\nCRITICAL ASSERTION RULES — follow exactly:\n1. Every test MUST assert the EXACT "EXPECTED RESULT" stated — this is the most important assertion.\n2. Use specific assertions: toHaveURL(), toHaveText(), toContainText(), toHaveValue(), toBeChecked(), toHaveCount() — not generic toBeVisible() alone.\n3. Add assertions after every step that produces a verifiable state change (navigation, form submit, error message shown, data saved).\n4. The final assertion in each test must directly validate the Expected Result text.\n5. NEVER write a test that can pass without actually verifying the expected outcome.\n6. NAMING: every test()/it() title MUST start with the TC ID exactly as given (e.g., test('TC-001: Login with valid credentials', ...)) — this is required for result matching.`;
+    const BATCH_SIZE=12;
+    setLoading(true);
     try {
       let newScripts,newTab,newFiles;
       if(platform==="mobile"){
+        setLmsg(`Generating ${fwName(platform)} scripts for ${selCases.length} test cases…`);
         const urlCtx=appUrl.trim()?`\nApp URL: ${appUrl.trim()}`:"";
+        const cl=makeCl(selCases);
         const [iosR,andR]=await Promise.all([
           callAI([{role:"user",content:`Generate a COMPLETE runnable Appium WebdriverIO test file for iOS, story ${sid}.${urlCtx}\nOutput ONLY JavaScript code — no markdown fences, no explanations.\n${assertionRules}\nTest cases:\n${cl}\nRequirements: describe/it blocks, XCUITest capabilities, accessibility id selectors, driver.$$ commands, specific assertions on expected results (expect(el).toHaveText(), expect(el).toBeDisplayed()), beforeEach/afterEach hooks, CommonJS require. Start directly with require statements.`}],SYS,8000,""),
           callAI([{role:"user",content:`Generate a COMPLETE runnable Appium WebdriverIO test file for Android, story ${sid}.${urlCtx}\nOutput ONLY JavaScript code — no markdown fences, no explanations.\n${assertionRules}\nTest cases:\n${cl}\nRequirements: describe/it blocks, UiAutomator2 capabilities, UiSelector or accessibility id selectors, driver.$$ commands, specific assertions on expected results (expect(el).toHaveText(), expect(el).toBeDisplayed()), beforeEach/afterEach hooks, CommonJS require. Start directly with require statements.`}],SYS,8000,"")
@@ -1254,9 +1257,35 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
       } else {
         const baseUrl=appUrl.trim()||"http://localhost:3000";
         const codegenCtx=codegenScript.trim()?`\n\nRecorded Playwright Codegen Script (IMPORTANT: reuse these exact locators and page interactions — do not invent selectors):\n\`\`\`javascript\n${codegenScript}\n\`\`\``:"";
-        const r=await callAI([{role:"user",content:`Generate a COMPLETE runnable Playwright test file for ${sid}. Base URL: ${baseUrl}.\nOutput ONLY JavaScript code — no markdown fences, no explanations.\n${assertionRules}\nTest cases:\n${cl}\nRequirements: const {test,expect}=require('@playwright/test'), Page Object Model class at top, page.goto() with baseURL "${baseUrl}", getByRole/getByLabel/getByTestId/getByText selectors, beforeEach/afterEach hooks, CommonJS require. Start directly with the require statement.${codegenCtx}`}],SYS,8000,"");
-        newScripts={web:r,ios:"",android:""}; newTab="web";
-        newFiles={"test.config.js":`module.exports={testDir:"./tests",use:{baseURL:"${baseUrl}"}};`,[`tests/${sid}.spec.js`]:r,"README.md":`# Web Tests — ${sid}\n\nnpm install && npm test`};
+        if(selCases.length<=BATCH_SIZE){
+          setLmsg(`Generating Playwright scripts for ${selCases.length} test case${selCases.length===1?'':'s'}…`);
+          const r=await callAI([{role:"user",content:`Generate a COMPLETE runnable Playwright test file for ${sid}. Base URL: ${baseUrl}.\nOutput ONLY JavaScript code — no markdown fences, no explanations.\n${assertionRules}\nTest cases:\n${makeCl(selCases)}\nRequirements: const {test,expect}=require('@playwright/test'), Page Object Model class at top, page.goto() with baseURL "${baseUrl}", getByRole/getByLabel/getByTestId/getByText selectors, beforeEach/afterEach hooks, CommonJS require. Start directly with the require statement.${codegenCtx}`}],SYS,8000,"");
+          newScripts={web:r,ios:"",android:""}; newTab="web";
+          newFiles={"test.config.js":`module.exports={testDir:"./tests",use:{baseURL:"${baseUrl}"}};`,[`tests/${sid}.spec.js`]:r,"README.md":`# Web Tests — ${sid}\n\nnpm install && npm test`};
+        } else {
+          // Split into batches of BATCH_SIZE — each batch is a separate AI call to keep response times reasonable
+          const batches=[];
+          for(let i=0;i<selCases.length;i+=BATCH_SIZE) batches.push(selCases.slice(i,i+BATCH_SIZE));
+          const scriptParts=[];
+          for(let b=0;b<batches.length;b++){
+            const batch=batches[b];
+            setLmsg(`Generating Playwright scripts… (batch ${b+1} of ${batches.length} — ${batch.length} cases)`);
+            if(b===0){
+              // First batch: full file with imports, Page Object Model, beforeEach
+              const r=await callAI([{role:"user",content:`Generate a COMPLETE runnable Playwright test file for ${sid}. Base URL: ${baseUrl}.\nOutput ONLY JavaScript code — no markdown fences, no explanations.\n${assertionRules}\nTest cases:\n${makeCl(batch)}\nRequirements: const {test,expect}=require('@playwright/test'), Page Object Model class at top, page.goto() with baseURL "${baseUrl}", getByRole/getByLabel/getByTestId/getByText selectors, beforeEach/afterEach hooks, CommonJS require. Start directly with the require statement.${codegenCtx}`}],SYS,6000,"");
+              scriptParts.push(r);
+            } else {
+              // Subsequent batches: only test.describe() block, no imports
+              const r=await callAI([{role:"user",content:`Generate ONLY a Playwright test.describe() block (NO require/import statements) for ${sid} — additional tests. Base URL: ${baseUrl}.\nOutput ONLY the test.describe(...){...} block — no markdown, no require statements.\n${assertionRules}\nTest cases:\n${makeCl(batch)}\nStart directly with: test.describe(`}],SYS,5000,"");
+              // Strip any accidentally included require/import lines
+              const clean=r.replace(/^(const\s*\{[^}]+\}\s*=\s*require\([^)]+\);?\s*|import\s[^;]+;\s*)\n/gm,'').trim();
+              scriptParts.push(clean);
+            }
+          }
+          const combined=scriptParts.join('\n\n');
+          newScripts={web:combined,ios:"",android:""}; newTab="web";
+          newFiles={"test.config.js":`module.exports={testDir:"./tests",use:{baseURL:"${baseUrl}"}};`,[`tests/${sid}.spec.js`]:combined,"README.md":`# Web Tests — ${sid}\n\nnpm install && npm test`};
+        }
       }
       setScripts(newScripts); setTab(newTab); setProjFiles(newFiles);
       setScriptCache(prev=>({...prev,[selKey]:{scripts:newScripts,tab:newTab,projFiles:newFiles}}));
