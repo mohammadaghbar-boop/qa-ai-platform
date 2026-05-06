@@ -236,11 +236,22 @@ function callClaude(messages, system) {
     proc.stdin.end();
     proc.stdout.on('data', d => output += d.toString());
     proc.stderr.on('data', d => error  += d.toString());
+    const timer = setTimeout(() => {
+      try {
+        if (process.platform === 'win32') {
+          spawn('taskkill', ['/F', '/T', '/PID', String(proc.pid)], { shell: true, stdio: 'ignore' });
+        } else {
+          proc.kill('SIGTERM');
+        }
+      } catch {}
+      reject(new Error('AI request timed out after 5 minutes. Try selecting fewer test cases at once.'));
+    }, 300000);
     proc.on('close', code => {
+      clearTimeout(timer);
       if (code === 0 && output.trim()) resolve(output.trim());
       else reject(new Error(error.trim() || 'claude CLI returned no output (exit ' + code + ')'));
     });
-    proc.on('error', err => reject(new Error('Could not start claude CLI: ' + err.message)));
+    proc.on('error', err => { clearTimeout(timer); reject(new Error('Could not start claude CLI: ' + err.message)); });
   });
 }
 
@@ -353,6 +364,9 @@ function runPlaywrightTests(files) {
     try {
       fs.mkdirSync(tmpDir, { recursive: true });
       fs.writeFileSync(path.join(tmpDir, 'package.json'), JSON.stringify({ name:'qa-run', version:'1.0.0', private:true }));
+      // Playwright config: disable browser download, set testDir, use JSON reporter
+      const pwConfig = `module.exports = { testDir: '.', timeout: 60000, use: { headless: true } };`;
+      fs.writeFileSync(path.join(tmpDir, 'playwright.config.js'), pwConfig);
       const safeBase = path.resolve(tmpDir) + path.sep;
       for (const [filePath, content] of Object.entries(files || {})) {
         if (filePath.endsWith('.md')) continue;
@@ -365,19 +379,60 @@ function runPlaywrightTests(files) {
 
     const lines = [];
     let jsonOutput = '';
-    const proc = spawn('npx', ['playwright', 'test', '--reporter=json'], { cwd: tmpDir, shell: true });
+    // CI=1 prevents Playwright from waiting for interactive input.
+    // stdio: ignore stdin so npx/playwright never block waiting for keyboard input on Windows.
+    const spawnEnv = { ...process.env, CI: '1', PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1', NPM_CONFIG_YES: 'true' };
+    // Help Node resolve @playwright/test from wherever it is installed (global npm, etc.)
+    try {
+      const pwResolved = require.resolve('@playwright/test');
+      const nmDir = pwResolved.slice(0, pwResolved.indexOf(path.sep + '@playwright' + path.sep + 'test'));
+      if (nmDir) spawnEnv.NODE_PATH = nmDir + (process.env.NODE_PATH ? path.delimiter + process.env.NODE_PATH : '');
+    } catch {}
+    // Also try global npm node_modules on Windows
+    if (!spawnEnv.NODE_PATH && process.platform === 'win32' && process.env.APPDATA) {
+      const globalNm = path.join(process.env.APPDATA, 'npm', 'node_modules');
+      if (fs.existsSync(globalNm)) spawnEnv.NODE_PATH = globalNm + (process.env.NODE_PATH ? path.delimiter + process.env.NODE_PATH : '');
+    }
+    // Pre-check: verify playwright CLI is reachable (fast fail — no download)
+    const { spawnSync } = require('child_process');
+    const preCheck = spawnSync('npx', ['playwright', '--version'], {
+      cwd: tmpDir, shell: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: spawnEnv, timeout: 15000
+    });
+    if (preCheck.status !== 0 || preCheck.error) {
+      cleanup();
+      resolve({ lines: [], passed: [], failed: [], error: 'not_installed' });
+      return;
+    }
+
+    const proc = spawn('npx', ['playwright', 'test', '--reporter=json'], {
+      cwd: tmpDir, shell: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: spawnEnv
+    });
     proc.stdout.on('data', d => jsonOutput += d.toString());
     proc.stderr.on('data', d => d.toString().split('\n').filter(l=>l.trim()).forEach(l=>lines.push(l)));
 
+    const killProc = () => {
+      try {
+        if (process.platform === 'win32') {
+          spawn('taskkill', ['/F', '/T', '/PID', String(proc.pid)], { shell: true, stdio: 'ignore' });
+        } else {
+          proc.kill('SIGTERM');
+        }
+      } catch {}
+    };
+
     const timer = setTimeout(() => {
-      try { proc.kill('SIGTERM'); } catch {}
-      cleanup();
+      killProc(); cleanup();
       resolve({ lines:[...lines,'✗ Test run timed out after 5 minutes'], passed:[], failed:[], error:'timeout' });
     }, 300000);
 
-    proc.on('close', () => {
+    proc.on('close', (code) => {
       clearTimeout(timer); cleanup();
       let passed = [], failed = [];
+      const globalErrors = [];
       try {
         const s = jsonOutput.indexOf('{'), e = jsonOutput.lastIndexOf('}');
         if (s >= 0 && e > s) {
@@ -393,8 +448,26 @@ function runPlaywrightTests(files) {
             }
           };
           walk(results.suites);
+          // Collect global errors — e.g. test file failed to load (import errors go here, not suites)
+          for (const err of results.errors || []) {
+            globalErrors.push((err.message || String(err)).slice(0, 400));
+          }
         }
       } catch {}
+
+      // Surface global errors so the user knows WHY 0 tests ran
+      if (globalErrors.length > 0) {
+        lines.unshift('');
+        globalErrors.forEach(e => lines.unshift('✗ ' + e));
+        lines.unshift('Playwright reported global errors:');
+        // Detect @playwright/test module not found — treat as not_installed
+        const errText = globalErrors.join('\n').toLowerCase();
+        if (errText.includes("cannot find module") && errText.includes('playwright')) {
+          resolve({ lines, passed: [], failed: [], error: 'not_installed' });
+          return;
+        }
+      }
+
       lines.push(''); lines.push('Results: '+passed.length+' passed, '+failed.length+' failed');
       resolve({ lines, passed, failed, error: null });
     });
