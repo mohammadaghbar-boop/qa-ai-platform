@@ -386,12 +386,31 @@ function NotifBell({userId}) {
 function renderMd(text){
   const lines=text.split("\n");
   const out=[];let i=0;
+  const isTableRow=l=>/^\|.+\|/.test(l.trim());
+  const isTableSep=l=>/^\|[-|\s:]+\|/.test(l.trim());
   while(i<lines.length){
     const l=lines[i];
     // heading
     if(/^###\s/.test(l)){out.push(<div key={i} style={{fontWeight:700,fontSize:13,marginTop:10,marginBottom:2}}>{l.replace(/^###\s/,"")}</div>);i++;continue;}
     if(/^##\s/.test(l)){out.push(<div key={i} style={{fontWeight:700,fontSize:14,marginTop:12,marginBottom:3}}>{l.replace(/^##\s/,"")}</div>);i++;continue;}
     if(/^#\s/.test(l)){out.push(<div key={i} style={{fontWeight:700,fontSize:15,marginTop:14,marginBottom:4}}>{l.replace(/^#\s/,"")}</div>);i++;continue;}
+    // markdown table
+    if(isTableRow(l)){
+      const tableLines=[];
+      while(i<lines.length&&(isTableRow(lines[i])||isTableSep(lines[i]))){tableLines.push(lines[i]);i++;}
+      const parseRow=r=>r.trim().replace(/^\||\|$/g,"").split("|").map(c=>c.trim());
+      const headerCells=parseRow(tableLines[0]);
+      const bodyRows=tableLines.filter((_,idx)=>idx>0&&!isTableSep(tableLines[idx]));
+      out.push(
+        <div key={i} style={{overflowX:"auto",marginBottom:8,marginTop:4}}>
+          <table style={{borderCollapse:"collapse",width:"100%",fontSize:13}}>
+            <thead><tr>{headerCells.map((h,j)=><th key={j} style={{padding:"6px 10px",textAlign:"left",background:"var(--color-background-tertiary)",border:"1px solid var(--color-border-secondary)",fontWeight:600,whiteSpace:"nowrap"}}>{inlineMd(h)}</th>)}</tr></thead>
+            <tbody>{bodyRows.map((row,ri)=><tr key={ri} style={{background:ri%2===0?"var(--color-background-primary)":"var(--color-background-secondary)"}}>{parseRow(row).map((cell,ci)=><td key={ci} style={{padding:"6px 10px",border:"1px solid var(--color-border-secondary)",verticalAlign:"top",lineHeight:1.5}}>{inlineMd(cell)}</td>)}</tr>)}</tbody>
+          </table>
+        </div>
+      );
+      continue;
+    }
     // bullet list
     if(/^[-*]\s/.test(l)){
       const items=[];
@@ -1211,17 +1230,26 @@ Risk: [HIGH / MEDIUM / LOW]
 [If no real gaps found, write: No gaps found — story is complete for QA.]
 
 ACs THAT NEED CLARIFICATION:
-[List each AC that is unclear using this format:]
-AC[number]: [What specifically is unclear or ambiguous in that AC]
+IMPORTANT: This section MUST always be a markdown table. Never use prose or a list here.
+Use this exact table format:
 
-[If all ACs are clear, write: All ACs are clearly defined.]
+| AC | What Is Unclear |
+|---|---|
+| AC1 | [specific ambiguity] |
+| AC5 | [specific ambiguity] |
+
+If all ACs are clearly defined, write a single-row table:
+| AC | What Is Unclear |
+|---|---|
+| — | All ACs are clearly defined. |
 
 OVERALL STORY READINESS FOR QA:
 [One of: Ready / Needs clarification / Not ready]
 [One sentence explaining why]`;
     try {
       const r=await callAI([{role:"user",content:GAP_PROMPT}],SYS,5000,"");
-      setGapText(r.replace(/\*{1,3}([^*]+)\*{1,3}/g,"$1").replace(/^#{1,6}\s*/gm,"").replace(/^[-─]{3,}\s*$/gm,"").replace(/^>\s*/gm,"").replace(/`([^`]*)`/g,"$1").trim());
+      // Strip markdown formatting but preserve table rows (lines containing |)
+      setGapText(r.replace(/\*{1,3}([^*]+)\*{1,3}/g,"$1").replace(/^#{1,6}\s*/gm,"").replace(/^[-─]{3,}(?!\|)\s*$/gm,"").replace(/^>\s*/gm,"").replace(/`([^`]*)`/g,"$1").trim());
       setPhase("gap");
     } catch(e){alert(e.message);}
     setLoading(false);
@@ -1906,7 +1934,7 @@ OVERALL STORY READINESS FOR QA:
               <div style={{display:"flex",gap:8,alignItems:"center"}}><Tag c="blue">{sid}</Tag><span style={{fontWeight:500}}>GAP Analysis</span></div>
               <button onClick={doGap} style={{...ghostBtn,fontSize:12,padding:"4px 10px"}}>🔄 Regenerate</button>
             </div>
-            <div style={{whiteSpace:"pre-wrap",fontSize:14,lineHeight:1.85}}>{gapText}</div>
+            <div style={{fontSize:14,lineHeight:1.85}}>{renderMd(gapText)}</div>
           </div>
           <Confirm icon="📝" title="Would you like to write test cases?" onYes={()=>setPhase("ctype")} yesLabel="Yes, write test cases"/>
         </div>}
