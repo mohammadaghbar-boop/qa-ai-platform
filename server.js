@@ -244,8 +244,8 @@ function callClaude(messages, system) {
           proc.kill('SIGTERM');
         }
       } catch {}
-      reject(new Error('AI request timed out after 5 minutes. Try selecting fewer test cases at once.'));
-    }, 300000);
+      reject(new Error('AI request timed out after 10 minutes. Try selecting fewer test cases at once.'));
+    }, 600000);
     proc.on('close', code => {
       clearTimeout(timer);
       if (code === 0 && output.trim()) resolve(output.trim());
