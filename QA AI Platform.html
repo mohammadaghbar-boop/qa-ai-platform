@@ -77,7 +77,7 @@ const ts  = () => new Date().toLocaleTimeString([],{hour:"2-digit",minute:"2-dig
 const platDetect = t => /mobile|ios|android|\bapp\b|swipe/i.test(t) ? "mobile" : "web";
 const tcol = t => t==="happy"?"green":t==="edge"?"amber":"blue";
 const fwName = p => p==="mobile" ? "Appium" : "Playwright";
-const pushNotif = (to,msg) => { DB.notifs.push({id:uid(),to,msg,read:false,ts:ts()}); saveDB(); };
+const pushNotif = (to,msg) => { DB.notifs.push({id:uid(),to,msg,read:false,ts:ts(),at:Date.now()}); saveDB(); };
 
 /* ─── Deployment helpers ─────────────────────────────────────────────────── */
 // When opened as a local file use the local server; when served by server.js use relative paths.
@@ -350,15 +350,23 @@ function Terminal({lines}) {
     {lines.map((l,i)=><div key={i} style={{color:col(l)}}>{l||"\u00a0"}</div>)}
   </div>;
 }
+const NOTIF_PAGE=5;
+const ONE_WEEK=7*24*60*60*1000;
 function NotifBell({userId}) {
   const [open,setOpen]=useState(false);
   const [,tick]=useState(0);
   const [pos,setPos]=useState({bottom:0,left:0});
+  const [shown,setShown]=useState(NOTIF_PAGE);
   const btnRef=useRef(null);
+  const now=Date.now();
   const unread=DB.notifs.filter(n=>n.to===userId&&!n.read);
-  const all=DB.notifs.filter(n=>n.to===userId).slice().reverse();
+  // Only show notifications from the last 7 days; fall back for legacy entries without `at`
+  const withinWeek=DB.notifs.filter(n=>n.to===userId&&(n.at?now-n.at<ONE_WEEK:true)).slice().reverse();
+  const visible=withinWeek.slice(0,shown);
+  const hasMore=withinWeek.length>shown;
   const toggle=()=>{
     if(btnRef.current){const r=btnRef.current.getBoundingClientRect();const panelW=300;const left=Math.min(r.right+8,window.innerWidth-panelW-8);setPos({bottom:window.innerHeight-r.bottom+4,left});}
+    if(!open) setShown(NOTIF_PAGE);
     setOpen(o=>!o);tick(x=>x+1);
   };
   return <div style={{position:"relative"}}>
@@ -366,17 +374,25 @@ function NotifBell({userId}) {
       🔔{unread.length>0&&<span style={{position:"absolute",top:-6,right:-6,background:"var(--color-text-danger)",color:"#fff",borderRadius:20,padding:"0 5px",fontSize:10,minWidth:16,textAlign:"center"}}>{unread.length}</span>}
     </button>
     {open&&<div style={{position:"fixed",left:pos.left,bottom:pos.bottom,width:300,background:"var(--color-background-secondary)",border:"1px solid var(--color-border-secondary)",borderRadius:12,zIndex:9999,boxShadow:"0 8px 24px rgba(0,0,0,.14)"}}>
-
       <div style={{padding:"12px 16px",borderBottom:"1px solid var(--color-border-tertiary)",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-        <div style={{fontWeight:500,fontSize:14}}>Notifications</div>
-        {unread.length>0&&<button onClick={()=>{unread.forEach(n=>n.read=true);tick(x=>x+1);}} style={{padding:"3px 8px",borderRadius:6,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:12,color:"var(--color-text-secondary)"}}>Mark read</button>}
+        <div style={{fontWeight:500,fontSize:14}}>Notifications <span style={{fontSize:11,fontWeight:400,color:"var(--color-text-tertiary)"}}>· last 7 days</span></div>
+        {unread.length>0&&<button onClick={()=>{unread.forEach(n=>n.read=true);tick(x=>x+1);}} style={{padding:"3px 8px",borderRadius:6,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:12,color:"var(--color-text-secondary)"}}>Mark all read</button>}
       </div>
-      <div style={{maxHeight:320,overflow:"auto"}}>
-        {all.length===0?<div style={{padding:16,fontSize:13,color:"var(--color-text-tertiary)"}}>No notifications.</div>:
-        all.map(n=><div key={n.id} onClick={()=>{n.read=true;tick(x=>x+1);}} style={{padding:"10px 16px",borderBottom:"1px solid var(--color-border-tertiary)",cursor:"pointer",background:n.read?"transparent":"var(--color-background-info)"}}>
-          <div style={{fontSize:13,fontWeight:n.read?400:500}}>{n.msg}</div>
-          <div style={{fontSize:11,color:"var(--color-text-tertiary)",marginTop:2}}>{n.ts}</div>
-        </div>)}
+      <div style={{maxHeight:340,overflowY:"auto"}}>
+        {withinWeek.length===0
+          ?<div style={{padding:16,fontSize:13,color:"var(--color-text-tertiary)"}}>No notifications in the past 7 days.</div>
+          :visible.map(n=><div key={n.id} onClick={()=>{n.read=true;tick(x=>x+1);}} style={{padding:"10px 16px",borderBottom:"1px solid var(--color-border-tertiary)",cursor:"pointer",background:n.read?"transparent":"var(--color-background-info)"}}>
+            <div style={{fontSize:13,fontWeight:n.read?400:500}}>{n.msg}</div>
+            <div style={{fontSize:11,color:"var(--color-text-tertiary)",marginTop:2}}>
+              {n.at?new Date(n.at).toLocaleDateString([],{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"}):n.ts}
+            </div>
+          </div>)
+        }
+        {hasMore&&<div style={{padding:"10px 16px",textAlign:"center"}}>
+          <button onClick={()=>setShown(s=>s+NOTIF_PAGE)} style={{padding:"5px 16px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:12,color:"var(--color-text-info)",fontWeight:500}}>
+            Show more ({withinWeek.length-shown} remaining)
+          </button>
+        </div>}
       </div>
     </div>}
   </div>;
