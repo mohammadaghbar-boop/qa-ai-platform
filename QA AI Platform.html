@@ -1448,11 +1448,10 @@ OVERALL STORY READINESS FOR QA:
         if(!match) throw new Error("Invalid response for "+type+" cases. Make sure server.js is running.");
         rawNew.push(...JSON.parse(match[0]).map(c=>({...c,type,status:"pending"})));
       }
-      const merged=[...keptCases,...rawNew];
       const norm=t=>t.toLowerCase().replace(/[^a-z0-9]/g," ").replace(/\s+/g," ").trim();
       const seen=new Set(keptCases.map(c=>norm(c.title)));
-      const deduped=merged.filter(c=>{const k=norm(c.title);if(seen.has(k))return false;seen.add(k);return true;});
-      const finalCases=deduped.map((c,i)=>({...c,id:"TC-"+String(i+1).padStart(3,"0")}));
+      const newDeduped=rawNew.filter(c=>{const k=norm(c.title);if(seen.has(k))return false;seen.add(k);return true;});
+      const finalCases=[...keptCases,...newDeduped].map((c,i)=>({...c,id:"TC-"+String(i+1).padStart(3,"0")}));
       setCases(finalCases);
     } catch(e){setLoading(false);alert("Failed to generate test cases:\n\n"+e.message);return;}
     setPhase("ready");setReadyFilter("all");setLoading(false);
