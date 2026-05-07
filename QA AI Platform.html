@@ -751,22 +751,27 @@ function DashboardPage() {
       .then(r=>r.json()).then(d=>{
         setSd(d);
         if(d?.members){DB.members=d.members;saveDB();}
+        if(d?.projects){DB.projects=d.projects;saveDB();}
         setLoading(false);
       })
       .catch(()=>setLoading(false));
   };
   useEffect(()=>{fetchData();},[]);
   const sessions=sd?.sessions||[]; const bugs=sd?.bugs||[]; const perfs=sd?.perfResults||[]; const cov=sd?.coverage||[];
-  const allProjects=["All",...new Set([...DB.projects.map(p=>p.name),...sessions.map(x=>x.projectName),...bugs.map(x=>x.projectName),...perfs.map(x=>x.projectName),...cov.map(x=>x.projectName)].filter(Boolean))];
+  const projectsFromServer=sd?.projects||DB.projects;
+  // Resolve current project name from projectId — falls back to stored name if project was deleted
+  const projectNameOf=x=>{const p=projectsFromServer.find(p=>p.id===x.projectId);return p?p.name:(x.projectName||"");};
+  // Filter dropdown only uses current project names — no duplicates from renamed projects
+  const allProjects=["All",...projectsFromServer.map(p=>p.name)];
   const membersFromServer=sd?.members||DB.members;
   // Resolve current member name from memberId — falls back to stored name if member was deleted
   const memberNameOf=x=>{const m=membersFromServer.find(m=>m.id===x.memberId);return m?m.name:(x.memberName||"");};
   // Filter dropdown only uses current member names — no duplicates from renamed members
   const allMembers=["All",...membersFromServer.map(m=>m.name)];
-  const filteredSessions=sessions.filter(x=>(sessProjFilter==="All"||(x.projectName||"")===sessProjFilter)&&(sessMemberFilter==="All"||memberNameOf(x)===sessMemberFilter));
-  const filteredBugs=bugs.filter(x=>(bugProjFilter==="All"||(x.projectName||"")===bugProjFilter)&&(bugMemberFilter==="All"||memberNameOf(x)===bugMemberFilter));
-  const filteredPerfs=perfs.filter(x=>(perfProjFilter==="All"||(x.projectName||"")===perfProjFilter)&&(perfMemberFilter==="All"||memberNameOf(x)===perfMemberFilter));
-  const filteredCov=cov.filter(x=>(covProjFilter==="All"||(x.projectName||"")===covProjFilter)&&(covMemberFilter==="All"||memberNameOf(x)===covMemberFilter));
+  const filteredSessions=sessions.filter(x=>(sessProjFilter==="All"||projectNameOf(x)===sessProjFilter)&&(sessMemberFilter==="All"||memberNameOf(x)===sessMemberFilter));
+  const filteredBugs=bugs.filter(x=>(bugProjFilter==="All"||projectNameOf(x)===bugProjFilter)&&(bugMemberFilter==="All"||memberNameOf(x)===bugMemberFilter));
+  const filteredPerfs=perfs.filter(x=>(perfProjFilter==="All"||projectNameOf(x)===perfProjFilter)&&(perfMemberFilter==="All"||memberNameOf(x)===perfMemberFilter));
+  const filteredCov=cov.filter(x=>(covProjFilter==="All"||projectNameOf(x)===covProjFilter)&&(covMemberFilter==="All"||memberNameOf(x)===covMemberFilter));
   const selStyle={padding:"4px 10px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"var(--color-background-primary)",color:"var(--color-text-primary)",fontSize:13,cursor:"pointer"};
   const FilterBar=({projF,setProj,memberF,setMember})=><div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
     <label style={{fontSize:12,color:"var(--color-text-secondary)"}}>Project:</label>
@@ -812,7 +817,7 @@ function DashboardPage() {
         <thead><tr><th style={th}>Member</th><th style={th}>Project</th><th style={th}>Story</th><th style={th}>Summary</th><th style={th}>Platform</th><th style={th}>Passed</th><th style={th}>Failed</th><th style={th}>Date</th></tr></thead>
         <tbody>{filteredSessions.slice(0,50).map((x,i)=><tr key={i}>
           <td style={td}><b>{memberNameOf(x)}</b></td>
-          <td style={td}><Tag c="blue">{x.projectName||"—"}</Tag></td>
+          <td style={td}><Tag c="blue">{projectNameOf(x)||"—"}</Tag></td>
           <td style={td}><Tag c="blue">{x.sid}</Tag></td>
           <td style={td}><span style={{fontSize:12,color:"var(--color-text-secondary)"}}>{(x.summary||"").slice(0,40)}{x.summary?.length>40?"…":""}</span></td>
           <td style={td}><span style={{fontSize:12}}>{x.platform||"—"}</span></td>
@@ -835,7 +840,7 @@ function DashboardPage() {
         <tbody>{filteredBugs.slice(0,50).map((x,i)=><tr key={i}>
           <td style={td}><Tag c="red">{x.bid}</Tag></td>
           <td style={td}><b>{memberNameOf(x)}</b></td>
-          <td style={td}><span style={{fontSize:12}}>{x.projectName||"—"}</span></td>
+          <td style={td}><span style={{fontSize:12}}>{projectNameOf(x)||"—"}</span></td>
           <td style={td}><Tag c="blue">{x.sid}</Tag></td>
           <td style={td}><span style={{fontSize:12,color:"var(--color-text-secondary)"}}>{(x.summary||"").slice(0,40)}{x.summary?.length>40?"…":""}</span></td>
           <td style={td}><Tag c={x.severity==="Critical"||x.severity==="High"?"red":"amber"}>{x.severity}</Tag></td>
@@ -857,7 +862,7 @@ function DashboardPage() {
         <tbody>{filteredPerfs.slice(0,50).map((x,i)=><tr key={i}>
           <td style={td}><b>{x.testName}</b></td>
           <td style={td}>{memberNameOf(x)}</td>
-          <td style={td}><span style={{fontSize:12}}>{x.projectName||"—"}</span></td>
+          <td style={td}><span style={{fontSize:12}}>{projectNameOf(x)||"—"}</span></td>
           <td style={td}><Tag c={x.testType==="stress"?"red":"blue"}>{x.testType}</Tag></td>
           <td style={td}>{x.vus}</td>
           <td style={td}><span style={{fontFamily:"monospace",fontSize:12}}>{x.metrics?.p95||0}ms</span></td>
@@ -879,7 +884,7 @@ function DashboardPage() {
         <thead><tr><th style={th}>Member</th><th style={th}>Project</th><th style={th}>Story</th><th style={th}>Summary</th><th style={th}>Platform</th><th style={th}>Approved Cases</th><th style={th}>Passed</th><th style={th}>Failed</th><th style={th}>Bugs</th><th style={th}>Date</th></tr></thead>
         <tbody>{filteredCov.slice(0,50).map((x,i)=><tr key={i}>
           <td style={td}><b>{memberNameOf(x)}</b></td>
-          <td style={td}><span style={{fontSize:12}}>{x.projectName||"—"}</span></td>
+          <td style={td}><span style={{fontSize:12}}>{projectNameOf(x)||"—"}</span></td>
           <td style={td}><Tag c="blue">{x.sid}</Tag></td>
           <td style={td}><span style={{fontSize:12,color:"var(--color-text-secondary)"}}>{(x.summary||"").slice(0,35)}{x.summary?.length>35?"…":""}</span></td>
           <td style={td}><span style={{fontSize:12}}>{x.platform||"—"}</span></td>
