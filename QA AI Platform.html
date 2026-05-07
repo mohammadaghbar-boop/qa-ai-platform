@@ -1091,6 +1091,7 @@ function Workspace({member,refreshSaved,restoreTarget,clearRestore,onActiveSid,o
   const proj=memberProjects.find(x=>x.id===selectedProjId)||memberProjects[0]||null;
 const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.memberId===member.id); return ps.length>1?"project":"testType"; }); const [sid,setSid]=useState(""); const [sdata,setSdata]=useState(null);
   const [platform,setPlatform]=useState("web"); const [ctypes,setCtypes]=useState([]);
+  const [readyFilter,setReadyFilter]=useState("all");
   const [gapText,setGapText]=useState(""); const [cases,setCases]=useState([]);
   const [editOn,setEditOn]=useState(false); const [scripts,setScripts]=useState({web:"",ios:"",android:""});
   const [projFiles,setProjFiles]=useState(null); const [tab,setTab]=useState("web");
@@ -1353,13 +1354,27 @@ ANALYSIS CHECKLIST — systematically examine each category:
 10. NAVIGATION AND BROWSER BEHAVIOR: Back button behavior, page refresh, direct URL access, deep linking, browser history manipulation
 11. DEVICE AND ENVIRONMENT: Device-specific behavior — for example, if the flow depends on a mobile app (such as Nafath), what happens when the user is on desktop and does not have the app installed? Consider OS differences, app availability, and fallback behavior.
 
+REQUIRED REASONING PROCESS — follow these steps in order:
+
+STEP 1 - EXTRACT ALL DEFINED BEHAVIORS: Before looking for any gaps, read the entire story and list every behavior, rule, constraint, and outcome that is explicitly stated — including every acceptance criterion. This is your ground truth of what IS defined. You will use this list in Step 2 to prevent false positives.
+
+STEP 2 - IDENTIFY CANDIDATE GAPS: Using the analysis checklist, identify behaviors or requirements that are genuinely absent from the ground truth list built in Step 1. Before flagging any candidate gap, ask: "Is this behavior actually stated anywhere in the story, even in different wording or a different section?" If yes — do NOT flag it. Flagging a behavior that is already defined in any AC is a false positive and an analysis defect.
+
+STEP 3 - COMMENT AUDIT (mandatory): For EACH candidate gap from Step 2, read every comment one by one and ask:
+  - Does any comment explicitly answer or resolve this gap? → DISCARD the gap entirely.
+  - Does any comment partially address it? → KEEP the gap but update its description to reflect only what remains unresolved.
+  - Does any comment contradict or reframe my assumption about this gap? → CORRECT or DISCARD accordingly.
+  Only gaps that survive this audit make it into the final output. Shipping a gap that is already defined in an AC or resolved in a comment is an analysis defect.
+
+STEP 4 - OUTPUT: Write the final report using only the gaps that passed Steps 2 and 3.
+
 STRICT RULES:
 - Every gap MUST reference a SPECIFIC AC number, section name, or phrase from the actual story text or comments.
 - Do NOT raise generic or speculative gaps. Only flag what is genuinely missing or ambiguous.
-- Do NOT flag something as a gap if it is already covered in the story description OR resolved in any comment.
-- Treat story comments as part of the requirements — a gap clarified in a comment is NOT a gap.
+- A behavior defined anywhere in the story — even partially, even implicitly — is NOT a gap. Read every AC carefully before flagging.
+- A gap answered anywhere in the story OR in any comment is NOT a gap — discard it.
 - Only list gaps that would prevent a QA engineer from writing or executing a reliable test case.
-- Do NOT drop any gap from your analysis unless it is explicitly resolved in the story or comments. Completeness is required — omitting a real gap is a defect in the analysis.
+- Do NOT drop a real gap unless it is explicitly resolved. Completeness is required — omitting a real gap is a defect.
 
 ${storyMeta}
 ${ctx}
@@ -1370,6 +1385,11 @@ Output this EXACT structure:
 
 STORY SUMMARY:
 [2-3 sentence summary of what this story does, based strictly on what is written]
+
+COMMENTS AUDIT:
+[For each gap you considered but discarded because a comment resolved it, write one line:]
+DISCARDED: [Gap title] — resolved by Comment [number] by [author]: [one sentence summarising what the comment clarified]
+[If no gaps were discarded, write: No gaps were invalidated by comments.]
 
 REAL GAPS FOUND:
 GAP [number]: [Short descriptive title]
@@ -1397,7 +1417,7 @@ OVERALL STORY READINESS FOR QA:
 [One of: Ready / Needs minor clarification / Needs major clarification / Not ready]
 [One sentence explaining the main reason]`;
     try {
-      const r=await callAI([{role:"user",content:GAP_PROMPT}],SYS,4000,"");
+      const r=await callAI([{role:"user",content:GAP_PROMPT}],SYS,5000,"");
       setGapText(r.replace(/\*{1,3}([^*]+)\*{1,3}/g,"$1").replace(/^#{1,6}\s*/gm,"").replace(/^[-─]{3,}\s*$/gm,"").replace(/^>\s*/gm,"").replace(/`([^`]*)`/g,"$1").trim());
       setPhase("gap");
     } catch(e){alert(e.message);}
@@ -1436,7 +1456,7 @@ OVERALL STORY READINESS FOR QA:
       const finalCases=deduped.map((c,i)=>({...c,id:"TC-"+String(i+1).padStart(3,"0")}));
       setCases(finalCases);
     } catch(e){setLoading(false);alert("Failed to generate test cases:\n\n"+e.message);return;}
-    setPhase("ready");setLoading(false);
+    setPhase("ready");setReadyFilter("all");setLoading(false);
   };
 
   const doScripts=async()=>{
@@ -1633,7 +1653,7 @@ OVERALL STORY READINESS FOR QA:
   const editS=(id,si,v)=>setCases(cs=>cs.map(c=>{if(c.id!==id)return c;const s=[...c.steps];s[si]=v;return{...c,steps:s};}));
   const addStep=id=>setCases(cs=>cs.map(c=>c.id===id?{...c,steps:[...(c.steps||[]),"New step"]}:c));
   const delStep=(id,si)=>setCases(cs=>cs.map(c=>c.id===id?{...c,steps:(c.steps||[]).filter((_,i)=>i!==si)}:c));
-  const reset=()=>{localStorage.removeItem(WS_SNAP);setPhase(memberProjects.length>1?"project":"testType");setTestKind("functional");setPerfResult(null);setPerfForm(PERF_FORM_DEFAULT);setPerfChat(false);setSid("");setSdata(null);setPlatform("web");setCtypes([]);setGapText("");setCases([]);setEditOn(false);setScripts({web:"",ios:"",android:""});setProjFiles(null);setExecLines([]);setResult(null);setJKey(null);setBugDone(null);setShowBugForm(false);setFixed(false);setChat(false);setShowAddCase(false);setSelectedForScripts([]);setCoverageText("");setSessionBugs([]);setHasSaved(false);setAppUrl("");setScriptCache({});};
+  const reset=()=>{localStorage.removeItem(WS_SNAP);setPhase(memberProjects.length>1?"project":"testType");setTestKind("functional");setPerfResult(null);setPerfForm(PERF_FORM_DEFAULT);setPerfChat(false);setSid("");setSdata(null);setPlatform("web");setCtypes([]);setReadyFilter("all");setGapText("");setCases([]);setEditOn(false);setScripts({web:"",ios:"",android:""});setProjFiles(null);setExecLines([]);setResult(null);setJKey(null);setBugDone(null);setShowBugForm(false);setFixed(false);setChat(false);setShowAddCase(false);setSelectedForScripts([]);setCoverageText("");setSessionBugs([]);setHasSaved(false);setAppUrl("");setScriptCache({});};
   const resetPerf=()=>{setPerfForm(PERF_FORM_DEFAULT);setPerfResult(null);setPerfChat(false);setHasSaved(false);setPhase("perfTest");};
   const [saveModal,setSaveModal]=useState(null);
   // saveModal: null | {step:1,name:""} | {step:2,name:"",newCat:""}
@@ -1697,7 +1717,7 @@ OVERALL STORY READINESS FOR QA:
     if(testKind==="non-functional"){if(i===2){setPhase("perfTest");return;}return;}
     if(i===2){setPhase("input");return;}
     if(i===3&&sdata){setPhase(gapText?"gap":"mode");return;}
-    if(i===4&&sdata){if(cases.length>0){setPhase("review");return;}const et=[...new Set(cases.map(c=>c.type))];setCtypes(et.length>0?et:[]);setPhase("ctype");return;}
+    if(i===4&&sdata){const et=[...new Set(cases.map(c=>c.type))];setCtypes(et.length>0?et:[]);setPhase("ctype");return;}
     if(i===5&&cases.length>0){setPhase("review");return;}
     if(i===6&&approved.length>0){setPhase("jira");return;}
     if(i===7){setPhase((scripts.web||scripts.ios||scripts.android)?"autoReady":"urlPrompt");return;}
@@ -2102,7 +2122,7 @@ OVERALL STORY READINESS FOR QA:
               })}
             </div>
           </div>
-          <Confirm icon="📝" title="Would you like to write test cases?" onYes={()=>setPhase("ctype")} yesLabel="Yes, write test cases"/>
+          <Confirm icon="📝" title="Would you like to write test cases?" onYes={()=>{const et=[...new Set(cases.map(c=>c.type))];if(et.length>0)setCtypes(et);setPhase("ctype");}} yesLabel="Yes, write test cases"/>
         </div>}
 
         {!loading&&phase==="ctype"&&<div style={card}>
@@ -2118,7 +2138,15 @@ OVERALL STORY READINESS FOR QA:
 
         {!loading&&phase==="ready"&&<div>
           <Banner icon="✅" title={cases.length+" test cases generated"} sub={"Platform: "+platform+" · "+cases.filter(c=>c.automatable!==false).length+" automatable · "+cases.filter(c=>c.automatable===false).length+" manual-only"} color="success"/>
-          <div style={card}>{cases.map(c=><div key={c.id} style={{padding:"9px 0",borderBottom:"1px solid var(--color-border-tertiary)",display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}><Tag c="blue">{c.id}</Tag><Tag c={tcol(c.type)}>{c.type}</Tag>{c.automatable===false&&<Tag>manual only</Tag>}<span style={{fontSize:14}}>{c.title}</span></div>)}</div>
+          <div style={{...card,padding:"10px 16px",display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
+            <span style={{fontSize:13,color:"var(--color-text-secondary)"}}>Filter by type:</span>
+            <select style={{...sel,width:"auto",minWidth:160}} value={readyFilter} onChange={e=>setReadyFilter(e.target.value)}>
+              <option value="all">All types ({cases.length})</option>
+              {[...new Set(cases.map(c=>c.type))].map(t=><option key={t} value={t}>{t[0].toUpperCase()+t.slice(1)} flow ({cases.filter(c=>c.type===t).length})</option>)}
+            </select>
+            <button onClick={()=>{const et=[...new Set(cases.map(c=>c.type))];setCtypes(et.length>0?et:[]);setPhase("ctype");}} style={{...ghostBtn,fontSize:13,marginLeft:"auto"}}>← Add more types</button>
+          </div>
+          <div style={card}>{(readyFilter==="all"?cases:cases.filter(c=>c.type===readyFilter)).map(c=><div key={c.id} style={{padding:"9px 0",borderBottom:"1px solid var(--color-border-tertiary)",display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}><Tag c="blue">{c.id}</Tag><Tag c={tcol(c.type)}>{c.type}</Tag>{c.automatable===false&&<Tag>manual only</Tag>}<span style={{fontSize:14}}>{c.title}</span></div>)}</div>
           <Confirm icon="🔍" title="Would you like to review and edit the test cases?" desc="Approve, reject, and modify each case before proceeding." onYes={()=>{setEditOn(true);setPhase("review");}} onNo={()=>{setCases(cs=>cs.map(c=>({...c,status:"approved"})));setPhase("jira");}} yesLabel="Yes, review" noLabel="Approve all"/>
         </div>}
 
