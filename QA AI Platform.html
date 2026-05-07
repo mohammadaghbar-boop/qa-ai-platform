@@ -707,44 +707,77 @@ function ProjectsPage() {
 
 function AssignmentsPage() {
   const [list,setList]=useState([...DB.assignments]);
-  const [mId,setMId]=useState(""); const [pId,setPId]=useState("");
-  const [editing,setEditing]=useState(null);
-  const [em,setEm]=useState(""); const [ep,setEp]=useState("");
-  const assign=()=>{ if(!mId||!pId) return; if(DB.assignments.some(a=>a.memberId===mId&&a.projectId===pId)) return; DB.assignments.push({memberId:mId,projectId:pId}); const m=DB.members.find(x=>x.id===mId); const p=DB.projects.find(x=>x.id===pId); if(m&&p) pushNotif(mId,"Assigned to: "+p.name); saveDB(); setList([...DB.assignments]); setMId(""); setPId(""); };
-  const startEdit=a=>{ setEditing(a); setEm(a.memberId); setEp(a.projectId); };
+  const [mId,setMId]=useState("");
+  const [selProjs,setSelProjs]=useState([]);
+  const [editing,setEditing]=useState(null); // memberId being edited
+  const [editProjs,setEditProjs]=useState([]);
+  const toggleProj=(id,arr,set)=>set(arr.includes(id)?arr.filter(x=>x!==id):[...arr,id]);
+  const assign=()=>{
+    if(!mId||selProjs.length===0) return;
+    selProjs.forEach(pid=>{
+      if(!DB.assignments.some(a=>a.memberId===mId&&a.projectId===pid)) DB.assignments.push({memberId:mId,projectId:pid});
+    });
+    const m=DB.members.find(x=>x.id===mId);
+    const names=selProjs.map(pid=>DB.projects.find(p=>p.id===pid)?.name).filter(Boolean).join(", ");
+    if(m&&names) pushNotif(mId,"Assigned to: "+names);
+    saveDB(); setList([...DB.assignments]); setMId(""); setSelProjs([]);
+  };
+  const startEdit=memberId=>{
+    setEditing(memberId);
+    setEditProjs(DB.assignments.filter(a=>a.memberId===memberId).map(a=>a.projectId));
+  };
   const cancelEdit=()=>setEditing(null);
   const saveEdit=()=>{
-    if(!em||!ep) return;
-    if(DB.assignments.some(a=>a.memberId===em&&a.projectId===ep&&!(a.memberId===editing.memberId&&a.projectId===editing.projectId))) return;
-    DB.assignments=DB.assignments.map(a=>a.memberId===editing.memberId&&a.projectId===editing.projectId?{memberId:em,projectId:ep}:a);
+    DB.assignments=DB.assignments.filter(a=>a.memberId!==editing);
+    editProjs.forEach(pid=>DB.assignments.push({memberId:editing,projectId:pid}));
     saveDB(); setList([...DB.assignments]); setEditing(null);
   };
-  const del=(mId,pId)=>{ DB.assignments=DB.assignments.filter(a=>!(a.memberId===mId&&a.projectId===pId)); saveDB(); setList([...DB.assignments]); };
+  const delMember=memberId=>{ DB.assignments=DB.assignments.filter(a=>a.memberId!==memberId); saveDB(); setList([...DB.assignments]); };
+  // Group by member
+  const grouped=DB.members.map(m=>({m,projects:DB.projects.filter(p=>list.some(a=>a.memberId===m.id&&a.projectId===p.id))})).filter(x=>x.projects.length>0);
+  const chkStyle={display:"flex",alignItems:"center",gap:6,padding:"4px 0",fontSize:13,cursor:"pointer"};
   const th={textAlign:"left",padding:"8px 12px",borderBottom:"1px solid var(--color-border-tertiary)",fontSize:12,fontWeight:500,color:"var(--color-text-secondary)"};
   const td={padding:"10px 12px",borderBottom:"1px solid var(--color-border-tertiary)"};
   return <div>
     <H1>Assignments</H1>
     {!editing&&<div style={card}><H2>Assign member</H2>
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
-        <div><Lbl>Member</Lbl><select style={sel} value={mId} onChange={e=>setMId(e.target.value)}><option value="">Select…</option>{DB.members.map(m=><option key={m.id} value={m.id}>{m.name}</option>)}</select></div>
-        <div><Lbl>Project</Lbl><select style={sel} value={pId} onChange={e=>setPId(e.target.value)}><option value="">Select…</option>{DB.projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></div>
+      <div style={{marginBottom:12}}>
+        <Lbl>Member</Lbl>
+        <select style={sel} value={mId} onChange={e=>setMId(e.target.value)}><option value="">Select…</option>{DB.members.map(m=><option key={m.id} value={m.id}>{m.name}</option>)}</select>
       </div>
-      <Btn v="primary" onClick={assign}>Assign</Btn>
+      {mId&&<div style={{marginBottom:12}}>
+        <Lbl>Projects</Lbl>
+        <div style={{display:"flex",flexWrap:"wrap",gap:4,marginTop:4}}>
+          {DB.projects.map(p=><label key={p.id} style={chkStyle}>
+            <input type="checkbox" checked={selProjs.includes(p.id)} onChange={()=>toggleProj(p.id,selProjs,setSelProjs)}/>
+            {p.name}
+          </label>)}
+        </div>
+      </div>}
+      <Btn v="primary" onClick={assign} disabled={!mId||selProjs.length===0}>Assign</Btn>
     </div>}
-    {editing&&<div style={{...card,border:"2px solid var(--color-border-focus)",marginBottom:16}}><H2>Edit assignment</H2>
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
-        <div><Lbl>Member</Lbl><select style={sel} value={em} onChange={e=>setEm(e.target.value)}><option value="">Select…</option>{DB.members.map(m=><option key={m.id} value={m.id}>{m.name}</option>)}</select></div>
-        <div><Lbl>Project</Lbl><select style={sel} value={ep} onChange={e=>setEp(e.target.value)}><option value="">Select…</option>{DB.projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></div>
+    {editing&&(()=>{const m=DB.members.find(x=>x.id===editing);return(<div style={{...card,border:"2px solid var(--color-border-focus)",marginBottom:16}}><H2>Edit projects for {m?.name}</H2>
+      <div style={{marginBottom:12}}>
+        <Lbl>Projects</Lbl>
+        <div style={{display:"flex",flexWrap:"wrap",gap:4,marginTop:4}}>
+          {DB.projects.map(p=><label key={p.id} style={chkStyle}>
+            <input type="checkbox" checked={editProjs.includes(p.id)} onChange={()=>toggleProj(p.id,editProjs,setEditProjs)}/>
+            {p.name}
+          </label>)}
+        </div>
       </div>
       <div style={{display:"flex",gap:8}}><Btn v="primary" onClick={saveEdit}>Save changes</Btn><button onClick={cancelEdit} style={{padding:"8px 18px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:14,color:"var(--color-text-secondary)"}}>Cancel</button></div>
-    </div>}
-    <div style={card}>{list.length===0?<div style={{color:"var(--color-text-tertiary)",fontSize:14}}>No assignments.</div>:
+    </div>);})()}
+    <div style={card}>{grouped.length===0?<div style={{color:"var(--color-text-tertiary)",fontSize:14}}>No assignments.</div>:
       <table style={{width:"100%",borderCollapse:"collapse",fontSize:14}}>
-        <thead><tr><th style={th}>Member</th><th style={th}>Project</th><th style={th}></th></tr></thead>
-        <tbody>{list.map(a=>{ const m=DB.members.find(x=>x.id===a.memberId); const p=DB.projects.find(x=>x.id===a.projectId);
-          const isEditing=editing&&editing.memberId===a.memberId&&editing.projectId===a.projectId;
-          return <tr key={a.memberId+"-"+a.projectId} style={isEditing?{background:"var(--color-background-subtle)"}:{}}><td style={td}><b>{m?.name}</b></td><td style={td}><Tag c="green">{p?.name}</Tag></td><td style={td}><div style={{display:"flex",gap:8}}><Btn v="ghost" onClick={()=>startEdit(a)}>Edit</Btn><Btn v="danger" onClick={()=>del(a.memberId,a.projectId)}>Remove</Btn></div></td></tr>;
-        })}</tbody>
+        <thead><tr><th style={th}>Member</th><th style={th}>Projects</th><th style={th}></th></tr></thead>
+        <tbody>{grouped.map(({m,projects})=>
+          <tr key={m.id} style={editing===m.id?{background:"var(--color-background-subtle)"}:{}}>
+            <td style={td}><b>{m.name}</b><div style={{fontSize:12,color:"var(--color-text-secondary)",marginTop:2}}>{m.role}</div></td>
+            <td style={td}><div style={{display:"flex",flexWrap:"wrap",gap:4}}>{projects.map(p=><Tag key={p.id} c="green">{p.name}</Tag>)}</div></td>
+            <td style={td}><div style={{display:"flex",gap:8}}><Btn v="ghost" onClick={()=>startEdit(m.id)}>Edit</Btn><Btn v="danger" onClick={()=>delMember(m.id)}>Remove</Btn></div></td>
+          </tr>
+        )}</tbody>
       </table>}
     </div>
   </div>;
