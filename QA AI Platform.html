@@ -1353,13 +1353,27 @@ ANALYSIS CHECKLIST — systematically examine each category:
 10. NAVIGATION AND BROWSER BEHAVIOR: Back button behavior, page refresh, direct URL access, deep linking, browser history manipulation
 11. DEVICE AND ENVIRONMENT: Device-specific behavior — for example, if the flow depends on a mobile app (such as Nafath), what happens when the user is on desktop and does not have the app installed? Consider OS differences, app availability, and fallback behavior.
 
+REQUIRED REASONING PROCESS — follow these steps in order:
+
+STEP 1 - EXTRACT ALL DEFINED BEHAVIORS: Before looking for any gaps, read the entire story and list every behavior, rule, constraint, and outcome that is explicitly stated — including every acceptance criterion. This is your ground truth of what IS defined. You will use this list in Step 2 to prevent false positives.
+
+STEP 2 - IDENTIFY CANDIDATE GAPS: Using the analysis checklist, identify behaviors or requirements that are genuinely absent from the ground truth list built in Step 1. Before flagging any candidate gap, ask: "Is this behavior actually stated anywhere in the story, even in different wording or a different section?" If yes — do NOT flag it. Flagging a behavior that is already defined in any AC is a false positive and an analysis defect.
+
+STEP 3 - COMMENT AUDIT (mandatory): For EACH candidate gap from Step 2, read every comment one by one and ask:
+  - Does any comment explicitly answer or resolve this gap? → DISCARD the gap entirely.
+  - Does any comment partially address it? → KEEP the gap but update its description to reflect only what remains unresolved.
+  - Does any comment contradict or reframe my assumption about this gap? → CORRECT or DISCARD accordingly.
+  Only gaps that survive this audit make it into the final output. Shipping a gap that is already defined in an AC or resolved in a comment is an analysis defect.
+
+STEP 4 - OUTPUT: Write the final report using only the gaps that passed Steps 2 and 3.
+
 STRICT RULES:
 - Every gap MUST reference a SPECIFIC AC number, section name, or phrase from the actual story text or comments.
 - Do NOT raise generic or speculative gaps. Only flag what is genuinely missing or ambiguous.
-- Do NOT flag something as a gap if it is already covered in the story description OR resolved in any comment.
-- Treat story comments as part of the requirements — a gap clarified in a comment is NOT a gap.
+- A behavior defined anywhere in the story — even partially, even implicitly — is NOT a gap. Read every AC carefully before flagging.
+- A gap answered anywhere in the story OR in any comment is NOT a gap — discard it.
 - Only list gaps that would prevent a QA engineer from writing or executing a reliable test case.
-- Do NOT drop any gap from your analysis unless it is explicitly resolved in the story or comments. Completeness is required — omitting a real gap is a defect in the analysis.
+- Do NOT drop a real gap unless it is explicitly resolved. Completeness is required — omitting a real gap is a defect.
 
 ${storyMeta}
 ${ctx}
@@ -1370,6 +1384,11 @@ Output this EXACT structure:
 
 STORY SUMMARY:
 [2-3 sentence summary of what this story does, based strictly on what is written]
+
+COMMENTS AUDIT:
+[For each gap you considered but discarded because a comment resolved it, write one line:]
+DISCARDED: [Gap title] — resolved by Comment [number] by [author]: [one sentence summarising what the comment clarified]
+[If no gaps were discarded, write: No gaps were invalidated by comments.]
 
 REAL GAPS FOUND:
 GAP [number]: [Short descriptive title]
@@ -1397,7 +1416,7 @@ OVERALL STORY READINESS FOR QA:
 [One of: Ready / Needs minor clarification / Needs major clarification / Not ready]
 [One sentence explaining the main reason]`;
     try {
-      const r=await callAI([{role:"user",content:GAP_PROMPT}],SYS,4000,"");
+      const r=await callAI([{role:"user",content:GAP_PROMPT}],SYS,5000,"");
       setGapText(r.replace(/\*{1,3}([^*]+)\*{1,3}/g,"$1").replace(/^#{1,6}\s*/gm,"").replace(/^[-─]{3,}\s*$/gm,"").replace(/^>\s*/gm,"").replace(/`([^`]*)`/g,"$1").trim());
       setPhase("gap");
     } catch(e){alert(e.message);}
