@@ -1318,46 +1318,61 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
   const doGap=async()=>{
     setLoading(true); setLmsg("Running GAP analysis…");
     const ctx=sdata&&!sdata.sim?`STORY TITLE: ${sdata.summary}\n\nSTORY CONTENT:\n${sdata.description?.slice(0,8000)||"(no description available)"}`:`STORY TITLE: Simulated ${platform} feature for project ${proj.jiraProjKey}\n\nSTORY CONTENT:\nAs a user I want to perform a core action so that I gain value. Acceptance Criteria: 1. The feature works on valid input. 2. Errors are shown for invalid input. 3. The UI is responsive.`;
-    const GAP_PROMPT=`You are a senior QA analyst. Your task is to perform a professional gap analysis on the user story below.
+    const storyMeta=sdata&&!sdata.sim?`Story ID: ${sid} | Platform: ${platform} | Type: ${sdata.type||"N/A"} | Priority: ${sdata.priority||"N/A"} | Status: ${sdata.status||"N/A"}${(sdata.labels||[]).length>0?" | Labels: "+sdata.labels.join(", "):""}`:
+      `Story ID: ${sid} | Platform: ${platform}`;
+    const GAP_PROMPT=`You are a senior QA analyst specializing in requirements gap analysis. Perform a thorough, accurate gap analysis of the user story below.
+
+ANALYSIS CHECKLIST — systematically examine each category:
+1. FUNCTIONAL: Missing user flows, undefined success/failure behaviors, unspecified system responses
+2. DATA VALIDATION: Missing field constraints (format, length, required vs optional, allowed values)
+3. ERROR HANDLING: What happens on failure? Are error messages specified? Recovery paths defined?
+4. ROLES AND PERMISSIONS: Is access control defined for every user role who interacts with this feature?
+5. EDGE CASES: Boundary conditions, empty states, concurrent actions, session expiry mid-flow, duplicates
+6. INTEGRATION: External systems, APIs, notifications, emails, or third-party services — are their behaviors defined?
+7. NON-FUNCTIONAL: Performance thresholds, security requirements, accessibility, data retention — if relevant and unaddressed
+8. UI AND UX: Loading/empty states, confirmation dialogs, navigation after action, responsive behavior
 
 STRICT RULES:
-- Read the FULL story content including description, business rules, edge cases, acceptance criteria, and preconditions.
-- Do NOT generate generic gaps. Every gap you raise must reference a SPECIFIC section, rule, or AC number from the actual story.
-- For every gap: state what is missing, which section it relates to, and why it matters for testing.
+- Every gap MUST reference a SPECIFIC AC number, section name, or phrase from the actual story text.
+- Do NOT raise generic or speculative gaps. Only flag what is genuinely missing or ambiguous.
 - Do NOT flag something as a gap if it is already covered anywhere in the story.
-- List only REAL gaps that the BA must clarify before test cases can be written.
+- Only list gaps that would prevent a QA engineer from writing or executing a reliable test case.
 
-Story ID: ${sid} | Platform: ${platform}
+${storyMeta}
 ${ctx}
 
-IMPORTANT: Write in plain text only. No markdown symbols, no **, no ##, no ---, no backticks, no > quotes. Use CAPS for section titles. Use numbered lists for gaps.
+IMPORTANT: Write in plain text only. No markdown symbols, no **, no ##, no ---, no backticks, no > quotes. Use CAPS for section titles. Use numbered lists.
 
 Output this EXACT structure:
 
 STORY SUMMARY:
-[2-3 sentence summary of what this story actually does, based on what you read]
+[2-3 sentence summary of what this story does, based strictly on what is written]
 
 REAL GAPS FOUND:
-[For each gap, use this format:]
-GAP [number]: [Short gap title]
-Section reference: [Exact section name or AC number from the story]
-What is missing: [Specific description of what is not defined or unclear]
-Why it matters: [Why QA cannot test without this being clarified]
+GAP [number]: [Short descriptive title]
+Category: [Functional | Data Validation | Error Handling | Roles and Permissions | Edge Cases | Integration | Non-Functional | UI and UX]
+Section reference: [Exact AC number, section name, or phrase from the story]
+What is missing: [Specific description of what is undefined, ambiguous, or incomplete]
+Impact on testing: [Why QA cannot write or execute a reliable test without this being clarified]
 Risk: [HIGH / MEDIUM / LOW]
 
 [If no real gaps found, write: No gaps found — story is complete for QA.]
 
-ACs THAT NEED CLARIFICATION:
-[List each AC that is unclear using this format:]
-AC[number]: [What specifically is unclear or ambiguous in that AC]
+QUESTIONS FOR THE BA:
+[For each gap above, one direct question to resolve it — same numbering:]
+Q[number]: [Specific question the QA team should ask the BA to resolve GAP [number]]
 
-[If all ACs are clear, write: All ACs are clearly defined.]
+ACs THAT NEED CLARIFICATION:
+[List each AC that is ambiguous or incomplete:]
+AC[number]: [What specifically is unclear or missing in this AC]
+
+[If all ACs are clearly defined, write: All ACs are clearly defined.]
 
 OVERALL STORY READINESS FOR QA:
-[One of: Ready / Needs clarification / Not ready]
-[One sentence explaining why]`;
+[One of: Ready / Needs minor clarification / Needs major clarification / Not ready]
+[One sentence explaining the main reason]`;
     try {
-      const r=await callAI([{role:"user",content:GAP_PROMPT}],SYS,5000,"");
+      const r=await callAI([{role:"user",content:GAP_PROMPT}],SYS,6000,"");
       setGapText(r.replace(/\*{1,3}([^*]+)\*{1,3}/g,"$1").replace(/^#{1,6}\s*/gm,"").replace(/^[-─]{3,}\s*$/gm,"").replace(/^>\s*/gm,"").replace(/`([^`]*)`/g,"$1").trim());
       setPhase("gap");
     } catch(e){alert(e.message);}
