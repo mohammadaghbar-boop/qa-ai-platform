@@ -2770,6 +2770,7 @@ function App() {
     DB.savedStories=DB.savedStories.filter(s=>s.id!==id);
     DB.categories=DB.categories.filter(c=>DB.savedStories.some(s=>s.categoryId===c.id));
     saveDB();refreshSaved();
+    setScriptCache({});
     if(story&&story.sid===activeSid){
       localStorage.removeItem(`qa_ws_${user.id}`);
       setResetTrigger(x=>x+1);
