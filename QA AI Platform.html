@@ -589,6 +589,8 @@ function PerfAIChat({proj,perfForm,perfResult}) {
 function MembersPage() {
   const [list,setList]=useState([...DB.members]);
   const [f,setF]=useState({name:"",email:"",password:"",role:"Junior QA Engineer"});
+  const [editing,setEditing]=useState(null);
+  const [ef,setEf]=useState({name:"",email:"",role:"Junior QA Engineer",password:""});
   const [err,setErr]=useState(""); const [busy,setBusy]=useState(false);
   useEffect(()=>{ loadMembersFromServer().then(()=>setList([...DB.members])); },[]);
   const adminToken=()=>sessionStorage.getItem(ADMIN_TOKEN_KEY)||"";
@@ -605,6 +607,20 @@ function MembersPage() {
     }catch{setErr("Cannot reach server.");}
     setBusy(false);
   };
+  const startEdit=m=>{ setEditing(m.id); setEf({name:m.name,email:m.email,role:m.role,password:""}); setErr(""); };
+  const cancelEdit=()=>{ setEditing(null); setErr(""); };
+  const saveEdit=async()=>{
+    if(!ef.name||!ef.email){setErr("Name and email are required.");return;}
+    setBusy(true); setErr("");
+    try{
+      const r=await fetch(API_BASE+"/api/members/"+editing,{method:"PUT",headers:{"Content-Type":"application/json","X-Admin-Token":adminToken()},body:JSON.stringify(ef)});
+      const d=await r.json();
+      if(!r.ok){setErr(d.error||"Failed to update member.");setBusy(false);return;}
+      DB.members=DB.members.map(m=>m.id===editing?{...m,...d}:m); saveDB();
+      setList([...DB.members]); setEditing(null);
+    }catch{setErr("Cannot reach server.");}
+    setBusy(false);
+  };
   const del=async id=>{
     setBusy(true);
     try{
@@ -615,6 +631,7 @@ function MembersPage() {
     }catch{setErr("Cannot reach server.");}
     setBusy(false);
   };
+  const ROLES=["Junior QA Engineer","Intermediate QA Engineer","Senior QA Engineer","QA Engineer Lead"];
   const th={textAlign:"left",padding:"8px 12px",borderBottom:"1px solid var(--color-border-tertiary)",fontSize:12,fontWeight:500,color:"var(--color-text-secondary)"};
   const td={padding:"10px 12px",borderBottom:"1px solid var(--color-border-tertiary)"};
   return <div>
@@ -622,18 +639,28 @@ function MembersPage() {
     <div style={card}><H2>Add member</H2>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
         <div><Lbl>Full name</Lbl><input style={inp} value={f.name} onChange={e=>setF(p=>({...p,name:e.target.value}))} placeholder="Jane Smith"/></div>
-        <div><Lbl>Role</Lbl><select style={sel} value={f.role} onChange={e=>setF(p=>({...p,role:e.target.value}))}>{["Junior QA Engineer","Intermediate QA Engineer","Senior QA Engineer","QA Engineer Lead"].map(r=><option key={r}>{r}</option>)}</select></div>
+        <div><Lbl>Role</Lbl><select style={sel} value={f.role} onChange={e=>setF(p=>({...p,role:e.target.value}))}>{ROLES.map(r=><option key={r}>{r}</option>)}</select></div>
         <div><Lbl>Email</Lbl><input style={inp} value={f.email} onChange={e=>setF(p=>({...p,email:e.target.value}))} placeholder="jane@co.com"/></div>
         <div><Lbl>Password</Lbl><input type="password" style={inp} value={f.password} onChange={e=>setF(p=>({...p,password:e.target.value}))} placeholder="Min. 8 characters"/></div>
       </div>
-      {err&&<div style={{color:"var(--color-text-danger)",fontSize:13,marginBottom:10}}>{err}</div>}
+      {err&&!editing&&<div style={{color:"var(--color-text-danger)",fontSize:13,marginBottom:10}}>{err}</div>}
       <Btn v="primary" onClick={add} disabled={busy}>{busy?"Adding…":"Add member"}</Btn>
     </div>
+    {editing&&<div style={{...card,border:"2px solid var(--color-border-focus)",marginBottom:16}}><H2>Edit member</H2>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
+        <div><Lbl>Full name</Lbl><input style={inp} value={ef.name} onChange={e=>setEf(p=>({...p,name:e.target.value}))}/></div>
+        <div><Lbl>Role</Lbl><select style={sel} value={ef.role} onChange={e=>setEf(p=>({...p,role:e.target.value}))}>{ROLES.map(r=><option key={r}>{r}</option>)}</select></div>
+        <div><Lbl>Email</Lbl><input style={inp} value={ef.email} onChange={e=>setEf(p=>({...p,email:e.target.value}))}/></div>
+        <div><Lbl>New password</Lbl><input type="password" style={inp} value={ef.password} onChange={e=>setEf(p=>({...p,password:e.target.value}))} placeholder="Leave blank to keep current"/></div>
+      </div>
+      {err&&editing&&<div style={{color:"var(--color-text-danger)",fontSize:13,marginBottom:10}}>{err}</div>}
+      <div style={{display:"flex",gap:8}}><Btn v="primary" onClick={saveEdit} disabled={busy}>{busy?"Saving…":"Save changes"}</Btn><button onClick={cancelEdit} style={{padding:"8px 18px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:14,color:"var(--color-text-secondary)"}}>Cancel</button></div>
+    </div>}
     <div style={card}>{list.length===0?<div style={{color:"var(--color-text-tertiary)",fontSize:14}}>No members yet.</div>:
       <table style={{width:"100%",borderCollapse:"collapse",fontSize:14}}>
         <thead><tr><th style={th}>Name</th><th style={th}>Role</th><th style={th}>Email</th><th style={th}>Project</th><th style={th}></th></tr></thead>
         <tbody>{list.map(m=>{ const ps=DB.assignments.filter(x=>x.memberId===m.id).map(a=>DB.projects.find(x=>x.id===a.projectId)).filter(Boolean);
-          return <tr key={m.id}><td style={td}><b>{m.name}</b></td><td style={td}><span style={{fontSize:13,color:"var(--color-text-secondary)"}}>{m.role}</span></td><td style={td}>{m.email}</td><td style={td}>{ps.length>0?ps.map(p=><Tag key={p.id} c="blue">{p.name}</Tag>):<span style={{color:"var(--color-text-tertiary)",fontSize:13}}>—</span>}</td><td style={td}><Btn v="danger" onClick={()=>del(m.id)} disabled={busy}>Remove</Btn></td></tr>;
+          return <tr key={m.id} style={editing===m.id?{background:"var(--color-background-subtle)"}:{}}><td style={td}><b>{m.name}</b></td><td style={td}><span style={{fontSize:13,color:"var(--color-text-secondary)"}}>{m.role}</span></td><td style={td}>{m.email}</td><td style={td}>{ps.length>0?ps.map(p=><Tag key={p.id} c="blue">{p.name}</Tag>):<span style={{color:"var(--color-text-tertiary)",fontSize:13}}>—</span>}</td><td style={td}><div style={{display:"flex",gap:8}}><Btn v="ghost" onClick={()=>startEdit(m)} disabled={busy}>Edit</Btn><Btn v="danger" onClick={()=>del(m.id)} disabled={busy}>Remove</Btn></div></td></tr>;
         })}</tbody>
       </table>}
     </div>

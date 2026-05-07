@@ -875,6 +875,35 @@ const server = http.createServer((req, res) => {
       return;
     }
 
+    /* ── /api/members/:id (PUT — admin edits member) ── */
+    if (req.method === 'PUT' && req.url.startsWith('/api/members/')) {
+      try {
+        const adminToken = req.headers['x-admin-token'];
+        if (!adminToken || !adminSessions.has(adminToken)) {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Unauthorized' })); return;
+        }
+        const memberId = req.url.split('/api/members/')[1];
+        const { name, email, role, password } = JSON.parse(body);
+        if (!serverDB.members) serverDB.members = [];
+        const idx = serverDB.members.findIndex(m => m.id === memberId);
+        if (idx === -1) { res.writeHead(404, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Member not found' })); return; }
+        serverDB.members[idx] = { ...serverDB.members[idx], name, email, role };
+        if (password && password.length >= 8) {
+          serverDB.members[idx].passwordHash = hashPasswordSecure(password);
+        }
+        saveServerDB(serverDB);
+        const { passwordHash: _, ...safe } = serverDB.members[idx];
+        console.log('[Member] Updated:', memberId);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(safe));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Invalid request' }));
+      }
+      return;
+    }
+
     /* ── /api/members/:id (DELETE — admin removes member) ── */
     if (req.method === 'DELETE' && req.url.startsWith('/api/members/')) {
       try {
