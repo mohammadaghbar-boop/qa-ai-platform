@@ -350,7 +350,7 @@ function Terminal({lines}) {
     {lines.map((l,i)=><div key={i} style={{color:col(l)}}>{l||"\u00a0"}</div>)}
   </div>;
 }
-const NOTIF_PAGE=5;
+const NOTIF_PAGE=3;
 const ONE_WEEK=7*24*60*60*1000;
 function NotifBell({userId}) {
   const [open,setOpen]=useState(false);
