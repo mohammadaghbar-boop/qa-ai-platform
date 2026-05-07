@@ -1295,8 +1295,14 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
       } catch(expandErr) {
         d=await callJira(proj,"GET","/issue/"+sid+"?fields=summary,description,labels,issuetype,status,assignee,priority");
       }
+      const commentsData=await callJira(proj,"GET","/issue/"+sid+"/comment?maxResults=30").catch(()=>({comments:[]}));
+      const comments=(commentsData?.comments||[]).map(c=>{
+        const body=c.body;
+        const text=typeof body==="string"?body:(body?.content?adfToText(body):(body?.text||""));
+        return {author:c.author?.displayName||"Unknown",text:text.replace(/\n{3,}/g,"\n\n").trim()};
+      }).filter(c=>c.text);
       const {flds,desc}=extractDesc(d);
-      const sd={key:d.key,summary:flds.summary||sid,description:desc,labels:flds.labels||[],type:flds.issuetype?.name||"Story",status:flds.status?.name||"",assignee:flds.assignee?.displayName||"—",priority:flds.priority?.name||"Medium"};
+      const sd={key:d.key,summary:flds.summary||sid,description:desc,labels:flds.labels||[],type:flds.issuetype?.name||"Story",status:flds.status?.name||"",assignee:flds.assignee?.displayName||"—",priority:flds.priority?.name||"Medium",comments};
       setSdata(sd); const pp=proj.platform||"web"; setPlatform(pp==="both"?"web":pp);
       setGapText(""); setCases([]); setCtypes([]); setResult(null); setSessionBugs([]); setCoverageText(""); setAppUrl("");
       setPhase("mode"); setLoading(false);
@@ -1317,7 +1323,11 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
 
   const doGap=async()=>{
     setLoading(true); setLmsg("Running GAP analysis…");
-    const ctx=sdata&&!sdata.sim?`STORY TITLE: ${sdata.summary}\n\nSTORY CONTENT:\n${sdata.description?.slice(0,8000)||"(no description available)"}`:`STORY TITLE: Simulated ${platform} feature for project ${proj.jiraProjKey}\n\nSTORY CONTENT:\nAs a user I want to perform a core action so that I gain value. Acceptance Criteria: 1. The feature works on valid input. 2. Errors are shown for invalid input. 3. The UI is responsive.`;
+    const commentsCtx=(sdata&&!sdata.sim&&sdata.comments?.length>0)
+      ?`\n\nSTORY COMMENTS (${sdata.comments.length} comment${sdata.comments.length===1?"":"s"} — may contain BA clarifications, decisions, or added requirements):\n`+
+        sdata.comments.map((c,i)=>`Comment ${i+1} [${c.author}]:\n${c.text.slice(0,800)}`).join("\n\n")
+      :"";
+    const ctx=sdata&&!sdata.sim?`STORY TITLE: ${sdata.summary}\n\nSTORY CONTENT:\n${sdata.description?.slice(0,8000)||"(no description available)"}${commentsCtx}`:`STORY TITLE: Simulated ${platform} feature for project ${proj.jiraProjKey}\n\nSTORY CONTENT:\nAs a user I want to perform a core action so that I gain value. Acceptance Criteria: 1. The feature works on valid input. 2. Errors are shown for invalid input. 3. The UI is responsive.`;
     const storyMeta=sdata&&!sdata.sim?`Story ID: ${sid} | Platform: ${platform} | Type: ${sdata.type||"N/A"} | Priority: ${sdata.priority||"N/A"} | Status: ${sdata.status||"N/A"}${(sdata.labels||[]).length>0?" | Labels: "+sdata.labels.join(", "):""}`:
       `Story ID: ${sid} | Platform: ${platform}`;
     const GAP_PROMPT=`You are a senior QA analyst specializing in requirements gap analysis. Perform a thorough, accurate gap analysis of the user story below.
@@ -1333,9 +1343,10 @@ ANALYSIS CHECKLIST — systematically examine each category:
 8. UI AND UX: Loading/empty states, confirmation dialogs, navigation after action, responsive behavior
 
 STRICT RULES:
-- Every gap MUST reference a SPECIFIC AC number, section name, or phrase from the actual story text.
+- Every gap MUST reference a SPECIFIC AC number, section name, or phrase from the actual story text or comments.
 - Do NOT raise generic or speculative gaps. Only flag what is genuinely missing or ambiguous.
-- Do NOT flag something as a gap if it is already covered anywhere in the story.
+- Do NOT flag something as a gap if it is already covered in the story description OR resolved in any comment.
+- Treat story comments as part of the requirements — a gap clarified in a comment is NOT a gap.
 - Only list gaps that would prevent a QA engineer from writing or executing a reliable test case.
 
 ${storyMeta}
