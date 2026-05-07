@@ -588,7 +588,7 @@ function PerfAIChat({proj,perfForm,perfResult}) {
 /* ─── Admin Pages ─────────────────────────────────────────────────────────── */
 function MembersPage() {
   const [list,setList]=useState([...DB.members]);
-  const [f,setF]=useState({name:"",email:"",password:"",role:"QA Engineer"});
+  const [f,setF]=useState({name:"",email:"",password:"",role:"Junior QA Engineer"});
   const [err,setErr]=useState(""); const [busy,setBusy]=useState(false);
   useEffect(()=>{ loadMembersFromServer().then(()=>setList([...DB.members])); },[]);
   const adminToken=()=>sessionStorage.getItem(ADMIN_TOKEN_KEY)||"";
@@ -601,7 +601,7 @@ function MembersPage() {
       if(!r.ok){setErr(d.error||"Failed to add member.");setBusy(false);return;}
       DB.members.push(d); saveDB();
       pushNotif(d.id,"Welcome to QA AI Platform!");
-      setList([...DB.members]); setF({name:"",email:"",password:"",role:"QA Engineer"});
+      setList([...DB.members]); setF({name:"",email:"",password:"",role:"Junior QA Engineer"});
     }catch{setErr("Cannot reach server.");}
     setBusy(false);
   };
@@ -622,7 +622,7 @@ function MembersPage() {
     <div style={card}><H2>Add member</H2>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
         <div><Lbl>Full name</Lbl><input style={inp} value={f.name} onChange={e=>setF(p=>({...p,name:e.target.value}))} placeholder="Jane Smith"/></div>
-        <div><Lbl>Role</Lbl><select style={sel} value={f.role} onChange={e=>setF(p=>({...p,role:e.target.value}))}>{["QA Engineer","Senior QA Engineer","QA Automation Engineer","Lead QA"].map(r=><option key={r}>{r}</option>)}</select></div>
+        <div><Lbl>Role</Lbl><select style={sel} value={f.role} onChange={e=>setF(p=>({...p,role:e.target.value}))}>{["Junior QA Engineer","Intermediate QA Engineer","Senior QA Engineer","QA Engineer Lead"].map(r=><option key={r}>{r}</option>)}</select></div>
         <div><Lbl>Email</Lbl><input style={inp} value={f.email} onChange={e=>setF(p=>({...p,email:e.target.value}))} placeholder="jane@co.com"/></div>
         <div><Lbl>Password</Lbl><input type="password" style={inp} value={f.password} onChange={e=>setF(p=>({...p,password:e.target.value}))} placeholder="Min. 8 characters"/></div>
       </div>
