@@ -2756,6 +2756,7 @@ function App() {
   const [restoreTarget,setRestoreTarget]=useState(null);
   const [activeSid,setActiveSid]=useState(""); const [activeProj,setActiveProj]=useState(null);
   const [renamingId,setRenamingId]=useState(null); const [renameVal,setRenameVal]=useState("");
+  const [deleteConfirmId,setDeleteConfirmId]=useState(null);
   const [renamingCatId,setRenamingCatId]=useState(null); const [renameCatVal,setRenameCatVal]=useState("");
   const renameCat=(id,name)=>{if(!name.trim())return;DB.categories=DB.categories.map(c=>c.id===id?{...c,name:name.trim()}:c);saveDB();refreshSaved();setRenamingCatId(null);};
   const [,forceUpdate]=useState(0);
@@ -2830,7 +2831,7 @@ function App() {
                       <span style={{fontSize:12,fontWeight:500,color:"var(--color-text-primary)",flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{s.name}</span>
                       <div style={{display:"flex",gap:1,marginLeft:4,flexShrink:0,opacity:0.7}} onClick={e=>e.stopPropagation()}>
                         <button title="Rename" onClick={()=>{setRenamingId(s.id);setRenameVal(s.name);}} style={{background:"none",border:"none",cursor:"pointer",color:"var(--color-text-tertiary)",fontSize:11,padding:"2px 3px",borderRadius:3}}>✎</button>
-                        <button title="Delete" onClick={()=>deleteSnap(s.id)} style={{background:"none",border:"none",cursor:"pointer",color:"var(--color-text-danger)",fontSize:11,padding:"2px 3px",borderRadius:3}}>✕</button>
+                        <button title="Delete" onClick={()=>setDeleteConfirmId(s.id)} style={{background:"none",border:"none",cursor:"pointer",color:"var(--color-text-danger)",fontSize:11,padding:"2px 3px",borderRadius:3}}>✕</button>
                       </div>
                     </div>
                     <div style={{display:"flex",gap:3,flexWrap:"wrap"}}>
@@ -2863,6 +2864,16 @@ function App() {
               {grouped.length>0&&<div style={{fontSize:11,fontWeight:600,color:"var(--color-text-tertiary)",padding:"4px 4px 5px"}}>No sprint</div>}
               <div style={{display:"flex",flexDirection:"column",gap:4}}>
                 {uncategorized.map(s=><StoryCard key={s.id} s={s}/>)}
+              </div>
+            </div>}
+            {deleteConfirmId&&<div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",zIndex:9999,display:"flex",alignItems:"center",justifyContent:"center"}} onClick={()=>setDeleteConfirmId(null)}>
+              <div style={{background:"var(--color-background-primary)",border:"1px solid var(--color-border-secondary)",borderRadius:12,padding:24,maxWidth:380,width:"90%",boxShadow:"0 8px 32px rgba(0,0,0,0.25)"}} onClick={e=>e.stopPropagation()}>
+                <div style={{fontSize:15,fontWeight:600,marginBottom:10,color:"var(--color-text-primary)"}}>Delete Session?</div>
+                <div style={{fontSize:13,color:"var(--color-text-secondary)",lineHeight:1.6,marginBottom:20}}>Are you sure you want to delete this session? The session will be permanently removed. If the same story ID is entered again, the member will start from the beginning.</div>
+                <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
+                  <button onClick={()=>setDeleteConfirmId(null)} style={{padding:"8px 18px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:13,color:"var(--color-text-secondary)"}}>Cancel</button>
+                  <button onClick={()=>{deleteSnap(deleteConfirmId);setDeleteConfirmId(null);}} style={{padding:"8px 18px",borderRadius:8,border:"none",background:"var(--color-danger,#e53e3e)",cursor:"pointer",fontSize:13,color:"#fff",fontWeight:500}}>Delete Session</button>
+                </div>
               </div>
             </div>}
           </div>;
