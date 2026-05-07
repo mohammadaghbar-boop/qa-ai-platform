@@ -219,7 +219,7 @@ setInterval(() => {
 }, 30 * 60 * 1000);
 
 /* ── Claude AI (via Claude CLI — no API key required) ───────────────────── */
-function callClaude(messages, system) {
+function callClaude(messages, system, maxTokens=4000) {
   return new Promise((resolve, reject) => {
     const conversation = messages.map(m =>
       (m.role === 'user' ? 'Human' : 'Assistant') + ': ' + m.content
@@ -228,8 +228,8 @@ function callClaude(messages, system) {
     const isWin = process.platform === 'win32';
     const claudeCmd = isWin ? 'cmd' : 'claude';
     const claudeArgs = isWin
-      ? ['/c', process.env.APPDATA + '\\npm\\claude.cmd', '-p', '--output-format', 'text', '--strict-mcp-config', '--mcp-config', EMPTY_MCP]
-      : ['-p', '--output-format', 'text', '--strict-mcp-config', '--mcp-config', EMPTY_MCP];
+      ? ['/c', process.env.APPDATA + '\\npm\\claude.cmd', '-p', '--output-format', 'text', '--max-tokens', String(maxTokens), '--strict-mcp-config', '--mcp-config', EMPTY_MCP]
+      : ['-p', '--output-format', 'text', '--max-tokens', String(maxTokens), '--strict-mcp-config', '--mcp-config', EMPTY_MCP];
     const proc = spawn(claudeCmd, claudeArgs, { shell: false, env: process.env });
     let output = '', error = '';
     proc.stdin.write(fullPrompt);
@@ -1029,9 +1029,9 @@ const server = http.createServer((req, res) => {
       const session = getSession(req);
       if (!session) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Authentication required' })); return; }
       try {
-        const { messages, system } = JSON.parse(body);
+        const { messages, system, max } = JSON.parse(body);
         console.log('[AI]   Request received');
-        const text = await callClaude(messages, system);
+        const text = await callClaude(messages, system, max||4000);
         console.log('[AI]   Done');
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ text }));

@@ -116,7 +116,7 @@ async function callAI(messages, sys="", max=4000, _legacy="") {
   const doCall = (token) => fetch(API_BASE + "/api/ai", {
     method: "POST",
     headers: { "Content-Type": "application/json", "X-Session-Token": token || "" },
-    body: JSON.stringify({ messages, system: sys })
+    body: JSON.stringify({ messages, system: sys, max })
   });
   try {
     let token = await _ensureSession();
@@ -1397,7 +1397,7 @@ OVERALL STORY READINESS FOR QA:
 [One of: Ready / Needs minor clarification / Needs major clarification / Not ready]
 [One sentence explaining the main reason]`;
     try {
-      const r=await callAI([{role:"user",content:GAP_PROMPT}],SYS,7000,"");
+      const r=await callAI([{role:"user",content:GAP_PROMPT}],SYS,4000,"");
       setGapText(r.replace(/\*{1,3}([^*]+)\*{1,3}/g,"$1").replace(/^#{1,6}\s*/gm,"").replace(/^[-─]{3,}\s*$/gm,"").replace(/^>\s*/gm,"").replace(/`([^`]*)`/g,"$1").trim());
       setPhase("gap");
     } catch(e){alert(e.message);}
