@@ -1217,7 +1217,35 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
   const allDone=cases.length>0&&cases.every(c=>c.status!=="pending");
 
   if (!proj) return <div style={card}><div style={{color:"var(--color-text-warning)",fontWeight:500}}>No project assigned. Contact your QA lead.</div></div>;
-  const switchProj=(id)=>{if(id===selectedProjId)return;setSelectedProjId(id);setPhase("testType");setTestKind("functional");setPerfResult(null);setSid("");setSdata(null);setCases([]);setResult(null);setExecLines([]);setScripts({web:"",ios:"",android:""});setHasSaved(false);};
+  const [switchTarget,setSwitchTarget]=React.useState(null);
+  const doSwitchProj=(id)=>{setSelectedProjId(id);setPhase("testType");setTestKind("functional");setPerfResult(null);setSid("");setSdata(null);setCases([]);setResult(null);setExecLines([]);setScripts({web:"",ios:"",android:""});setHasSaved(false);};
+  const switchProj=(id)=>{
+    if(id===selectedProjId)return;
+    if(sid){setSwitchTarget(id);return;}
+    doSwitchProj(id);
+  };
+  const confirmSwitch=()=>{
+    if(sid&&sdata){
+      const existing=DB.savedStories.find(s=>s.sid===sid);
+      const snap={id:existing?.id||uid(),name:existing?.name||(sdata?.summary||sid),categoryId:existing?.categoryId||null,phase,sid,sdata,cases:[...cases],gapText,platform,ctypes:[...ctypes],scripts:{...scripts},result,sessionBugs:[...sessionBugs],coverageText,selectedForScripts:[...selectedForScripts],appUrl,savedAt:Date.now()};
+      if(existing){DB.savedStories=DB.savedStories.map(s=>s.sid===sid?snap:s);}else{DB.savedStories.unshift(snap);}
+      saveDB();if(refreshSaved)refreshSaved();
+    }
+    doSwitchProj(switchTarget);setSwitchTarget(null);
+  };
+  const SwitchProjModal=switchTarget&&(()=>{
+    const target=memberProjects.find(p=>p.id===switchTarget);
+    return <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",zIndex:2000,display:"flex",alignItems:"center",justifyContent:"center"}} onClick={()=>setSwitchTarget(null)}>
+      <div style={{background:"var(--color-background-primary)",borderRadius:14,padding:28,width:400,maxWidth:"90vw",boxShadow:"0 8px 32px rgba(0,0,0,0.18)"}} onClick={e=>e.stopPropagation()}>
+        <div style={{fontWeight:600,fontSize:16,marginBottom:8}}>Switch to "{target?.name}"?</div>
+        <div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:20}}>Your current session will be saved automatically before switching.</div>
+        <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
+          <button onClick={()=>setSwitchTarget(null)} style={{padding:"8px 18px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:14,color:"var(--color-text-secondary)"}}>Cancel</button>
+          <button onClick={confirmSwitch} style={{padding:"8px 18px",borderRadius:8,border:"none",background:"var(--color-text-info)",color:"#fff",cursor:"pointer",fontSize:14,fontWeight:500}}>Switch project</button>
+        </div>
+      </div>
+    </div>;
+  })();
   const projPicker=memberProjects.length>1&&phase!=="project"&&<div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12}}><span style={{fontSize:13,color:"var(--color-text-secondary)",fontWeight:500}}>Project:</span>{memberProjects.map(p=><button key={p.id} onClick={()=>switchProj(p.id)} style={{padding:"4px 14px",borderRadius:20,border:"1px solid",fontSize:13,cursor:"pointer",fontWeight:p.id===selectedProjId?600:400,background:p.id===selectedProjId?"var(--color-background-info)":"var(--color-background-secondary)",color:p.id===selectedProjId?"var(--color-text-info)":"var(--color-text-secondary)",borderColor:p.id===selectedProjId?"var(--color-text-info)":"var(--color-border-secondary)"}}>{p.name}</button>)}</div>;
 
   const extractDesc=(d)=>{
@@ -1722,6 +1750,7 @@ OVERALL STORY READINESS FOR QA:
     </div>
     <StepBar steps={WS_STEPS} cur={WS_IDX[phase]??0} onStepClick={goToStep}/>
     {projPicker}
+    {SwitchProjModal}
     <div style={{display:"flex",gap:16}}>
       <div style={{flex:1,minWidth:0}}>
         {loading&&<Loader msg={lmsg}/>}
