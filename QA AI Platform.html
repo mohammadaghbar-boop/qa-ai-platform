@@ -616,8 +616,9 @@ function MembersPage() {
       const r=await fetch(API_BASE+"/api/members/"+editing,{method:"PUT",headers:{"Content-Type":"application/json","X-Admin-Token":adminToken()},body:JSON.stringify(ef)});
       const d=await r.json().catch(()=>({}));
       if(!r.ok){setErr(d.error||"Failed to update member (status "+r.status+"). Make sure the server is restarted.");setBusy(false);return;}
-      DB.members=DB.members.map(m=>m.id===editing?{...m,...d}:m); saveDB();
-      setList([...DB.members]); setEditing(null);
+      setEditing(null);
+      await loadMembersFromServer();
+      setList([...DB.members]);
     }catch(e){setErr("Cannot reach server: "+e.message);}
     setBusy(false);
   };
@@ -636,7 +637,7 @@ function MembersPage() {
   const td={padding:"10px 12px",borderBottom:"1px solid var(--color-border-tertiary)"};
   return <div>
     <H1>Members</H1>
-    <div style={card}><H2>Add member</H2>
+    {!editing&&<div style={card}><H2>Add member</H2>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
         <div><Lbl>Full name</Lbl><input style={inp} value={f.name} onChange={e=>setF(p=>({...p,name:e.target.value}))} placeholder="Jane Smith"/></div>
         <div><Lbl>Role</Lbl><select style={sel} value={f.role} onChange={e=>setF(p=>({...p,role:e.target.value}))}>{ROLES.map(r=><option key={r}>{r}</option>)}</select></div>
@@ -645,7 +646,7 @@ function MembersPage() {
       </div>
       {err&&!editing&&<div style={{color:"var(--color-text-danger)",fontSize:13,marginBottom:10}}>{err}</div>}
       <Btn v="primary" onClick={add} disabled={busy}>{busy?"Adding…":"Add member"}</Btn>
-    </div>
+    </div>}
     {editing&&<div style={{...card,border:"2px solid var(--color-border-focus)",marginBottom:16}}><H2>Edit member</H2>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
         <div><Lbl>Full name</Lbl><input style={inp} value={ef.name} onChange={e=>setEf(p=>({...p,name:e.target.value}))}/></div>
