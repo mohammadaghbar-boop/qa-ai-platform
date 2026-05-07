@@ -1332,6 +1332,10 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
       `Story ID: ${sid} | Platform: ${platform}`;
     const GAP_PROMPT=`You are a senior QA analyst specializing in requirements gap analysis. Perform a thorough, accurate gap analysis of the user story below.
 
+DOMAIN AWARENESS:
+Identify domain-specific context from the story (authentication systems, payment flows, government services, industry regulations, country-specific rules, etc.) and apply relevant domain knowledge to your analysis.
+Example: If the story involves Nafath or Saudi government authentication, apply known domain rules such as National ID format (IDs starting with 1 = Saudi citizens, IDs starting with 2 = residents), token handling standards, and government service compliance expectations. Apply similar awareness for any other domain you detect.
+
 ANALYSIS CHECKLIST — systematically examine each category:
 1. FUNCTIONAL: Missing user flows, undefined success/failure behaviors, unspecified system responses
 2. DATA VALIDATION: Missing field constraints (format, length, required vs optional, allowed values)
@@ -1339,8 +1343,10 @@ ANALYSIS CHECKLIST — systematically examine each category:
 4. ROLES AND PERMISSIONS: Is access control defined for every user role who interacts with this feature?
 5. EDGE CASES: Boundary conditions, empty states, concurrent actions, session expiry mid-flow, duplicates
 6. INTEGRATION: External systems, APIs, notifications, emails, or third-party services — are their behaviors defined?
-7. NON-FUNCTIONAL: Performance thresholds, security requirements, accessibility, data retention — if relevant and unaddressed
-8. UI AND UX: Loading/empty states, confirmation dialogs, navigation after action, responsive behavior
+7. NON-FUNCTIONAL: Performance thresholds, accessibility, data retention — if relevant and unaddressed
+8. SECURITY: Token handling, session management, redirect URI validation, authorization bypasses, sensitive data exposure, authentication and authorization flows
+9. UI AND UX: Loading states, empty states, confirmation dialogs, navigation after action, responsive behavior
+10. NAVIGATION AND BROWSER BEHAVIOR: Back button behavior, page refresh, direct URL access, deep linking, browser history manipulation
 
 STRICT RULES:
 - Every gap MUST reference a SPECIFIC AC number, section name, or phrase from the actual story text or comments.
@@ -1361,11 +1367,13 @@ STORY SUMMARY:
 
 REAL GAPS FOUND:
 GAP [number]: [Short descriptive title]
-Category: [Functional | Data Validation | Error Handling | Roles and Permissions | Edge Cases | Integration | Non-Functional | UI and UX]
+Category: [Functional | Data Validation | Error Handling | Roles and Permissions | Edge Cases | Integration | Non-Functional | Security | UI and UX | Navigation and Browser Behavior]
 Section reference: [Exact AC number, section name, or phrase from the story]
 What is missing: [Specific description of what is undefined, ambiguous, or incomplete]
 Impact on testing: [Why QA cannot write or execute a reliable test without this being clarified]
 Risk: [HIGH / MEDIUM / LOW]
+Risk justification: [One sentence explaining why this specific risk level was assigned]
+Blocked test cases: [Estimated number of test cases that cannot be written or executed until this gap is resolved]
 
 [If no real gaps found, write: No gaps found — story is complete for QA.]
 
@@ -1383,7 +1391,7 @@ OVERALL STORY READINESS FOR QA:
 [One of: Ready / Needs minor clarification / Needs major clarification / Not ready]
 [One sentence explaining the main reason]`;
     try {
-      const r=await callAI([{role:"user",content:GAP_PROMPT}],SYS,6000,"");
+      const r=await callAI([{role:"user",content:GAP_PROMPT}],SYS,7000,"");
       setGapText(r.replace(/\*{1,3}([^*]+)\*{1,3}/g,"$1").replace(/^#{1,6}\s*/gm,"").replace(/^[-─]{3,}\s*$/gm,"").replace(/^>\s*/gm,"").replace(/`([^`]*)`/g,"$1").trim());
       setPhase("gap");
     } catch(e){alert(e.message);}
