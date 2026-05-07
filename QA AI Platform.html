@@ -1344,9 +1344,10 @@ ANALYSIS CHECKLIST — systematically examine each category:
 5. EDGE CASES: Boundary conditions, empty states, concurrent actions, session expiry mid-flow, duplicates
 6. INTEGRATION: External systems, APIs, notifications, emails, or third-party services — are their behaviors defined?
 7. NON-FUNCTIONAL: Performance thresholds, accessibility, data retention — if relevant and unaddressed
-8. SECURITY: Token handling, session management, redirect URI validation, authorization bypasses, sensitive data exposure, authentication and authorization flows
+8. SECURITY: Token handling, session management, redirect URI validation, authorization bypasses, sensitive data exposure, authentication and authorization flows. If the story involves SSO or OAuth, flag any gaps in security parameters in the redirect URL — specifically state, nonce, and code_challenge (PKCE).
 9. UI AND UX: Loading states, empty states, confirmation dialogs, navigation after action, responsive behavior
 10. NAVIGATION AND BROWSER BEHAVIOR: Back button behavior, page refresh, direct URL access, deep linking, browser history manipulation
+11. DEVICE AND ENVIRONMENT: Device-specific behavior — for example, if the flow depends on a mobile app (such as Nafath), what happens when the user is on desktop and does not have the app installed? Consider OS differences, app availability, and fallback behavior.
 
 STRICT RULES:
 - Every gap MUST reference a SPECIFIC AC number, section name, or phrase from the actual story text or comments.
@@ -1354,6 +1355,7 @@ STRICT RULES:
 - Do NOT flag something as a gap if it is already covered in the story description OR resolved in any comment.
 - Treat story comments as part of the requirements — a gap clarified in a comment is NOT a gap.
 - Only list gaps that would prevent a QA engineer from writing or executing a reliable test case.
+- Do NOT drop any gap from your analysis unless it is explicitly resolved in the story or comments. Completeness is required — omitting a real gap is a defect in the analysis.
 
 ${storyMeta}
 ${ctx}
@@ -1367,13 +1369,13 @@ STORY SUMMARY:
 
 REAL GAPS FOUND:
 GAP [number]: [Short descriptive title]
-Category: [Functional | Data Validation | Error Handling | Roles and Permissions | Edge Cases | Integration | Non-Functional | Security | UI and UX | Navigation and Browser Behavior]
+Category: [Functional | Data Validation | Error Handling | Roles and Permissions | Edge Cases | Integration | Non-Functional | Security | UI and UX | Navigation and Browser Behavior | Device and Environment]
 Section reference: [Exact AC number, section name, or phrase from the story]
 What is missing: [Specific description of what is undefined, ambiguous, or incomplete]
 Impact on testing: [Why QA cannot write or execute a reliable test without this being clarified]
 Risk: [HIGH / MEDIUM / LOW]
 Risk justification: [One sentence explaining why this specific risk level was assigned]
-Blocked test cases: [Estimated number of test cases that cannot be written or executed until this gap is resolved]
+Blocked test cases: Estimate: [number] — [one-line rationale explaining which test scenarios are blocked and why]
 
 [If no real gaps found, write: No gaps found — story is complete for QA.]
 
