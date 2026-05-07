@@ -748,13 +748,18 @@ function DashboardPage() {
     setLoading(true);
     const adminToken=sessionStorage.getItem(ADMIN_TOKEN_KEY)||"";
     fetch(API_BASE+"/api/admin/data",{headers:{"X-Admin-Token":adminToken}})
-      .then(r=>r.json()).then(d=>{setSd(d);setLoading(false);})
+      .then(r=>r.json()).then(d=>{
+        setSd(d);
+        if(d?.members){DB.members=d.members;saveDB();}
+        setLoading(false);
+      })
       .catch(()=>setLoading(false));
   };
   useEffect(()=>{fetchData();},[]);
   const sessions=sd?.sessions||[]; const bugs=sd?.bugs||[]; const perfs=sd?.perfResults||[]; const cov=sd?.coverage||[];
   const allProjects=["All",...new Set([...DB.projects.map(p=>p.name),...sessions.map(x=>x.projectName),...bugs.map(x=>x.projectName),...perfs.map(x=>x.projectName),...cov.map(x=>x.projectName)].filter(Boolean))];
-  const allMembers=["All",...new Set([...(sd?.members||DB.members).map(m=>m.name),...sessions.map(x=>x.memberName),...bugs.map(x=>x.memberName),...perfs.map(x=>x.memberName),...cov.map(x=>x.memberName)].filter(Boolean))];
+  const membersFromServer=sd?.members||DB.members;
+  const allMembers=["All",...new Set([...membersFromServer.map(m=>m.name),...sessions.map(x=>x.memberName),...bugs.map(x=>x.memberName),...perfs.map(x=>x.memberName),...cov.map(x=>x.memberName)].filter(Boolean))];
   const filteredSessions=sessions.filter(x=>(sessProjFilter==="All"||(x.projectName||"")===sessProjFilter)&&(sessMemberFilter==="All"||x.memberName===sessMemberFilter));
   const filteredBugs=bugs.filter(x=>(bugProjFilter==="All"||(x.projectName||"")===bugProjFilter)&&(bugMemberFilter==="All"||x.memberName===bugMemberFilter));
   const filteredPerfs=perfs.filter(x=>(perfProjFilter==="All"||(x.projectName||"")===perfProjFilter)&&(perfMemberFilter==="All"||x.memberName===perfMemberFilter));
@@ -771,7 +776,7 @@ function DashboardPage() {
   const pr=tp+tf>0?Math.round(tp/(tp+tf)*100):0;
   const perfPassed=perfs.filter(x=>x.passed).length;
   const cards=[
-    {l:"Members",v:DB.members.length,c:"info"},
+    {l:"Members",v:membersFromServer.length,c:"info"},
     {l:"Projects",v:DB.projects.length,c:"success"},
     {l:"Test Sessions",v:sessions.length,c:"warning"},
     {l:"Bugs Filed",v:bugs.length,c:"danger"},
