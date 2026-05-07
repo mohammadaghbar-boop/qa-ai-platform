@@ -1091,6 +1091,7 @@ function Workspace({member,refreshSaved,restoreTarget,clearRestore,onActiveSid,o
   const proj=memberProjects.find(x=>x.id===selectedProjId)||memberProjects[0]||null;
 const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.memberId===member.id); return ps.length>1?"project":"testType"; }); const [sid,setSid]=useState(""); const [sdata,setSdata]=useState(null);
   const [platform,setPlatform]=useState("web"); const [ctypes,setCtypes]=useState([]);
+  const [readyFilter,setReadyFilter]=useState("all");
   const [gapText,setGapText]=useState(""); const [cases,setCases]=useState([]);
   const [editOn,setEditOn]=useState(false); const [scripts,setScripts]=useState({web:"",ios:"",android:""});
   const [projFiles,setProjFiles]=useState(null); const [tab,setTab]=useState("web");
@@ -1455,7 +1456,7 @@ OVERALL STORY READINESS FOR QA:
       const finalCases=deduped.map((c,i)=>({...c,id:"TC-"+String(i+1).padStart(3,"0")}));
       setCases(finalCases);
     } catch(e){setLoading(false);alert("Failed to generate test cases:\n\n"+e.message);return;}
-    setPhase("ready");setLoading(false);
+    setPhase("ready");setReadyFilter("all");setLoading(false);
   };
 
   const doScripts=async()=>{
@@ -1652,7 +1653,7 @@ OVERALL STORY READINESS FOR QA:
   const editS=(id,si,v)=>setCases(cs=>cs.map(c=>{if(c.id!==id)return c;const s=[...c.steps];s[si]=v;return{...c,steps:s};}));
   const addStep=id=>setCases(cs=>cs.map(c=>c.id===id?{...c,steps:[...(c.steps||[]),"New step"]}:c));
   const delStep=(id,si)=>setCases(cs=>cs.map(c=>c.id===id?{...c,steps:(c.steps||[]).filter((_,i)=>i!==si)}:c));
-  const reset=()=>{localStorage.removeItem(WS_SNAP);setPhase(memberProjects.length>1?"project":"testType");setTestKind("functional");setPerfResult(null);setPerfForm(PERF_FORM_DEFAULT);setPerfChat(false);setSid("");setSdata(null);setPlatform("web");setCtypes([]);setGapText("");setCases([]);setEditOn(false);setScripts({web:"",ios:"",android:""});setProjFiles(null);setExecLines([]);setResult(null);setJKey(null);setBugDone(null);setShowBugForm(false);setFixed(false);setChat(false);setShowAddCase(false);setSelectedForScripts([]);setCoverageText("");setSessionBugs([]);setHasSaved(false);setAppUrl("");setScriptCache({});};
+  const reset=()=>{localStorage.removeItem(WS_SNAP);setPhase(memberProjects.length>1?"project":"testType");setTestKind("functional");setPerfResult(null);setPerfForm(PERF_FORM_DEFAULT);setPerfChat(false);setSid("");setSdata(null);setPlatform("web");setCtypes([]);setReadyFilter("all");setGapText("");setCases([]);setEditOn(false);setScripts({web:"",ios:"",android:""});setProjFiles(null);setExecLines([]);setResult(null);setJKey(null);setBugDone(null);setShowBugForm(false);setFixed(false);setChat(false);setShowAddCase(false);setSelectedForScripts([]);setCoverageText("");setSessionBugs([]);setHasSaved(false);setAppUrl("");setScriptCache({});};
   const resetPerf=()=>{setPerfForm(PERF_FORM_DEFAULT);setPerfResult(null);setPerfChat(false);setHasSaved(false);setPhase("perfTest");};
   const [saveModal,setSaveModal]=useState(null);
   // saveModal: null | {step:1,name:""} | {step:2,name:"",newCat:""}
@@ -1716,7 +1717,7 @@ OVERALL STORY READINESS FOR QA:
     if(testKind==="non-functional"){if(i===2){setPhase("perfTest");return;}return;}
     if(i===2){setPhase("input");return;}
     if(i===3&&sdata){setPhase(gapText?"gap":"mode");return;}
-    if(i===4&&sdata){if(cases.length>0){setPhase("review");return;}const et=[...new Set(cases.map(c=>c.type))];setCtypes(et.length>0?et:[]);setPhase("ctype");return;}
+    if(i===4&&sdata){const et=[...new Set(cases.map(c=>c.type))];setCtypes(et.length>0?et:[]);setPhase("ctype");return;}
     if(i===5&&cases.length>0){setPhase("review");return;}
     if(i===6&&approved.length>0){setPhase("jira");return;}
     if(i===7){setPhase((scripts.web||scripts.ios||scripts.android)?"autoReady":"urlPrompt");return;}
@@ -2121,7 +2122,7 @@ OVERALL STORY READINESS FOR QA:
               })}
             </div>
           </div>
-          <Confirm icon="📝" title="Would you like to write test cases?" onYes={()=>setPhase("ctype")} yesLabel="Yes, write test cases"/>
+          <Confirm icon="📝" title="Would you like to write test cases?" onYes={()=>{const et=[...new Set(cases.map(c=>c.type))];if(et.length>0)setCtypes(et);setPhase("ctype");}} yesLabel="Yes, write test cases"/>
         </div>}
 
         {!loading&&phase==="ctype"&&<div style={card}>
@@ -2137,7 +2138,15 @@ OVERALL STORY READINESS FOR QA:
 
         {!loading&&phase==="ready"&&<div>
           <Banner icon="✅" title={cases.length+" test cases generated"} sub={"Platform: "+platform+" · "+cases.filter(c=>c.automatable!==false).length+" automatable · "+cases.filter(c=>c.automatable===false).length+" manual-only"} color="success"/>
-          <div style={card}>{cases.map(c=><div key={c.id} style={{padding:"9px 0",borderBottom:"1px solid var(--color-border-tertiary)",display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}><Tag c="blue">{c.id}</Tag><Tag c={tcol(c.type)}>{c.type}</Tag>{c.automatable===false&&<Tag>manual only</Tag>}<span style={{fontSize:14}}>{c.title}</span></div>)}</div>
+          <div style={{...card,padding:"10px 16px",display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
+            <span style={{fontSize:13,color:"var(--color-text-secondary)"}}>Filter by type:</span>
+            <select style={{...sel,width:"auto",minWidth:160}} value={readyFilter} onChange={e=>setReadyFilter(e.target.value)}>
+              <option value="all">All types ({cases.length})</option>
+              {[...new Set(cases.map(c=>c.type))].map(t=><option key={t} value={t}>{t[0].toUpperCase()+t.slice(1)} flow ({cases.filter(c=>c.type===t).length})</option>)}
+            </select>
+            <button onClick={()=>{const et=[...new Set(cases.map(c=>c.type))];setCtypes(et.length>0?et:[]);setPhase("ctype");}} style={{...ghostBtn,fontSize:13,marginLeft:"auto"}}>← Add more types</button>
+          </div>
+          <div style={card}>{(readyFilter==="all"?cases:cases.filter(c=>c.type===readyFilter)).map(c=><div key={c.id} style={{padding:"9px 0",borderBottom:"1px solid var(--color-border-tertiary)",display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}><Tag c="blue">{c.id}</Tag><Tag c={tcol(c.type)}>{c.type}</Tag>{c.automatable===false&&<Tag>manual only</Tag>}<span style={{fontSize:14}}>{c.title}</span></div>)}</div>
           <Confirm icon="🔍" title="Would you like to review and edit the test cases?" desc="Approve, reject, and modify each case before proceeding." onYes={()=>{setEditOn(true);setPhase("review");}} onNo={()=>{setCases(cs=>cs.map(c=>({...c,status:"approved"})));setPhase("jira");}} yesLabel="Yes, review" noLabel="Approve all"/>
         </div>}
 
