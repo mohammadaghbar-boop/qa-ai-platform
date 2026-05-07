@@ -77,7 +77,7 @@ const ts  = () => new Date().toLocaleTimeString([],{hour:"2-digit",minute:"2-dig
 const platDetect = t => /mobile|ios|android|\bapp\b|swipe/i.test(t) ? "mobile" : "web";
 const tcol = t => t==="happy"?"green":t==="edge"?"amber":"blue";
 const fwName = p => p==="mobile" ? "Appium" : "Playwright";
-const pushNotif = (to,msg) => { DB.notifs.push({id:uid(),to,msg,read:false,ts:ts()}); saveDB(); };
+const pushNotif = (to,msg) => { DB.notifs.push({id:uid(),to,msg,read:false,ts:ts(),at:Date.now()}); saveDB(); };
 
 /* ─── Deployment helpers ─────────────────────────────────────────────────── */
 // When opened as a local file use the local server; when served by server.js use relative paths.
@@ -116,7 +116,7 @@ async function callAI(messages, sys="", max=4000, _legacy="") {
   const doCall = (token) => fetch(API_BASE + "/api/ai", {
     method: "POST",
     headers: { "Content-Type": "application/json", "X-Session-Token": token || "" },
-    body: JSON.stringify({ messages, system: sys })
+    body: JSON.stringify({ messages, system: sys, max })
   });
   try {
     let token = await _ensureSession();
@@ -131,6 +131,10 @@ async function callAI(messages, sys="", max=4000, _legacy="") {
       if (d.error) throw new Error(d.error);
       return d.text || "";
     } else {
+      if (r.status === 401) {
+        window.dispatchEvent(new CustomEvent('qa-auth-failure'));
+        throw new Error("Session expired — please log in again.");
+      }
       const d = await r.json().catch(()=>({}));
       throw new Error(d.error || "Server error " + r.status);
     }
@@ -350,15 +354,23 @@ function Terminal({lines}) {
     {lines.map((l,i)=><div key={i} style={{color:col(l)}}>{l||"\u00a0"}</div>)}
   </div>;
 }
+const NOTIF_PAGE=3;
+const ONE_WEEK=7*24*60*60*1000;
 function NotifBell({userId}) {
   const [open,setOpen]=useState(false);
   const [,tick]=useState(0);
   const [pos,setPos]=useState({bottom:0,left:0});
+  const [shown,setShown]=useState(NOTIF_PAGE);
   const btnRef=useRef(null);
+  const now=Date.now();
   const unread=DB.notifs.filter(n=>n.to===userId&&!n.read);
-  const all=DB.notifs.filter(n=>n.to===userId).slice().reverse();
+  // Only show notifications from the last 7 days; fall back for legacy entries without `at`
+  const withinWeek=DB.notifs.filter(n=>n.to===userId&&(n.at?now-n.at<ONE_WEEK:true)).slice().reverse();
+  const visible=withinWeek.slice(0,shown);
+  const hasMore=withinWeek.length>shown;
   const toggle=()=>{
     if(btnRef.current){const r=btnRef.current.getBoundingClientRect();const panelW=300;const left=Math.min(r.right+8,window.innerWidth-panelW-8);setPos({bottom:window.innerHeight-r.bottom+4,left});}
+    if(!open) setShown(NOTIF_PAGE);
     setOpen(o=>!o);tick(x=>x+1);
   };
   return <div style={{position:"relative"}}>
@@ -366,17 +378,25 @@ function NotifBell({userId}) {
       🔔{unread.length>0&&<span style={{position:"absolute",top:-6,right:-6,background:"var(--color-text-danger)",color:"#fff",borderRadius:20,padding:"0 5px",fontSize:10,minWidth:16,textAlign:"center"}}>{unread.length}</span>}
     </button>
     {open&&<div style={{position:"fixed",left:pos.left,bottom:pos.bottom,width:300,background:"var(--color-background-secondary)",border:"1px solid var(--color-border-secondary)",borderRadius:12,zIndex:9999,boxShadow:"0 8px 24px rgba(0,0,0,.14)"}}>
-
       <div style={{padding:"12px 16px",borderBottom:"1px solid var(--color-border-tertiary)",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-        <div style={{fontWeight:500,fontSize:14}}>Notifications</div>
-        {unread.length>0&&<button onClick={()=>{unread.forEach(n=>n.read=true);tick(x=>x+1);}} style={{padding:"3px 8px",borderRadius:6,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:12,color:"var(--color-text-secondary)"}}>Mark read</button>}
+        <div style={{fontWeight:500,fontSize:14}}>Notifications <span style={{fontSize:11,fontWeight:400,color:"var(--color-text-tertiary)"}}>· last 7 days</span></div>
+        {unread.length>0&&<button onClick={()=>{unread.forEach(n=>n.read=true);tick(x=>x+1);}} style={{padding:"3px 8px",borderRadius:6,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:12,color:"var(--color-text-secondary)"}}>Mark all read</button>}
       </div>
-      <div style={{maxHeight:320,overflow:"auto"}}>
-        {all.length===0?<div style={{padding:16,fontSize:13,color:"var(--color-text-tertiary)"}}>No notifications.</div>:
-        all.map(n=><div key={n.id} onClick={()=>{n.read=true;tick(x=>x+1);}} style={{padding:"10px 16px",borderBottom:"1px solid var(--color-border-tertiary)",cursor:"pointer",background:n.read?"transparent":"var(--color-background-info)"}}>
-          <div style={{fontSize:13,fontWeight:n.read?400:500}}>{n.msg}</div>
-          <div style={{fontSize:11,color:"var(--color-text-tertiary)",marginTop:2}}>{n.ts}</div>
-        </div>)}
+      <div style={{maxHeight:340,overflowY:"auto"}}>
+        {withinWeek.length===0
+          ?<div style={{padding:16,fontSize:13,color:"var(--color-text-tertiary)"}}>No notifications in the past 7 days.</div>
+          :visible.map(n=><div key={n.id} onClick={()=>{n.read=true;tick(x=>x+1);}} style={{padding:"10px 16px",borderBottom:"1px solid var(--color-border-tertiary)",cursor:"pointer",background:n.read?"transparent":"var(--color-background-info)"}}>
+            <div style={{fontSize:13,fontWeight:n.read?400:500}}>{n.msg}</div>
+            <div style={{fontSize:11,color:"var(--color-text-tertiary)",marginTop:2}}>
+              {n.at?new Date(n.at).toLocaleDateString([],{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"}):n.ts}
+            </div>
+          </div>)
+        }
+        {hasMore&&<div style={{padding:"10px 16px",textAlign:"center"}}>
+          <button onClick={()=>setShown(s=>s+NOTIF_PAGE)} style={{padding:"5px 16px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:12,color:"var(--color-text-info)",fontWeight:500}}>
+            Show more ({withinWeek.length-shown} remaining)
+          </button>
+        </div>}
       </div>
     </div>}
   </div>;
@@ -588,7 +608,9 @@ function PerfAIChat({proj,perfForm,perfResult}) {
 /* ─── Admin Pages ─────────────────────────────────────────────────────────── */
 function MembersPage() {
   const [list,setList]=useState([...DB.members]);
-  const [f,setF]=useState({name:"",email:"",password:"",role:"QA Engineer"});
+  const [f,setF]=useState({name:"",email:"",password:"",role:"Junior QA Engineer"});
+  const [editing,setEditing]=useState(null);
+  const [ef,setEf]=useState({name:"",email:"",role:"Junior QA Engineer",password:""});
   const [err,setErr]=useState(""); const [busy,setBusy]=useState(false);
   useEffect(()=>{ loadMembersFromServer().then(()=>setList([...DB.members])); },[]);
   const adminToken=()=>sessionStorage.getItem(ADMIN_TOKEN_KEY)||"";
@@ -601,8 +623,23 @@ function MembersPage() {
       if(!r.ok){setErr(d.error||"Failed to add member.");setBusy(false);return;}
       DB.members.push(d); saveDB();
       pushNotif(d.id,"Welcome to QA AI Platform!");
-      setList([...DB.members]); setF({name:"",email:"",password:"",role:"QA Engineer"});
+      setList([...DB.members]); setF({name:"",email:"",password:"",role:"Junior QA Engineer"});
     }catch{setErr("Cannot reach server.");}
+    setBusy(false);
+  };
+  const startEdit=m=>{ setEditing(m.id); setEf({name:m.name,email:m.email,role:m.role,password:""}); setErr(""); };
+  const cancelEdit=()=>{ setEditing(null); setErr(""); };
+  const saveEdit=async()=>{
+    if(!ef.name||!ef.email){setErr("Name and email are required.");return;}
+    setBusy(true); setErr("");
+    try{
+      const r=await fetch(API_BASE+"/api/members/"+editing,{method:"PUT",headers:{"Content-Type":"application/json","X-Admin-Token":adminToken()},body:JSON.stringify(ef)});
+      const d=await r.json().catch(()=>({}));
+      if(!r.ok){setErr(d.error||"Failed to update member (status "+r.status+"). Make sure the server is restarted.");setBusy(false);return;}
+      setEditing(null);
+      await loadMembersFromServer();
+      setList([...DB.members]);
+    }catch(e){setErr("Cannot reach server: "+e.message);}
     setBusy(false);
   };
   const del=async id=>{
@@ -615,25 +652,36 @@ function MembersPage() {
     }catch{setErr("Cannot reach server.");}
     setBusy(false);
   };
+  const ROLES=["Junior QA Engineer","Intermediate QA Engineer","Senior QA Engineer","QA Engineer Lead"];
   const th={textAlign:"left",padding:"8px 12px",borderBottom:"1px solid var(--color-border-tertiary)",fontSize:12,fontWeight:500,color:"var(--color-text-secondary)"};
   const td={padding:"10px 12px",borderBottom:"1px solid var(--color-border-tertiary)"};
   return <div>
     <H1>Members</H1>
-    <div style={card}><H2>Add member</H2>
+    {!editing&&<div style={card}><H2>Add member</H2>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
         <div><Lbl>Full name</Lbl><input style={inp} value={f.name} onChange={e=>setF(p=>({...p,name:e.target.value}))} placeholder="Jane Smith"/></div>
-        <div><Lbl>Role</Lbl><select style={sel} value={f.role} onChange={e=>setF(p=>({...p,role:e.target.value}))}>{["QA Engineer","Senior QA Engineer","QA Automation Engineer","Lead QA"].map(r=><option key={r}>{r}</option>)}</select></div>
+        <div><Lbl>Role</Lbl><select style={sel} value={f.role} onChange={e=>setF(p=>({...p,role:e.target.value}))}>{ROLES.map(r=><option key={r}>{r}</option>)}</select></div>
         <div><Lbl>Email</Lbl><input style={inp} value={f.email} onChange={e=>setF(p=>({...p,email:e.target.value}))} placeholder="jane@co.com"/></div>
         <div><Lbl>Password</Lbl><input type="password" style={inp} value={f.password} onChange={e=>setF(p=>({...p,password:e.target.value}))} placeholder="Min. 8 characters"/></div>
       </div>
-      {err&&<div style={{color:"var(--color-text-danger)",fontSize:13,marginBottom:10}}>{err}</div>}
+      {err&&!editing&&<div style={{color:"var(--color-text-danger)",fontSize:13,marginBottom:10}}>{err}</div>}
       <Btn v="primary" onClick={add} disabled={busy}>{busy?"Adding…":"Add member"}</Btn>
-    </div>
+    </div>}
+    {editing&&<div style={{...card,border:"2px solid var(--color-border-focus)",marginBottom:16}}><H2>Edit member</H2>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
+        <div><Lbl>Full name</Lbl><input style={inp} value={ef.name} onChange={e=>setEf(p=>({...p,name:e.target.value}))}/></div>
+        <div><Lbl>Role</Lbl><select style={sel} value={ef.role} onChange={e=>setEf(p=>({...p,role:e.target.value}))}>{ROLES.map(r=><option key={r}>{r}</option>)}</select></div>
+        <div><Lbl>Email</Lbl><input style={inp} value={ef.email} onChange={e=>setEf(p=>({...p,email:e.target.value}))}/></div>
+        <div><Lbl>New password</Lbl><input type="password" style={inp} value={ef.password} onChange={e=>setEf(p=>({...p,password:e.target.value}))} placeholder="Leave blank to keep current"/></div>
+      </div>
+      {err&&editing&&<div style={{color:"var(--color-text-danger)",fontSize:13,marginBottom:10}}>{err}</div>}
+      <div style={{display:"flex",gap:8}}><Btn v="primary" onClick={saveEdit} disabled={busy}>{busy?"Saving…":"Save changes"}</Btn><button onClick={cancelEdit} style={{padding:"8px 18px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:14,color:"var(--color-text-secondary)"}}>Cancel</button></div>
+    </div>}
     <div style={card}>{list.length===0?<div style={{color:"var(--color-text-tertiary)",fontSize:14}}>No members yet.</div>:
       <table style={{width:"100%",borderCollapse:"collapse",fontSize:14}}>
         <thead><tr><th style={th}>Name</th><th style={th}>Role</th><th style={th}>Email</th><th style={th}>Project</th><th style={th}></th></tr></thead>
         <tbody>{list.map(m=>{ const ps=DB.assignments.filter(x=>x.memberId===m.id).map(a=>DB.projects.find(x=>x.id===a.projectId)).filter(Boolean);
-          return <tr key={m.id}><td style={td}><b>{m.name}</b></td><td style={td}><span style={{fontSize:13,color:"var(--color-text-secondary)"}}>{m.role}</span></td><td style={td}>{m.email}</td><td style={td}>{ps.length>0?ps.map(p=><Tag key={p.id} c="blue">{p.name}</Tag>):<span style={{color:"var(--color-text-tertiary)",fontSize:13}}>—</span>}</td><td style={td}><Btn v="danger" onClick={()=>del(m.id)} disabled={busy}>Remove</Btn></td></tr>;
+          return <tr key={m.id} style={editing===m.id?{background:"var(--color-background-subtle)"}:{}}><td style={td}><b>{m.name}</b></td><td style={td}><span style={{fontSize:13,color:"var(--color-text-secondary)"}}>{m.role}</span></td><td style={td}>{m.email}</td><td style={td}>{ps.length>0?ps.map(p=><Tag key={p.id} c="blue">{p.name}</Tag>):<span style={{color:"var(--color-text-tertiary)",fontSize:13}}>—</span>}</td><td style={td}><div style={{display:"flex",gap:8}}><Btn v="ghost" onClick={()=>startEdit(m)} disabled={busy}>Edit</Btn><Btn v="danger" onClick={()=>del(m.id)} disabled={busy}>Remove</Btn></div></td></tr>;
         })}</tbody>
       </table>}
     </div>
@@ -679,26 +727,77 @@ function ProjectsPage() {
 
 function AssignmentsPage() {
   const [list,setList]=useState([...DB.assignments]);
-  const [mId,setMId]=useState(""); const [pId,setPId]=useState("");
-  const assign=()=>{ if(!mId||!pId) return; if(DB.assignments.some(a=>a.memberId===mId&&a.projectId===pId)) return; DB.assignments.push({memberId:mId,projectId:pId}); const m=DB.members.find(x=>x.id===mId); const p=DB.projects.find(x=>x.id===pId); if(m&&p) pushNotif(mId,"Assigned to: "+p.name); saveDB(); setList([...DB.assignments]); setMId(""); setPId(""); };
-  const del=(mId,pId)=>{ DB.assignments=DB.assignments.filter(a=>!(a.memberId===mId&&a.projectId===pId)); saveDB(); setList([...DB.assignments]); };
+  const [mId,setMId]=useState("");
+  const [selProjs,setSelProjs]=useState([]);
+  const [editing,setEditing]=useState(null); // memberId being edited
+  const [editProjs,setEditProjs]=useState([]);
+  const toggleProj=(id,arr,set)=>set(arr.includes(id)?arr.filter(x=>x!==id):[...arr,id]);
+  const assign=()=>{
+    if(!mId||selProjs.length===0) return;
+    selProjs.forEach(pid=>{
+      if(!DB.assignments.some(a=>a.memberId===mId&&a.projectId===pid)) DB.assignments.push({memberId:mId,projectId:pid});
+    });
+    const m=DB.members.find(x=>x.id===mId);
+    const names=selProjs.map(pid=>DB.projects.find(p=>p.id===pid)?.name).filter(Boolean).join(", ");
+    if(m&&names) pushNotif(mId,"Assigned to: "+names);
+    saveDB(); setList([...DB.assignments]); setMId(""); setSelProjs([]);
+  };
+  const startEdit=memberId=>{
+    setEditing(memberId);
+    setEditProjs(DB.assignments.filter(a=>a.memberId===memberId).map(a=>a.projectId));
+  };
+  const cancelEdit=()=>setEditing(null);
+  const saveEdit=()=>{
+    DB.assignments=DB.assignments.filter(a=>a.memberId!==editing);
+    editProjs.forEach(pid=>DB.assignments.push({memberId:editing,projectId:pid}));
+    saveDB(); setList([...DB.assignments]); setEditing(null);
+  };
+  const delMember=memberId=>{ DB.assignments=DB.assignments.filter(a=>a.memberId!==memberId); saveDB(); setList([...DB.assignments]); };
+  // Group by member
+  const grouped=DB.members.map(m=>({m,projects:DB.projects.filter(p=>list.some(a=>a.memberId===m.id&&a.projectId===p.id))})).filter(x=>x.projects.length>0);
+  const chkStyle={display:"flex",alignItems:"center",gap:6,padding:"4px 0",fontSize:13,cursor:"pointer"};
   const th={textAlign:"left",padding:"8px 12px",borderBottom:"1px solid var(--color-border-tertiary)",fontSize:12,fontWeight:500,color:"var(--color-text-secondary)"};
   const td={padding:"10px 12px",borderBottom:"1px solid var(--color-border-tertiary)"};
   return <div>
     <H1>Assignments</H1>
-    <div style={card}><H2>Assign member</H2>
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
-        <div><Lbl>Member</Lbl><select style={sel} value={mId} onChange={e=>setMId(e.target.value)}><option value="">Select…</option>{DB.members.map(m=><option key={m.id} value={m.id}>{m.name}</option>)}</select></div>
-        <div><Lbl>Project</Lbl><select style={sel} value={pId} onChange={e=>setPId(e.target.value)}><option value="">Select…</option>{DB.projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></div>
+    {!editing&&<div style={card}><H2>Assign member</H2>
+      <div style={{marginBottom:12}}>
+        <Lbl>Member</Lbl>
+        <select style={sel} value={mId} onChange={e=>setMId(e.target.value)}><option value="">Select…</option>{DB.members.map(m=><option key={m.id} value={m.id}>{m.name}</option>)}</select>
       </div>
-      <Btn v="primary" onClick={assign}>Assign</Btn>
-    </div>
-    <div style={card}>{list.length===0?<div style={{color:"var(--color-text-tertiary)",fontSize:14}}>No assignments.</div>:
+      {mId&&<div style={{marginBottom:12}}>
+        <Lbl>Projects</Lbl>
+        <div style={{display:"flex",flexWrap:"wrap",gap:4,marginTop:4}}>
+          {DB.projects.map(p=><label key={p.id} style={chkStyle}>
+            <input type="checkbox" checked={selProjs.includes(p.id)} onChange={()=>toggleProj(p.id,selProjs,setSelProjs)}/>
+            {p.name}
+          </label>)}
+        </div>
+      </div>}
+      <Btn v="primary" onClick={assign} disabled={!mId||selProjs.length===0}>Assign</Btn>
+    </div>}
+    {editing&&(()=>{const m=DB.members.find(x=>x.id===editing);return(<div style={{...card,border:"2px solid var(--color-border-focus)",marginBottom:16}}><H2>Edit projects for {m?.name}</H2>
+      <div style={{marginBottom:12}}>
+        <Lbl>Projects</Lbl>
+        <div style={{display:"flex",flexWrap:"wrap",gap:4,marginTop:4}}>
+          {DB.projects.map(p=><label key={p.id} style={chkStyle}>
+            <input type="checkbox" checked={editProjs.includes(p.id)} onChange={()=>toggleProj(p.id,editProjs,setEditProjs)}/>
+            {p.name}
+          </label>)}
+        </div>
+      </div>
+      <div style={{display:"flex",gap:8}}><Btn v="primary" onClick={saveEdit}>Save changes</Btn><button onClick={cancelEdit} style={{padding:"8px 18px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:14,color:"var(--color-text-secondary)"}}>Cancel</button></div>
+    </div>);})()}
+    <div style={card}>{grouped.length===0?<div style={{color:"var(--color-text-tertiary)",fontSize:14}}>No assignments.</div>:
       <table style={{width:"100%",borderCollapse:"collapse",fontSize:14}}>
-        <thead><tr><th style={th}>Member</th><th style={th}>Project</th><th style={th}></th></tr></thead>
-        <tbody>{list.map(a=>{ const m=DB.members.find(x=>x.id===a.memberId); const p=DB.projects.find(x=>x.id===a.projectId);
-          return <tr key={a.memberId+"-"+a.projectId}><td style={td}><b>{m?.name}</b></td><td style={td}><Tag c="green">{p?.name}</Tag></td><td style={td}><Btn v="danger" onClick={()=>del(a.memberId,a.projectId)}>Remove</Btn></td></tr>;
-        })}</tbody>
+        <thead><tr><th style={th}>Member</th><th style={th}>Projects</th><th style={th}></th></tr></thead>
+        <tbody>{grouped.map(({m,projects})=>
+          <tr key={m.id} style={editing===m.id?{background:"var(--color-background-subtle)"}:{}}>
+            <td style={td}><b>{m.name}</b><div style={{fontSize:12,color:"var(--color-text-secondary)",marginTop:2}}>{m.role}</div></td>
+            <td style={td}><div style={{display:"flex",flexWrap:"wrap",gap:4}}>{projects.map(p=><Tag key={p.id} c="green">{p.name}</Tag>)}</div></td>
+            <td style={td}><div style={{display:"flex",gap:8}}><Btn v="ghost" onClick={()=>startEdit(m.id)}>Edit</Btn><Btn v="danger" onClick={()=>delMember(m.id)}>Remove</Btn></div></td>
+          </tr>
+        )}</tbody>
       </table>}
     </div>
   </div>;
@@ -720,17 +819,30 @@ function DashboardPage() {
     setLoading(true);
     const adminToken=sessionStorage.getItem(ADMIN_TOKEN_KEY)||"";
     fetch(API_BASE+"/api/admin/data",{headers:{"X-Admin-Token":adminToken}})
-      .then(r=>r.json()).then(d=>{setSd(d);setLoading(false);})
+      .then(r=>r.json()).then(d=>{
+        setSd(d);
+        if(d?.members){DB.members=d.members;saveDB();}
+        if(d?.projects){DB.projects=d.projects;saveDB();}
+        setLoading(false);
+      })
       .catch(()=>setLoading(false));
   };
   useEffect(()=>{fetchData();},[]);
   const sessions=sd?.sessions||[]; const bugs=sd?.bugs||[]; const perfs=sd?.perfResults||[]; const cov=sd?.coverage||[];
-  const allProjects=["All",...new Set([...DB.projects.map(p=>p.name),...sessions.map(x=>x.projectName),...bugs.map(x=>x.projectName),...perfs.map(x=>x.projectName),...cov.map(x=>x.projectName)].filter(Boolean))];
-  const allMembers=["All",...new Set([...(sd?.members||DB.members).map(m=>m.name),...sessions.map(x=>x.memberName),...bugs.map(x=>x.memberName),...perfs.map(x=>x.memberName),...cov.map(x=>x.memberName)].filter(Boolean))];
-  const filteredSessions=sessions.filter(x=>(sessProjFilter==="All"||(x.projectName||"")===sessProjFilter)&&(sessMemberFilter==="All"||x.memberName===sessMemberFilter));
-  const filteredBugs=bugs.filter(x=>(bugProjFilter==="All"||(x.projectName||"")===bugProjFilter)&&(bugMemberFilter==="All"||x.memberName===bugMemberFilter));
-  const filteredPerfs=perfs.filter(x=>(perfProjFilter==="All"||(x.projectName||"")===perfProjFilter)&&(perfMemberFilter==="All"||x.memberName===perfMemberFilter));
-  const filteredCov=cov.filter(x=>(covProjFilter==="All"||(x.projectName||"")===covProjFilter)&&(covMemberFilter==="All"||x.memberName===covMemberFilter));
+  const projectsFromServer=sd?.projects||DB.projects;
+  // Resolve current project name from projectId — falls back to stored name if project was deleted
+  const projectNameOf=x=>{const p=projectsFromServer.find(p=>p.id===x.projectId);return p?p.name:(x.projectName||"");};
+  // Filter dropdown only uses current project names — no duplicates from renamed projects
+  const allProjects=["All",...projectsFromServer.map(p=>p.name)];
+  const membersFromServer=sd?.members||DB.members;
+  // Resolve current member name from memberId — falls back to stored name if member was deleted
+  const memberNameOf=x=>{const m=membersFromServer.find(m=>m.id===x.memberId);return m?m.name:(x.memberName||"");};
+  // Filter dropdown only uses current member names — no duplicates from renamed members
+  const allMembers=["All",...membersFromServer.map(m=>m.name)];
+  const filteredSessions=sessions.filter(x=>(sessProjFilter==="All"||projectNameOf(x)===sessProjFilter)&&(sessMemberFilter==="All"||memberNameOf(x)===sessMemberFilter));
+  const filteredBugs=bugs.filter(x=>(bugProjFilter==="All"||projectNameOf(x)===bugProjFilter)&&(bugMemberFilter==="All"||memberNameOf(x)===bugMemberFilter));
+  const filteredPerfs=perfs.filter(x=>(perfProjFilter==="All"||projectNameOf(x)===perfProjFilter)&&(perfMemberFilter==="All"||memberNameOf(x)===perfMemberFilter));
+  const filteredCov=cov.filter(x=>(covProjFilter==="All"||projectNameOf(x)===covProjFilter)&&(covMemberFilter==="All"||memberNameOf(x)===covMemberFilter));
   const selStyle={padding:"4px 10px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"var(--color-background-primary)",color:"var(--color-text-primary)",fontSize:13,cursor:"pointer"};
   const FilterBar=({projF,setProj,memberF,setMember})=><div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
     <label style={{fontSize:12,color:"var(--color-text-secondary)"}}>Project:</label>
@@ -743,7 +855,7 @@ function DashboardPage() {
   const pr=tp+tf>0?Math.round(tp/(tp+tf)*100):0;
   const perfPassed=perfs.filter(x=>x.passed).length;
   const cards=[
-    {l:"Members",v:DB.members.length,c:"info"},
+    {l:"Members",v:membersFromServer.length,c:"info"},
     {l:"Projects",v:DB.projects.length,c:"success"},
     {l:"Test Sessions",v:sessions.length,c:"warning"},
     {l:"Bugs Filed",v:bugs.length,c:"danger"},
@@ -775,8 +887,8 @@ function DashboardPage() {
       <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
         <thead><tr><th style={th}>Member</th><th style={th}>Project</th><th style={th}>Story</th><th style={th}>Summary</th><th style={th}>Platform</th><th style={th}>Passed</th><th style={th}>Failed</th><th style={th}>Date</th></tr></thead>
         <tbody>{filteredSessions.slice(0,50).map((x,i)=><tr key={i}>
-          <td style={td}><b>{x.memberName}</b></td>
-          <td style={td}><Tag c="blue">{x.projectName||"—"}</Tag></td>
+          <td style={td}><b>{memberNameOf(x)}</b></td>
+          <td style={td}><Tag c="blue">{projectNameOf(x)||"—"}</Tag></td>
           <td style={td}><Tag c="blue">{x.sid}</Tag></td>
           <td style={td}><span style={{fontSize:12,color:"var(--color-text-secondary)"}}>{(x.summary||"").slice(0,40)}{x.summary?.length>40?"…":""}</span></td>
           <td style={td}><span style={{fontSize:12}}>{x.platform||"—"}</span></td>
@@ -798,8 +910,8 @@ function DashboardPage() {
         <thead><tr><th style={th}>Bug ID</th><th style={th}>Filed by</th><th style={th}>Project</th><th style={th}>Story</th><th style={th}>Summary</th><th style={th}>Severity</th><th style={th}>Jira</th><th style={th}>Date</th></tr></thead>
         <tbody>{filteredBugs.slice(0,50).map((x,i)=><tr key={i}>
           <td style={td}><Tag c="red">{x.bid}</Tag></td>
-          <td style={td}><b>{x.memberName}</b></td>
-          <td style={td}><span style={{fontSize:12}}>{x.projectName||"—"}</span></td>
+          <td style={td}><b>{memberNameOf(x)}</b></td>
+          <td style={td}><span style={{fontSize:12}}>{projectNameOf(x)||"—"}</span></td>
           <td style={td}><Tag c="blue">{x.sid}</Tag></td>
           <td style={td}><span style={{fontSize:12,color:"var(--color-text-secondary)"}}>{(x.summary||"").slice(0,40)}{x.summary?.length>40?"…":""}</span></td>
           <td style={td}><Tag c={x.severity==="Critical"||x.severity==="High"?"red":"amber"}>{x.severity}</Tag></td>
@@ -820,8 +932,8 @@ function DashboardPage() {
         <thead><tr><th style={th}>Test Name</th><th style={th}>Member</th><th style={th}>Project</th><th style={th}>Type</th><th style={th}>VUs</th><th style={th}>p95</th><th style={th}>Threshold</th><th style={th}>Result</th><th style={th}>Date</th></tr></thead>
         <tbody>{filteredPerfs.slice(0,50).map((x,i)=><tr key={i}>
           <td style={td}><b>{x.testName}</b></td>
-          <td style={td}>{x.memberName}</td>
-          <td style={td}><span style={{fontSize:12}}>{x.projectName||"—"}</span></td>
+          <td style={td}>{memberNameOf(x)}</td>
+          <td style={td}><span style={{fontSize:12}}>{projectNameOf(x)||"—"}</span></td>
           <td style={td}><Tag c={x.testType==="stress"?"red":"blue"}>{x.testType}</Tag></td>
           <td style={td}>{x.vus}</td>
           <td style={td}><span style={{fontFamily:"monospace",fontSize:12}}>{x.metrics?.p95||0}ms</span></td>
@@ -842,8 +954,8 @@ function DashboardPage() {
       <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
         <thead><tr><th style={th}>Member</th><th style={th}>Project</th><th style={th}>Story</th><th style={th}>Summary</th><th style={th}>Platform</th><th style={th}>Approved Cases</th><th style={th}>Passed</th><th style={th}>Failed</th><th style={th}>Bugs</th><th style={th}>Date</th></tr></thead>
         <tbody>{filteredCov.slice(0,50).map((x,i)=><tr key={i}>
-          <td style={td}><b>{x.memberName}</b></td>
-          <td style={td}><span style={{fontSize:12}}>{x.projectName||"—"}</span></td>
+          <td style={td}><b>{memberNameOf(x)}</b></td>
+          <td style={td}><span style={{fontSize:12}}>{projectNameOf(x)||"—"}</span></td>
           <td style={td}><Tag c="blue">{x.sid}</Tag></td>
           <td style={td}><span style={{fontSize:12,color:"var(--color-text-secondary)"}}>{(x.summary||"").slice(0,35)}{x.summary?.length>35?"…":""}</span></td>
           <td style={td}><span style={{fontSize:12}}>{x.platform||"—"}</span></td>
@@ -991,6 +1103,7 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
   const [selectedForScripts,setSelectedForScripts]=useState([]); const [coverageText,setCoverageText]=useState(""); const [sessionBugs,setSessionBugs]=useState([]); const [appUrl,setAppUrl]=useState("");
   const [codegenSessionId,setCodegenSessionId]=useState(null); const [codegenScript,setCodegenScript]=useState(""); const [codegenStatus,setCodegenStatus]=useState("idle");
   const [scriptCache,setScriptCache]=useState({});
+  const [showFullStory,setShowFullStory]=useState(false);
   const [editingBugId,setEditingBugId]=useState(null); const [editBugForm,setEditBugForm]=useState({});
   const [toast,setToast]=useState(null);
   const showToast=(msg)=>{setToast(msg);setTimeout(()=>setToast(null),3000);};
@@ -1109,7 +1222,35 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
   const allDone=cases.length>0&&cases.every(c=>c.status!=="pending");
 
   if (!proj) return <div style={card}><div style={{color:"var(--color-text-warning)",fontWeight:500}}>No project assigned. Contact your QA lead.</div></div>;
-  const switchProj=(id)=>{if(id===selectedProjId)return;setSelectedProjId(id);setPhase("testType");setTestKind("functional");setPerfResult(null);setSid("");setSdata(null);setCases([]);setResult(null);setExecLines([]);setScripts({web:"",ios:"",android:""});setHasSaved(false);};
+  const [switchTarget,setSwitchTarget]=React.useState(null);
+  const doSwitchProj=(id)=>{setSelectedProjId(id);setPhase("testType");setTestKind("functional");setPerfResult(null);setSid("");setSdata(null);setCases([]);setResult(null);setExecLines([]);setScripts({web:"",ios:"",android:""});setHasSaved(false);};
+  const switchProj=(id)=>{
+    if(id===selectedProjId)return;
+    if(sid){setSwitchTarget(id);return;}
+    doSwitchProj(id);
+  };
+  const confirmSwitch=()=>{
+    if(sid&&sdata){
+      const existing=DB.savedStories.find(s=>s.sid===sid);
+      const snap={id:existing?.id||uid(),name:existing?.name||(sdata?.summary||sid),categoryId:existing?.categoryId||null,phase,sid,sdata,cases:[...cases],gapText,platform,ctypes:[...ctypes],scripts:{...scripts},result,sessionBugs:[...sessionBugs],coverageText,selectedForScripts:[...selectedForScripts],appUrl,savedAt:Date.now()};
+      if(existing){DB.savedStories=DB.savedStories.map(s=>s.sid===sid?snap:s);}else{DB.savedStories.unshift(snap);}
+      saveDB();if(refreshSaved)refreshSaved();
+    }
+    doSwitchProj(switchTarget);setSwitchTarget(null);
+  };
+  const SwitchProjModal=switchTarget&&(()=>{
+    const target=memberProjects.find(p=>p.id===switchTarget);
+    return <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",zIndex:2000,display:"flex",alignItems:"center",justifyContent:"center"}} onClick={()=>setSwitchTarget(null)}>
+      <div style={{background:"var(--color-background-primary)",borderRadius:14,padding:28,width:400,maxWidth:"90vw",boxShadow:"0 8px 32px rgba(0,0,0,0.18)"}} onClick={e=>e.stopPropagation()}>
+        <div style={{fontWeight:600,fontSize:16,marginBottom:8}}>Switch to "{target?.name}"?</div>
+        <div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:20}}>Your current session will be saved automatically before switching.</div>
+        <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
+          <button onClick={()=>setSwitchTarget(null)} style={{padding:"8px 18px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:14,color:"var(--color-text-secondary)"}}>Cancel</button>
+          <button onClick={confirmSwitch} style={{padding:"8px 18px",borderRadius:8,border:"none",background:"var(--color-text-info)",color:"#fff",cursor:"pointer",fontSize:14,fontWeight:500}}>Switch project</button>
+        </div>
+      </div>
+    </div>;
+  })();
   const projPicker=memberProjects.length>1&&phase!=="project"&&<div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12}}><span style={{fontSize:13,color:"var(--color-text-secondary)",fontWeight:500}}>Project:</span>{memberProjects.map(p=><button key={p.id} onClick={()=>switchProj(p.id)} style={{padding:"4px 14px",borderRadius:20,border:"1px solid",fontSize:13,cursor:"pointer",fontWeight:p.id===selectedProjId?600:400,background:p.id===selectedProjId?"var(--color-background-info)":"var(--color-background-secondary)",color:p.id===selectedProjId?"var(--color-text-info)":"var(--color-text-secondary)",borderColor:p.id===selectedProjId?"var(--color-text-info)":"var(--color-border-secondary)"}}>{p.name}</button>)}</div>;
 
   const extractDesc=(d)=>{
@@ -1133,7 +1274,7 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
     if(sdata?.key && sdata.key!==sid){
       saveStoryToCache(sdata.key,{phase,sdata,platform,ctypes,gapText,cases,scripts,result,sessionBugs,coverageText,appUrl});
     }
-    setLoading(true); setLmsg("Fetching story from Jira…"); setFetchError("");
+    setLoading(true); setLmsg("Fetching story from Jira…"); setFetchError(""); setShowFullStory(false);
     // Check per-story cache first — if we have state for this story, restore it immediately
     const cached=restoreStoryFromCache(sid);
     if(cached&&cached.sdata){
@@ -1158,8 +1299,14 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
       } catch(expandErr) {
         d=await callJira(proj,"GET","/issue/"+sid+"?fields=summary,description,labels,issuetype,status,assignee,priority");
       }
+      const commentsData=await callJira(proj,"GET","/issue/"+sid+"/comment?maxResults=30").catch(()=>({comments:[]}));
+      const comments=(commentsData?.comments||[]).map(c=>{
+        const body=c.body;
+        const text=typeof body==="string"?body:(body?.content?adfToText(body):(body?.text||""));
+        return {author:c.author?.displayName||"Unknown",text:text.replace(/\n{3,}/g,"\n\n").trim()};
+      }).filter(c=>c.text);
       const {flds,desc}=extractDesc(d);
-      const sd={key:d.key,summary:flds.summary||sid,description:desc,labels:flds.labels||[],type:flds.issuetype?.name||"Story",status:flds.status?.name||"",assignee:flds.assignee?.displayName||"—",priority:flds.priority?.name||"Medium"};
+      const sd={key:d.key,summary:flds.summary||sid,description:desc,labels:flds.labels||[],type:flds.issuetype?.name||"Story",status:flds.status?.name||"",assignee:flds.assignee?.displayName||"—",priority:flds.priority?.name||"Medium",comments};
       setSdata(sd); const pp=proj.platform||"web"; setPlatform(pp==="both"?"web":pp);
       setGapText(""); setCases([]); setCtypes([]); setResult(null); setSessionBugs([]); setCoverageText(""); setAppUrl("");
       setPhase("mode"); setLoading(false);
@@ -1180,47 +1327,77 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
 
   const doGap=async()=>{
     setLoading(true); setLmsg("Running GAP analysis…");
-    const ctx=sdata&&!sdata.sim?`STORY TITLE: ${sdata.summary}\n\nSTORY CONTENT:\n${sdata.description?.slice(0,8000)||"(no description available)"}`:`STORY TITLE: Simulated ${platform} feature for project ${proj.jiraProjKey}\n\nSTORY CONTENT:\nAs a user I want to perform a core action so that I gain value. Acceptance Criteria: 1. The feature works on valid input. 2. Errors are shown for invalid input. 3. The UI is responsive.`;
-    const GAP_PROMPT=`You are a senior QA analyst. Your task is to perform a professional gap analysis on the user story below.
+    const commentsCtx=(sdata&&!sdata.sim&&sdata.comments?.length>0)
+      ?`\n\nSTORY COMMENTS (${sdata.comments.length} comment${sdata.comments.length===1?"":"s"} — may contain BA clarifications, decisions, or added requirements):\n`+
+        sdata.comments.map((c,i)=>`Comment ${i+1} [${c.author}]:\n${c.text.slice(0,800)}`).join("\n\n")
+      :"";
+    const ctx=sdata&&!sdata.sim?`STORY TITLE: ${sdata.summary}\n\nSTORY CONTENT:\n${sdata.description?.slice(0,8000)||"(no description available)"}${commentsCtx}`:`STORY TITLE: Simulated ${platform} feature for project ${proj.jiraProjKey}\n\nSTORY CONTENT:\nAs a user I want to perform a core action so that I gain value. Acceptance Criteria: 1. The feature works on valid input. 2. Errors are shown for invalid input. 3. The UI is responsive.`;
+    const storyMeta=sdata&&!sdata.sim?`Story ID: ${sid} | Platform: ${platform} | Type: ${sdata.type||"N/A"} | Priority: ${sdata.priority||"N/A"} | Status: ${sdata.status||"N/A"}${(sdata.labels||[]).length>0?" | Labels: "+sdata.labels.join(", "):""}`:
+      `Story ID: ${sid} | Platform: ${platform}`;
+    const GAP_PROMPT=`You are a senior QA analyst specializing in requirements gap analysis. Perform a thorough, accurate gap analysis of the user story below.
+
+DOMAIN AWARENESS:
+Identify domain-specific context from the story (authentication systems, payment flows, government services, industry regulations, country-specific rules, etc.) and apply relevant domain knowledge to your analysis.
+Example: If the story involves Nafath or Saudi government authentication, apply known domain rules such as National ID format (IDs starting with 1 = Saudi citizens, IDs starting with 2 = residents), token handling standards, and government service compliance expectations. Apply similar awareness for any other domain you detect.
+
+ANALYSIS CHECKLIST — systematically examine each category:
+1. FUNCTIONAL: Missing user flows, undefined success/failure behaviors, unspecified system responses
+2. DATA VALIDATION: Missing field constraints (format, length, required vs optional, allowed values)
+3. ERROR HANDLING: What happens on failure? Are error messages specified? Recovery paths defined?
+4. ROLES AND PERMISSIONS: Is access control defined for every user role who interacts with this feature?
+5. EDGE CASES: Boundary conditions, empty states, concurrent actions, session expiry mid-flow, duplicates
+6. INTEGRATION: External systems, APIs, notifications, emails, or third-party services — are their behaviors defined?
+7. NON-FUNCTIONAL: Performance thresholds, accessibility, data retention — if relevant and unaddressed
+8. SECURITY: Token handling, session management, redirect URI validation, authorization bypasses, sensitive data exposure, authentication and authorization flows. If the story involves SSO or OAuth, flag any gaps in security parameters in the redirect URL — specifically state, nonce, and code_challenge (PKCE).
+9. UI AND UX: Loading states, empty states, confirmation dialogs, navigation after action, responsive behavior
+10. NAVIGATION AND BROWSER BEHAVIOR: Back button behavior, page refresh, direct URL access, deep linking, browser history manipulation
+11. DEVICE AND ENVIRONMENT: Device-specific behavior — for example, if the flow depends on a mobile app (such as Nafath), what happens when the user is on desktop and does not have the app installed? Consider OS differences, app availability, and fallback behavior.
 
 STRICT RULES:
-- Read the FULL story content including description, business rules, edge cases, acceptance criteria, and preconditions.
-- Do NOT generate generic gaps. Every gap you raise must reference a SPECIFIC section, rule, or AC number from the actual story.
-- For every gap: state what is missing, which section it relates to, and why it matters for testing.
-- Do NOT flag something as a gap if it is already covered anywhere in the story.
-- List only REAL gaps that the BA must clarify before test cases can be written.
+- Every gap MUST reference a SPECIFIC AC number, section name, or phrase from the actual story text or comments.
+- Do NOT raise generic or speculative gaps. Only flag what is genuinely missing or ambiguous.
+- Do NOT flag something as a gap if it is already covered in the story description OR resolved in any comment.
+- Treat story comments as part of the requirements — a gap clarified in a comment is NOT a gap.
+- Only list gaps that would prevent a QA engineer from writing or executing a reliable test case.
+- Do NOT drop any gap from your analysis unless it is explicitly resolved in the story or comments. Completeness is required — omitting a real gap is a defect in the analysis.
 
-Story ID: ${sid} | Platform: ${platform}
+${storyMeta}
 ${ctx}
 
-IMPORTANT: Write in plain text only. No markdown symbols, no **, no ##, no ---, no backticks, no > quotes. Use CAPS for section titles. Use numbered lists for gaps.
+IMPORTANT: Write in plain text only. No markdown symbols, no **, no ##, no ---, no backticks, no > quotes. Use CAPS for section titles. Use numbered lists.
 
 Output this EXACT structure:
 
 STORY SUMMARY:
-[2-3 sentence summary of what this story actually does, based on what you read]
+[2-3 sentence summary of what this story does, based strictly on what is written]
 
 REAL GAPS FOUND:
-[For each gap, use this format:]
-GAP [number]: [Short gap title]
-Section reference: [Exact section name or AC number from the story]
-What is missing: [Specific description of what is not defined or unclear]
-Why it matters: [Why QA cannot test without this being clarified]
+GAP [number]: [Short descriptive title]
+Category: [Functional | Data Validation | Error Handling | Roles and Permissions | Edge Cases | Integration | Non-Functional | Security | UI and UX | Navigation and Browser Behavior | Device and Environment]
+Section reference: [Exact AC number, section name, or phrase from the story]
+What is missing: [Specific description of what is undefined, ambiguous, or incomplete]
+Impact on testing: [Why QA cannot write or execute a reliable test without this being clarified]
 Risk: [HIGH / MEDIUM / LOW]
+Risk justification: [One sentence explaining why this specific risk level was assigned]
+Blocked test cases: Estimate: [number] — [one-line rationale explaining which test scenarios are blocked and why]
 
 [If no real gaps found, write: No gaps found — story is complete for QA.]
 
-ACs THAT NEED CLARIFICATION:
-[List each AC that is unclear using this format:]
-AC[number]: [What specifically is unclear or ambiguous in that AC]
+QUESTIONS FOR THE BA:
+[For each gap above, one direct question to resolve it — same numbering:]
+Q[number]: [Specific question the QA team should ask the BA to resolve GAP [number]]
 
-[If all ACs are clear, write: All ACs are clearly defined.]
+ACs THAT NEED CLARIFICATION:
+[List each AC that is ambiguous or incomplete:]
+AC[number]: [What specifically is unclear or missing in this AC]
+
+[If all ACs are clearly defined, write: All ACs are clearly defined.]
 
 OVERALL STORY READINESS FOR QA:
-[One of: Ready / Needs clarification / Not ready]
-[One sentence explaining why]`;
+[One of: Ready / Needs minor clarification / Needs major clarification / Not ready]
+[One sentence explaining the main reason]`;
     try {
-      const r=await callAI([{role:"user",content:GAP_PROMPT}],SYS,5000,"");
+      const r=await callAI([{role:"user",content:GAP_PROMPT}],SYS,4000,"");
       setGapText(r.replace(/\*{1,3}([^*]+)\*{1,3}/g,"$1").replace(/^#{1,6}\s*/gm,"").replace(/^[-─]{3,}\s*$/gm,"").replace(/^>\s*/gm,"").replace(/`([^`]*)`/g,"$1").trim());
       setPhase("gap");
     } catch(e){alert(e.message);}
@@ -1456,7 +1633,7 @@ OVERALL STORY READINESS FOR QA:
   const editS=(id,si,v)=>setCases(cs=>cs.map(c=>{if(c.id!==id)return c;const s=[...c.steps];s[si]=v;return{...c,steps:s};}));
   const addStep=id=>setCases(cs=>cs.map(c=>c.id===id?{...c,steps:[...(c.steps||[]),"New step"]}:c));
   const delStep=(id,si)=>setCases(cs=>cs.map(c=>c.id===id?{...c,steps:(c.steps||[]).filter((_,i)=>i!==si)}:c));
-  const reset=()=>{localStorage.removeItem(WS_SNAP);setPhase(memberProjects.length>1?"project":"testType");setTestKind("functional");setPerfResult(null);setPerfForm(PERF_FORM_DEFAULT);setPerfChat(false);setSid("");setSdata(null);setPlatform("web");setCtypes([]);setGapText("");setCases([]);setEditOn(false);setScripts({web:"",ios:"",android:""});setProjFiles(null);setExecLines([]);setResult(null);setJKey(null);setBugDone(null);setShowBugForm(false);setFixed(false);setChat(false);setShowAddCase(false);setSelectedForScripts([]);setCoverageText("");setSessionBugs([]);setHasSaved(false);setAppUrl("");};
+  const reset=()=>{localStorage.removeItem(WS_SNAP);setPhase(memberProjects.length>1?"project":"testType");setTestKind("functional");setPerfResult(null);setPerfForm(PERF_FORM_DEFAULT);setPerfChat(false);setSid("");setSdata(null);setPlatform("web");setCtypes([]);setGapText("");setCases([]);setEditOn(false);setScripts({web:"",ios:"",android:""});setProjFiles(null);setExecLines([]);setResult(null);setJKey(null);setBugDone(null);setShowBugForm(false);setFixed(false);setChat(false);setShowAddCase(false);setSelectedForScripts([]);setCoverageText("");setSessionBugs([]);setHasSaved(false);setAppUrl("");setScriptCache({});};
   const resetPerf=()=>{setPerfForm(PERF_FORM_DEFAULT);setPerfResult(null);setPerfChat(false);setHasSaved(false);setPhase("perfTest");};
   const [saveModal,setSaveModal]=useState(null);
   // saveModal: null | {step:1,name:""} | {step:2,name:"",newCat:""}
@@ -1614,6 +1791,7 @@ OVERALL STORY READINESS FOR QA:
     </div>
     <StepBar steps={WS_STEPS} cur={WS_IDX[phase]??0} onStepClick={goToStep}/>
     {projPicker}
+    {SwitchProjModal}
     <div style={{display:"flex",gap:16}}>
       <div style={{flex:1,minWidth:0}}>
         {loading&&<Loader msg={lmsg}/>}
@@ -1887,7 +2065,16 @@ OVERALL STORY READINESS FOR QA:
               <Tag c="blue">{sdata.type}</Tag><Tag c="amber">{sdata.status}</Tag><span>{sdata.assignee}</span><Tag c={sdata.priority==="High"?"red":"blue"}>{sdata.priority}</Tag>
               {(sdata.labels||[]).map((l,i)=><Tag key={i}>{l}</Tag>)}
             </div>
-            {sdata.description?<div style={{fontSize:13,marginTop:6,lineHeight:1.5}}>{sdata.description.slice(0,300)}{sdata.description.length>300?"…":""}</div>:<div style={{fontSize:12,marginTop:6,color:"var(--color-text-warning)"}}>⚠ No description found in Jira — add one to improve GAP analysis and test case quality.</div>}
+            {sdata.description
+              ?<div>
+                <div style={{fontSize:13,marginTop:6,lineHeight:1.6,whiteSpace:"pre-wrap",wordBreak:"break-word"}}>
+                  {showFullStory?sdata.description:(sdata.description.slice(0,300)+(sdata.description.length>300?"…":""))}
+                </div>
+                {sdata.description.length>300&&<button onClick={()=>setShowFullStory(x=>!x)} style={{marginTop:8,padding:"4px 12px",borderRadius:6,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:12,color:"var(--color-text-info)",fontWeight:500}}>
+                  {showFullStory?"▲ Hide":"▼ Show Full Story"}
+                </button>}
+              </div>
+              :<div style={{fontSize:12,marginTop:6,color:"var(--color-text-warning)"}}>⚠ No description found in Jira — add one to improve GAP analysis and test case quality.</div>}
           </div>}
           {proj.platform==="both"&&<div style={{...card,marginBottom:12}}><H2>Select platform for this story</H2><div style={{display:"flex",gap:12,marginTop:12}}>{[{v:"web",icon:"🌐",label:"Web",sub:"Playwright"},{v:"mobile",icon:"📱",label:"Mobile",sub:"Appium"}].map(o=><button key={o.v} onClick={()=>setPlatform(o.v)} style={{flex:1,padding:16,borderRadius:12,border:"2px solid "+(platform===o.v?"var(--color-text-info)":"var(--color-border-secondary)"),background:platform===o.v?"var(--color-background-info)":"var(--color-background-primary)",cursor:"pointer",textAlign:"left"}}><div style={{fontSize:22,marginBottom:4}}>{o.icon}</div><div style={{fontWeight:500,fontSize:14}}>{o.label}</div><div style={{fontSize:12,color:"var(--color-text-secondary)",marginTop:2}}>{o.sub}</div></button>)}</div></div>}
           <div style={card}><div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:16}}>Story: <b>{sid}</b></div><H2>What would you like to do?</H2>
@@ -1908,7 +2095,12 @@ OVERALL STORY READINESS FOR QA:
               <div style={{display:"flex",gap:8,alignItems:"center"}}><Tag c="blue">{sid}</Tag><span style={{fontWeight:500}}>GAP Analysis</span></div>
               <button onClick={doGap} style={{...ghostBtn,fontSize:12,padding:"4px 10px"}}>🔄 Regenerate</button>
             </div>
-            <div style={{whiteSpace:"pre-wrap",fontSize:14,lineHeight:1.85}}>{gapText}</div>
+            <div style={{fontSize:14,lineHeight:1.85}}>
+              {gapText.split("\n").map((line,i)=>{
+                const isTitle=/^[A-Z][A-Z\s&]+:/.test(line.trim());
+                return <div key={i} style={{whiteSpace:"pre-wrap",fontWeight:isTitle?700:400,marginTop:isTitle?14:0,color:isTitle?"var(--color-text-primary)":"inherit"}}>{line||" "}</div>;
+              })}
+            </div>
           </div>
           <Confirm icon="📝" title="Would you like to write test cases?" onYes={()=>setPhase("ctype")} yesLabel="Yes, write test cases"/>
         </div>}
@@ -2619,6 +2811,7 @@ function App() {
   const [restoreTarget,setRestoreTarget]=useState(null);
   const [activeSid,setActiveSid]=useState(""); const [activeProj,setActiveProj]=useState(null);
   const [renamingId,setRenamingId]=useState(null); const [renameVal,setRenameVal]=useState("");
+  const [deleteConfirmId,setDeleteConfirmId]=useState(null);
   const [renamingCatId,setRenamingCatId]=useState(null); const [renameCatVal,setRenameCatVal]=useState("");
   const renameCat=(id,name)=>{if(!name.trim())return;DB.categories=DB.categories.map(c=>c.id===id?{...c,name:name.trim()}:c);saveDB();refreshSaved();setRenamingCatId(null);};
   const [,forceUpdate]=useState(0);
@@ -2632,6 +2825,9 @@ function App() {
     DB.savedStories=DB.savedStories.filter(s=>s.id!==id);
     DB.categories=DB.categories.filter(c=>DB.savedStories.some(s=>s.categoryId===c.id));
     saveDB();refreshSaved();
+    if(story&&story.sid){
+      try{const c=JSON.parse(localStorage.getItem(`qa_stories_${user.id}`)||"{}");delete c[story.sid];localStorage.setItem(`qa_stories_${user.id}`,JSON.stringify(c));}catch{}
+    }
     if(story&&story.sid===activeSid){
       localStorage.removeItem(`qa_ws_${user.id}`);
       setResetTrigger(x=>x+1);
@@ -2654,6 +2850,11 @@ function App() {
     }
   };
   const handleLogout=()=>{_currentMemberId="";localStorage.removeItem(SESSION_KEY);sessionStorage.removeItem(SESSION_KEY);sessionStorage.removeItem(SESSION_TOKEN_KEY);sessionStorage.removeItem(ADMIN_TOKEN_KEY);sessionStorage.removeItem(MEMBER_TOKEN_KEY);setUser(null);setPage("workspace");setShowConfig(false);setShowChangePwd(false);};
+  useEffect(()=>{
+    const onAuthFailure=()=>handleLogout();
+    window.addEventListener('qa-auth-failure',onAuthFailure);
+    return()=>window.removeEventListener('qa-auth-failure',onAuthFailure);
+  },[]);
   if(!user) return <LoginPage onLogin={handleLogin}/>;
   const adminNav=[{sec:"Overview",items:[{id:"dashboard",label:"Dashboard",icon:"📊"}]},{sec:"Manage",items:[{id:"members",label:"Members",icon:"👥"},{id:"projects",label:"Projects",icon:"📁"},{id:"assign",label:"Assignments",icon:"🔗"}]}];
   const memberNav=[{sec:"Work",items:[{id:"workspace",label:"Workspace",icon:"🖥"}]}];
@@ -2693,7 +2894,7 @@ function App() {
                       <span style={{fontSize:12,fontWeight:500,color:"var(--color-text-primary)",flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{s.name}</span>
                       <div style={{display:"flex",gap:1,marginLeft:4,flexShrink:0,opacity:0.7}} onClick={e=>e.stopPropagation()}>
                         <button title="Rename" onClick={()=>{setRenamingId(s.id);setRenameVal(s.name);}} style={{background:"none",border:"none",cursor:"pointer",color:"var(--color-text-tertiary)",fontSize:11,padding:"2px 3px",borderRadius:3}}>✎</button>
-                        <button title="Delete" onClick={()=>deleteSnap(s.id)} style={{background:"none",border:"none",cursor:"pointer",color:"var(--color-text-danger)",fontSize:11,padding:"2px 3px",borderRadius:3}}>✕</button>
+                        <button title="Delete" onClick={()=>setDeleteConfirmId(s.id)} style={{background:"none",border:"none",cursor:"pointer",color:"var(--color-text-danger)",fontSize:11,padding:"2px 3px",borderRadius:3}}>✕</button>
                       </div>
                     </div>
                     <div style={{display:"flex",gap:3,flexWrap:"wrap"}}>
@@ -2726,6 +2927,16 @@ function App() {
               {grouped.length>0&&<div style={{fontSize:11,fontWeight:600,color:"var(--color-text-tertiary)",padding:"4px 4px 5px"}}>No sprint</div>}
               <div style={{display:"flex",flexDirection:"column",gap:4}}>
                 {uncategorized.map(s=><StoryCard key={s.id} s={s}/>)}
+              </div>
+            </div>}
+            {deleteConfirmId&&<div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",zIndex:9999,display:"flex",alignItems:"center",justifyContent:"center"}} onClick={()=>setDeleteConfirmId(null)}>
+              <div style={{background:"var(--color-background-primary)",border:"1px solid var(--color-border-secondary)",borderRadius:12,padding:24,maxWidth:380,width:"90%",boxShadow:"0 8px 32px rgba(0,0,0,0.25)"}} onClick={e=>e.stopPropagation()}>
+                <div style={{fontSize:15,fontWeight:600,marginBottom:10,color:"var(--color-text-primary)"}}>Delete Session?</div>
+                <div style={{fontSize:13,color:"var(--color-text-secondary)",lineHeight:1.6,marginBottom:20}}>Are you sure you want to delete this session? The session will be permanently removed. If the same story ID is entered again, the member will start from the beginning.</div>
+                <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
+                  <button onClick={()=>setDeleteConfirmId(null)} style={{padding:"8px 18px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:13,color:"var(--color-text-secondary)"}}>Cancel</button>
+                  <button onClick={()=>{deleteSnap(deleteConfirmId);setDeleteConfirmId(null);}} style={{padding:"8px 18px",borderRadius:8,border:"none",background:"var(--color-danger,#e53e3e)",cursor:"pointer",fontSize:13,color:"#fff",fontWeight:500}}>Delete Session</button>
+                </div>
               </div>
             </div>}
           </div>;
