@@ -2770,7 +2770,9 @@ function App() {
     DB.savedStories=DB.savedStories.filter(s=>s.id!==id);
     DB.categories=DB.categories.filter(c=>DB.savedStories.some(s=>s.categoryId===c.id));
     saveDB();refreshSaved();
-    setScriptCache({});
+    if(story&&story.sid){
+      try{const c=JSON.parse(localStorage.getItem(`qa_stories_${user.id}`)||"{}");delete c[story.sid];localStorage.setItem(`qa_stories_${user.id}`,JSON.stringify(c));}catch{}
+    }
     if(story&&story.sid===activeSid){
       localStorage.removeItem(`qa_ws_${user.id}`);
       setResetTrigger(x=>x+1);
