@@ -1099,6 +1099,7 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
   const [selectedForScripts,setSelectedForScripts]=useState([]); const [coverageText,setCoverageText]=useState(""); const [sessionBugs,setSessionBugs]=useState([]); const [appUrl,setAppUrl]=useState("");
   const [codegenSessionId,setCodegenSessionId]=useState(null); const [codegenScript,setCodegenScript]=useState(""); const [codegenStatus,setCodegenStatus]=useState("idle");
   const [scriptCache,setScriptCache]=useState({});
+  const [showFullStory,setShowFullStory]=useState(false);
   const [editingBugId,setEditingBugId]=useState(null); const [editBugForm,setEditBugForm]=useState({});
   const [toast,setToast]=useState(null);
   const showToast=(msg)=>{setToast(msg);setTimeout(()=>setToast(null),3000);};
@@ -1269,7 +1270,7 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
     if(sdata?.key && sdata.key!==sid){
       saveStoryToCache(sdata.key,{phase,sdata,platform,ctypes,gapText,cases,scripts,result,sessionBugs,coverageText,appUrl});
     }
-    setLoading(true); setLmsg("Fetching story from Jira…"); setFetchError("");
+    setLoading(true); setLmsg("Fetching story from Jira…"); setFetchError(""); setShowFullStory(false);
     // Check per-story cache first — if we have state for this story, restore it immediately
     const cached=restoreStoryFromCache(sid);
     if(cached&&cached.sdata){
@@ -2024,7 +2025,16 @@ OVERALL STORY READINESS FOR QA:
               <Tag c="blue">{sdata.type}</Tag><Tag c="amber">{sdata.status}</Tag><span>{sdata.assignee}</span><Tag c={sdata.priority==="High"?"red":"blue"}>{sdata.priority}</Tag>
               {(sdata.labels||[]).map((l,i)=><Tag key={i}>{l}</Tag>)}
             </div>
-            {sdata.description?<div style={{fontSize:13,marginTop:6,lineHeight:1.5}}>{sdata.description.slice(0,300)}{sdata.description.length>300?"…":""}</div>:<div style={{fontSize:12,marginTop:6,color:"var(--color-text-warning)"}}>⚠ No description found in Jira — add one to improve GAP analysis and test case quality.</div>}
+            {sdata.description
+              ?<div>
+                <div style={{fontSize:13,marginTop:6,lineHeight:1.6,whiteSpace:"pre-wrap",wordBreak:"break-word"}}>
+                  {showFullStory?sdata.description:(sdata.description.slice(0,300)+(sdata.description.length>300?"…":""))}
+                </div>
+                {sdata.description.length>300&&<button onClick={()=>setShowFullStory(x=>!x)} style={{marginTop:8,padding:"4px 12px",borderRadius:6,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:12,color:"var(--color-text-info)",fontWeight:500}}>
+                  {showFullStory?"▲ Hide":"▼ Show Full Story"}
+                </button>}
+              </div>
+              :<div style={{fontSize:12,marginTop:6,color:"var(--color-text-warning)"}}>⚠ No description found in Jira — add one to improve GAP analysis and test case quality.</div>}
           </div>}
           {proj.platform==="both"&&<div style={{...card,marginBottom:12}}><H2>Select platform for this story</H2><div style={{display:"flex",gap:12,marginTop:12}}>{[{v:"web",icon:"🌐",label:"Web",sub:"Playwright"},{v:"mobile",icon:"📱",label:"Mobile",sub:"Appium"}].map(o=><button key={o.v} onClick={()=>setPlatform(o.v)} style={{flex:1,padding:16,borderRadius:12,border:"2px solid "+(platform===o.v?"var(--color-text-info)":"var(--color-border-secondary)"),background:platform===o.v?"var(--color-background-info)":"var(--color-background-primary)",cursor:"pointer",textAlign:"left"}}><div style={{fontSize:22,marginBottom:4}}>{o.icon}</div><div style={{fontWeight:500,fontSize:14}}>{o.label}</div><div style={{fontSize:12,color:"var(--color-text-secondary)",marginTop:2}}>{o.sub}</div></button>)}</div></div>}
           <div style={card}><div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:16}}>Story: <b>{sid}</b></div><H2>What would you like to do?</H2>
