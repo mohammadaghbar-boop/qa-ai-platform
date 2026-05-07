@@ -131,6 +131,10 @@ async function callAI(messages, sys="", max=4000, _legacy="") {
       if (d.error) throw new Error(d.error);
       return d.text || "";
     } else {
+      if (r.status === 401) {
+        window.dispatchEvent(new CustomEvent('qa-auth-failure'));
+        throw new Error("Session expired — please log in again.");
+      }
       const d = await r.json().catch(()=>({}));
       throw new Error(d.error || "Server error " + r.status);
     }
@@ -2846,6 +2850,11 @@ function App() {
     }
   };
   const handleLogout=()=>{_currentMemberId="";localStorage.removeItem(SESSION_KEY);sessionStorage.removeItem(SESSION_KEY);sessionStorage.removeItem(SESSION_TOKEN_KEY);sessionStorage.removeItem(ADMIN_TOKEN_KEY);sessionStorage.removeItem(MEMBER_TOKEN_KEY);setUser(null);setPage("workspace");setShowConfig(false);setShowChangePwd(false);};
+  useEffect(()=>{
+    const onAuthFailure=()=>handleLogout();
+    window.addEventListener('qa-auth-failure',onAuthFailure);
+    return()=>window.removeEventListener('qa-auth-failure',onAuthFailure);
+  },[]);
   if(!user) return <LoginPage onLogin={handleLogin}/>;
   const adminNav=[{sec:"Overview",items:[{id:"dashboard",label:"Dashboard",icon:"📊"}]},{sec:"Manage",items:[{id:"members",label:"Members",icon:"👥"},{id:"projects",label:"Projects",icon:"📁"},{id:"assign",label:"Assignments",icon:"🔗"}]}];
   const memberNav=[{sec:"Work",items:[{id:"workspace",label:"Workspace",icon:"🖥"}]}];
