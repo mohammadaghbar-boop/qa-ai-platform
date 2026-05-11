@@ -1457,6 +1457,7 @@ OVERALL STORY READINESS FOR QA:
     setPhase("ready");setReadyFilter("all");setLoading(false);
   };
 
+  const stripMd=s=>s.replace(/^```(?:javascript|js|typescript|ts)?\n?/i,'').replace(/\n?```\s*$/,'').trim();
   const doScripts=async()=>{
     const selCases=cases.filter(c=>selectedForScripts.includes(c.id));
     // Cache key includes case content so edits to steps/expected invalidate the cache
@@ -1487,15 +1488,16 @@ OVERALL STORY READINESS FOR QA:
           callAI([{role:"user",content:`Generate a COMPLETE runnable Appium WebdriverIO test file for iOS, story ${sid}.${urlCtx}\nOutput ONLY JavaScript code — no markdown fences, no explanations.\n${mobileRules}\nTest cases:\n${cl}\nRequirements: describe/it blocks, XCUITest capabilities, accessibility id selectors, $('~id') or $('//XCUIElementType...') selectors, await driver.waitUntil() for waits, specific assertions (expect(el).toHaveText(), expect(el).toHaveTextContaining()), beforeEach/afterEach hooks, CommonJS require. Start directly with require statements.`}],SYS,8000,""),
           callAI([{role:"user",content:`Generate a COMPLETE runnable Appium WebdriverIO test file for Android, story ${sid}.${urlCtx}\nOutput ONLY JavaScript code — no markdown fences, no explanations.\n${mobileRules}\nTest cases:\n${cl}\nRequirements: describe/it blocks, UiAutomator2 capabilities, accessibility id or UiSelector selectors, await driver.waitUntil() for waits, specific assertions (expect(el).toHaveText(), expect(el).toHaveTextContaining()), beforeEach/afterEach hooks, CommonJS require. Start directly with require statements.`}],SYS,8000,"")
         ]);
-        newScripts={ios:iosR,android:andR,web:""}; newTab="ios";
-        newFiles={"wdio.ios.js":`exports.config={specs:["./tests/ios/*.js"],capabilities:[{platformName:"iOS","appium:automationName":"XCUITest"}],framework:"mocha",reporters:["spec"]};`,"wdio.android.js":`exports.config={specs:["./tests/android/*.js"],capabilities:[{platformName:"Android","appium:automationName":"UiAutomator2"}],framework:"mocha",reporters:["spec"]};`,[`tests/ios/${sid}.spec.js`]:iosR,[`tests/android/${sid}.spec.js`]:andR,"README.md":`# Appium Tests — ${sid}\n\nnpm install && npm run test:ios`};
+        const iosClean=stripMd(iosR),andClean=stripMd(andR);
+        newScripts={ios:iosClean,android:andClean,web:""}; newTab="ios";
+        newFiles={"wdio.ios.js":`exports.config={specs:["./tests/ios/*.js"],capabilities:[{platformName:"iOS","appium:automationName":"XCUITest"}],framework:"mocha",reporters:["spec"]};`,"wdio.android.js":`exports.config={specs:["./tests/android/*.js"],capabilities:[{platformName:"Android","appium:automationName":"UiAutomator2"}],framework:"mocha",reporters:["spec"]};`,[`tests/ios/${sid}.spec.js`]:iosClean,[`tests/android/${sid}.spec.js`]:andClean,"README.md":`# Appium Tests — ${sid}\n\nnpm install && npm run test:ios`};
       } else {
         const baseUrl=appUrl.trim()||"http://localhost:3000";
         const codegenCtx=codegenScript.trim()?`\n\nMANDATORY — Recorded Playwright Codegen (use these exact locators, do not invent or substitute selectors):\n\`\`\`javascript\n${codegenScript}\n\`\`\`\nEvery selector that appears in the codegen recording MUST be reused in the generated tests. Do not replace recorded locators with generic alternatives.`:"";
         const webPrompt=(tcl,isFirst=true)=>`You are a senior QA automation engineer. Generate a ${isFirst?"COMPLETE runnable Playwright test file":"Playwright test.describe() block (NO require/import lines)"} for story ${sid}.\nBase URL: ${baseUrl}\nOutput ONLY valid JavaScript — no markdown, no explanations, no extra text.\n${assertionRules}\nTest cases:\n${makeCl(tcl)}\n${isFirst?`File structure:\n- Line 1: const { test, expect } = require('@playwright/test');\n- test.describe('${sid}', () => { ... })\n- beforeEach: await page.goto('${baseUrl}');\n- Selectors priority: getByRole() > getByLabel() > getByPlaceholder() > getByTestId() > getByText()\n- Use await expect(locator).toBeVisible({timeout:10000}) before interacting with elements\n- Start file directly with the require statement.`:`Output ONLY the test.describe(...) {...} block. Start directly with: test.describe(`}${codegenCtx}`;
         if(selCases.length<=BATCH_SIZE){
           setLmsg(`Generating Playwright scripts for ${selCases.length} test case${selCases.length===1?'':'s'}…`);
-          const r=await callAI([{role:"user",content:webPrompt(selCases)}],SYS,8000,"");
+          const r=stripMd(await callAI([{role:"user",content:webPrompt(selCases)}],SYS,8000,""));
           newScripts={web:r,ios:"",android:""}; newTab="web";
           newFiles={"test.config.js":`module.exports={testDir:"./tests",use:{baseURL:"${baseUrl}",actionTimeout:15000,navigationTimeout:30000}};`,[`tests/${sid}.spec.js`]:r,"README.md":`# Web Tests — ${sid}\n\nnpm install && npm test`};
         } else {
@@ -1505,8 +1507,8 @@ OVERALL STORY READINESS FOR QA:
           for(let b=0;b<batches.length;b++){
             const batch=batches[b];
             setLmsg(`Generating Playwright scripts… (batch ${b+1} of ${batches.length} — ${batch.length} cases)`);
-            const r=await callAI([{role:"user",content:webPrompt(batch,b===0)}],SYS,b===0?8000:6000,"");
-            const clean=b===0?r:r.replace(/^(const\s*\{[^}]+\}\s*=\s*require\([^)]+\);?\s*|import\s[^;]+;\s*)\n/gm,'').trim();
+            const raw=stripMd(await callAI([{role:"user",content:webPrompt(batch,b===0)}],SYS,b===0?8000:6000,""));
+            const clean=b===0?raw:raw.replace(/^(const\s*\{[^}]+\}\s*=\s*require\([^)]+\);?\s*|import\s[^;]+;\s*)\n/gm,'').trim();
             scriptParts.push(clean);
           }
           const combined=scriptParts.join('\n\n');
@@ -1527,7 +1529,7 @@ OVERALL STORY READINESS FOR QA:
     const cur=platform==="mobile"?(tab==="ios"?scripts.ios:scripts.android):scripts.web;
     try {
       const failedCl=failed.map(c=>`${c.id}: ${c.title}\n  Steps:\n${(c.steps||[]).map((s,i)=>`    ${i+1}. ${s}${(c.stepResults||[])[i]?`\n       → After this step: ${c.stepResults[i]}`:''}`).join('\n')}\n  Expected Result (must be asserted): ${c.expected}\n  Failure error: ${c._pwError||"TimeoutError"}`).join("\n\n");
-      const r=await callAI([{role:"user",content:`Fix the failing Playwright tests below. Return the COMPLETE fixed script — no markdown, no explanations.\n\nFailed test cases with errors:\n${failedCl}\n\nCurrent script:\n${cur}\n\nFix instructions:\n1. Replace every page.waitForTimeout() with await expect(locator).toBeVisible({timeout:10000}) or page.waitForLoadState('networkidle').\n2. Fix locators that timed out — use getByRole(), getByLabel(), getByPlaceholder(), getByText() alternatives.\n3. Every failing test MUST end with an assertion that validates its exact Expected Result using toHaveText(), toHaveURL(), toContainText(), or toHaveValue().\n4. Fix all syntax errors — ensure all braces/brackets are closed.\n5. Keep passing tests unchanged.`}],SYS,8000,"");
+      const r=stripMd(await callAI([{role:"user",content:`Fix the failing Playwright tests below. Return the COMPLETE fixed script — no markdown, no explanations.\n\nFailed test cases with errors:\n${failedCl}\n\nCurrent script:\n${cur}\n\nFix instructions:\n1. Replace every page.waitForTimeout() with await expect(locator).toBeVisible({timeout:10000}) or page.waitForLoadState('networkidle').\n2. Fix locators that timed out — use getByRole(), getByLabel(), getByPlaceholder(), getByText() alternatives.\n3. Every failing test MUST end with an assertion that validates its exact Expected Result using toHaveText(), toHaveURL(), toContainText(), or toHaveValue().\n4. Fix all syntax errors — ensure all braces/brackets are closed.\n5. Keep passing tests unchanged.`}],SYS,8000,""));
       if(platform==="mobile"){
         if(tab==="ios"){setScripts(s=>({...s,ios:r}));setProjFiles(f=>({...f,[`tests/ios/${sid}.spec.js`]:r}));}
         else{setScripts(s=>({...s,android:r}));setProjFiles(f=>({...f,[`tests/android/${sid}.spec.js`]:r}));}
