@@ -1174,13 +1174,12 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
       setResult(s.result||null);setExecLines(s.execLines||[]);
       setCoverageText(s.coverageText||"");setSessionBugs(s.sessionBugs||[]);
       setSelectedForScripts(s.selectedForScripts||[]);setAppUrl(s.appUrl||"");
-      if(s.perfForm)setPerfForm(s.perfForm);if(s.perfResult)setPerfResult(s.perfResult);
     }catch{}
   },[]);
   // Save workspace state on every change
   useEffect(()=>{
     if(phase==="input"||phase==="testType"){localStorage.removeItem(WS_SNAP);return;}
-    try{localStorage.setItem(WS_SNAP,JSON.stringify({phase,testKind,sid,sdata,platform,ctypes,gapText,cases,scripts,tab,result,execLines,coverageText,sessionBugs,selectedForScripts,appUrl,perfForm,perfResult}));}catch{}
+    try{localStorage.setItem(WS_SNAP,JSON.stringify({phase,testKind,sid,sdata,platform,ctypes,gapText,cases,scripts,tab,result,execLines,coverageText,sessionBugs,selectedForScripts,appUrl}));}catch{}
     // Also keep per-story cache up to date
     if(sid&&sdata)saveStoryToCache(sid,{phase,sdata,platform,ctypes,gapText,cases,scripts,result,sessionBugs,coverageText,appUrl});
   },[phase,sid,sdata,platform,ctypes,gapText,cases,scripts,tab,result,execLines,coverageText,sessionBugs,selectedForScripts,appUrl]);
