@@ -544,7 +544,7 @@ export default function () {
 function runK6(scriptPath) {
   return new Promise((resolve, reject) => {
     const summaryPath = scriptPath + '.summary.json';
-    const proc = spawn('k6', ['run', '--summary-export', summaryPath, '--no-color', scriptPath], { shell: true });
+    const proc = spawn('k6', ['run', '--summary-export', summaryPath, '--new-machine-readable-summary', '--no-color', scriptPath], { shell: true });
     let stderr = '';
     proc.stderr.on('data', d => stderr += d.toString());
     proc.on('close', code => {
@@ -552,22 +552,31 @@ function runK6(scriptPath) {
         if (!fs.existsSync(summaryPath))
           throw new Error(stderr.slice(0, 300) || 'k6 produced no output (exit ' + code + ')');
         const sum = JSON.parse(fs.readFileSync(summaryPath, 'utf8'));
+        console.log('[Perf] k6 summary keys:', JSON.stringify(sum.results?.metrics?.map(m=>m.name) || Object.keys(sum.metrics||{})));
+        const httpErrors = (sum.results?.metrics||[]).filter(m=>m.name?.startsWith('http_req'));
+        httpErrors.forEach(m => console.log('[Perf] metric', m.name, JSON.stringify(m.values)));
         try { fs.unlinkSync(summaryPath); } catch {}
-        const dur  = sum.metrics?.http_req_duration?.values || {};
-        const req  = sum.metrics?.http_reqs?.values         || {};
-        const fail = sum.metrics?.http_req_failed?.values   || {};
+        // k6 v1.7+ uses sum.results.metrics array; older versions use sum.metrics object
+        const findMetric = name => {
+          if (Array.isArray(sum.results?.metrics))
+            return sum.results.metrics.find(m => m.name === name)?.values || {};
+          return sum.metrics?.[name]?.values || {};
+        };
+        const dur  = findMetric('http_req_duration');
+        const req  = findMetric('http_reqs');
+        const fail = findMetric('http_req_failed');
         resolve({
           passed: code === 0,
           metrics: {
             totalRequests: Math.round(req.count  || 0),
-            rps:           parseFloat((req.rate  || 0).toFixed(2)),
+            rps:           parseFloat((req.rate   || req.count / Math.max(1, parseFloat(sum.config?.duration) || 1) || 0).toFixed(2)),
             avgDuration:   parseFloat((dur.avg   || 0).toFixed(2)),
             minDuration:   parseFloat((dur.min   || 0).toFixed(2)),
             maxDuration:   parseFloat((dur.max   || 0).toFixed(2)),
-            p50:           parseFloat((dur['p(50)'] || 0).toFixed(2)),
-            p90:           parseFloat((dur['p(90)'] || 0).toFixed(2)),
-            p95:           parseFloat((dur['p(95)'] || 0).toFixed(2)),
-            p99:           parseFloat((dur['p(99)'] || 0).toFixed(2)),
+            p50:           parseFloat((dur.med   || dur['p50'] || dur['p(50)'] || 0).toFixed(2)),
+            p90:           parseFloat((dur['p90'] || dur['p(90)'] || 0).toFixed(2)),
+            p95:           parseFloat((dur['p95'] || dur['p(95)'] || 0).toFixed(2)),
+            p99:           parseFloat((dur['p99'] || dur['p(99)'] || 0).toFixed(2)),
             errorRate:     parseFloat(((fail.rate || 0) * 100).toFixed(2))
           }
         });
