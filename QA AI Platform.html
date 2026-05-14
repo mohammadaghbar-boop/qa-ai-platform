@@ -13,31 +13,117 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js" crossorigin="anonymous"></script>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f5f0; color: #1a1a18; min-height: 100vh; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', sans-serif;
+    background: #f1f5f9;
+    color: #1e293b;
+    min-height: 100vh;
+  }
   :root {
     --color-background-primary: #ffffff;
-    --color-background-secondary: #f9f9f7;
-    --color-background-tertiary: #f1efe8;
-    --color-background-info: #e6f1fb;
-    --color-background-success: #eaf3de;
-    --color-background-warning: #faeeda;
-    --color-background-danger: #fcebeb;
-    --color-text-primary: #1a1a18;
-    --color-text-secondary: #5f5e5a;
-    --color-text-tertiary: #888780;
-    --color-text-info: #185fa5;
-    --color-text-success: #3b6d11;
-    --color-text-warning: #854f0b;
-    --color-text-danger: #a32d2d;
-    --color-border-tertiary: rgba(0,0,0,0.12);
-    --color-border-secondary: rgba(0,0,0,0.2);
+    --color-background-secondary: #f8fafc;
+    --color-background-tertiary: #f1f5f9;
+    --color-background-info: #eff6ff;
+    --color-background-success: #f0fdf4;
+    --color-background-warning: #fffbeb;
+    --color-background-danger: #fef2f2;
+    --color-text-primary: #1e293b;
+    --color-text-secondary: #64748b;
+    --color-text-tertiary: #94a3b8;
+    --color-text-info: #1d4ed8;
+    --color-text-success: #166534;
+    --color-text-warning: #92400e;
+    --color-text-danger: #991b1b;
+    --color-border-tertiary: rgba(15,23,42,0.08);
+    --color-border-secondary: rgba(15,23,42,0.16);
+    --shadow-sm: 0 1px 3px rgba(15,23,42,0.06), 0 1px 2px rgba(15,23,42,0.04);
+    --shadow-md: 0 4px 14px rgba(15,23,42,0.09), 0 1px 4px rgba(15,23,42,0.05);
+    --shadow-lg: 0 12px 40px rgba(15,23,42,0.13), 0 2px 8px rgba(15,23,42,0.06);
+    --accent: #4f46e5;
+    --accent-hover: #4338ca;
     --font-mono: 'Courier New', monospace;
   }
   input, select, textarea, button { font-family: inherit; }
-  input:focus, select:focus, textarea:focus { outline: 2px solid var(--color-text-info); outline-offset: 1px; }
-  * { scrollbar-width: thin; scrollbar-color: #ccc transparent; }
-  @keyframes qa-spin { to { transform: rotate(360deg); } }
-  @keyframes qa-pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.5;transform:scale(1.15)} }
+  input:focus, select:focus, textarea:focus {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+    border-color: var(--accent) !important;
+  }
+  * { scrollbar-width: thin; scrollbar-color: #cbd5e1 transparent; }
+
+  /* ── Keyframes ─────────────────────────────────────── */
+  @keyframes qa-spin    { to { transform: rotate(360deg); } }
+  @keyframes qa-pulse   { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.5;transform:scale(1.15)} }
+  @keyframes qa-fade-up {
+    from { opacity: 0; transform: translateY(10px); }
+    to   { opacity: 1; transform: translateY(0);    }
+  }
+  @keyframes qa-fade-in {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+  }
+  @keyframes qa-slide-in {
+    from { opacity: 0; transform: translateX(16px); }
+    to   { opacity: 1; transform: translateX(0);    }
+  }
+  @keyframes qa-shimmer {
+    0%   { background-position: -600px 0; }
+    100% { background-position:  600px 0; }
+  }
+
+  /* ── Button micro-interactions ─────────────────────── */
+  .qa-btn {
+    transition: transform 0.13s ease, box-shadow 0.13s ease, filter 0.12s ease, opacity 0.13s ease !important;
+    position: relative;
+    overflow: hidden;
+  }
+  .qa-btn:hover:not(:disabled) {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 14px rgba(0,0,0,0.18);
+    filter: brightness(1.06);
+  }
+  .qa-btn:active:not(:disabled) {
+    transform: translateY(0) scale(0.97);
+    box-shadow: none;
+    filter: brightness(0.97);
+  }
+
+  /* ── Card hover lift ───────────────────────────────── */
+  .qa-card-hover {
+    transition: box-shadow 0.2s ease, transform 0.2s ease !important;
+    cursor: pointer;
+  }
+  .qa-card-hover:hover {
+    box-shadow: 0 8px 28px rgba(15,23,42,0.13) !important;
+    transform: translateY(-2px);
+  }
+
+  /* ── Skeleton shimmer ──────────────────────────────── */
+  .qa-skeleton {
+    background: linear-gradient(90deg, #f1f5f9 25%, #e2e8f0 50%, #f1f5f9 75%);
+    background-size: 1200px 100%;
+    animation: qa-shimmer 1.6s infinite linear;
+    border-radius: 6px;
+  }
+
+  /* ── Phase entrance ────────────────────────────────── */
+  .qa-phase {
+    animation: qa-fade-up 0.27s ease both;
+  }
+
+  /* ── Input transitions ─────────────────────────────── */
+  input, select, textarea {
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  }
+  input:hover:not(:focus), select:hover:not(:focus), textarea:hover:not(:focus) {
+    border-color: rgba(15,23,42,0.28) !important;
+  }
+
+  /* ── Toast animation ───────────────────────────────── */
+  .qa-toast {
+    animation: qa-fade-up 0.22s ease both;
+  }
+
   @media print {
     body * { visibility: hidden; }
     #coverage-print-area, #coverage-print-area * { visibility: visible; }
@@ -264,43 +350,47 @@ function parseCSVUsers(text) {
 }
 
 /* ─── Styles ─────────────────────────────────────────────────────────────── */
-const card = { background:"var(--color-background-secondary)", border:"1px solid var(--color-border-tertiary)", borderRadius:12, padding:20, marginBottom:16 };
-const inp  = { width:"100%", padding:"8px 12px", borderRadius:8, border:"1px solid var(--color-border-secondary)", background:"var(--color-background-primary)", color:"var(--color-text-primary)", fontSize:14, boxSizing:"border-box" };
+const card = { background:"var(--color-background-primary)", border:"1px solid var(--color-border-tertiary)", borderRadius:14, padding:20, marginBottom:16, boxShadow:"var(--shadow-sm)", animation:"qa-fade-up 0.28s ease both" };
+const inp  = { width:"100%", padding:"9px 13px", borderRadius:10, border:"1px solid var(--color-border-secondary)", background:"var(--color-background-primary)", color:"var(--color-text-primary)", fontSize:14, boxSizing:"border-box" };
 const sel  = { ...inp };
 const ta   = { ...inp, resize:"vertical" };
 
 function Btn({v="primary",onClick,disabled,full,children}) {
-  const bg = v==="primary"?"var(--color-text-info)":v==="danger"?"var(--color-text-danger)":v==="success"?"var(--color-text-success)":"transparent";
+  const bg = v==="primary"?"var(--accent)":v==="danger"?"var(--color-text-danger)":v==="success"?"var(--color-text-success)":"transparent";
   const col = v==="ghost"?"var(--color-text-secondary)":"#fff";
   const bdr = v==="ghost"?"1px solid var(--color-border-secondary)":"none";
-  return <button disabled={disabled} onClick={onClick} style={{padding:"8px 18px",borderRadius:8,border:bdr,cursor:disabled?"not-allowed":"pointer",fontSize:14,fontWeight:500,display:"inline-flex",alignItems:"center",gap:6,width:full?"100%":"auto",justifyContent:full?"center":"flex-start",opacity:disabled?0.5:1,background:bg,color:col}}>{children}</button>;
+  return <button className="qa-btn" disabled={disabled} onClick={onClick} style={{padding:"9px 20px",borderRadius:10,border:bdr,cursor:disabled?"not-allowed":"pointer",fontSize:14,fontWeight:500,display:"inline-flex",alignItems:"center",gap:6,width:full?"100%":"auto",justifyContent:full?"center":"flex-start",opacity:disabled?0.5:1,background:bg,color:col,letterSpacing:"0.01em"}}>{children}</button>;
 }
 function Tag({c="blue",children}) {
   const bg = c==="blue"?"var(--color-background-info)":c==="green"?"var(--color-background-success)":c==="amber"?"var(--color-background-warning)":c==="red"?"var(--color-background-danger)":"var(--color-background-tertiary)";
   const tx = c==="blue"?"var(--color-text-info)":c==="green"?"var(--color-text-success)":c==="amber"?"var(--color-text-warning)":c==="red"?"var(--color-text-danger)":"var(--color-text-secondary)";
-  return <span style={{display:"inline-block",padding:"2px 9px",borderRadius:20,fontSize:12,fontWeight:500,background:bg,color:tx}}>{children}</span>;
+  const br = c==="blue"?"rgba(29,78,216,0.18)":c==="green"?"rgba(22,101,52,0.18)":c==="amber"?"rgba(146,64,14,0.18)":c==="red"?"rgba(153,27,27,0.18)":"var(--color-border-tertiary)";
+  return <span style={{display:"inline-block",padding:"3px 10px",borderRadius:20,fontSize:12,fontWeight:500,background:bg,color:tx,border:"1px solid "+br}}>{children}</span>;
 }
-const Lbl = ({children}) => <label style={{fontSize:13,fontWeight:500,color:"var(--color-text-secondary)",marginBottom:4,display:"block"}}>{children}</label>;
-const H1 = ({children}) => <div style={{fontSize:20,fontWeight:500,marginBottom:16}}>{children}</div>;
-const H2 = ({children}) => <div style={{fontSize:16,fontWeight:500,marginBottom:12}}>{children}</div>;
+const Lbl = ({children}) => <label style={{fontSize:13,fontWeight:500,color:"var(--color-text-secondary)",marginBottom:5,display:"block"}}>{children}</label>;
+const H1 = ({children}) => <div style={{fontSize:21,fontWeight:700,marginBottom:16,letterSpacing:"-0.01em"}}>{children}</div>;
+const H2 = ({children}) => <div style={{fontSize:15,fontWeight:600,marginBottom:12}}>{children}</div>;
 
 function Loader({msg,sub}) {
-  return <div style={{...card,textAlign:"center",padding:48}}>
-    <div style={{width:40,height:40,border:"4px solid var(--color-border-tertiary)",borderTop:"4px solid var(--color-text-info)",borderRadius:"50%",animation:"qa-spin .85s linear infinite",margin:"0 auto 20px"}}/>
-    <div style={{fontWeight:500,marginBottom:4}}>{msg||"Working…"}</div>
-    {sub&&<div style={{color:"var(--color-text-secondary)",fontSize:13}}>{sub}</div>}
+  return <div style={{...card,textAlign:"center",padding:"40px 32px"}}>
+    <div style={{width:44,height:44,border:"3px solid var(--color-border-tertiary)",borderTop:"3px solid var(--accent)",borderRadius:"50%",animation:"qa-spin .9s linear infinite",margin:"0 auto 18px"}}/>
+    <div style={{fontWeight:600,marginBottom:6,fontSize:15}}>{msg||"Working…"}</div>
+    {sub&&<div style={{color:"var(--color-text-secondary)",fontSize:13,marginBottom:20}}>{sub}</div>}
+    <div style={{marginTop:22,display:"flex",flexDirection:"column",gap:10,textAlign:"left",maxWidth:380,margin:"22px auto 0"}}>
+      {[88,65,76,45].map((w,i)=><div key={i} className="qa-skeleton" style={{height:11,width:w+"%",animationDelay:(i*0.18)+"s"}}/>)}
+    </div>
   </div>;
 }
 function Confirm({icon,title,desc,onYes,onNo,yesLabel="Yes",noLabel="No, skip",danger,noDanger}) {
-  return <div style={{...card,borderLeft:"3px solid var(--color-text-info)"}}>
+  return <div style={{...card,borderLeft:"3px solid var(--accent)"}}>
     <div style={{display:"flex",gap:14}}>
       {icon&&<div style={{fontSize:26,lineHeight:1,paddingTop:2}}>{icon}</div>}
       <div style={{flex:1}}>
-        <div style={{fontWeight:500,fontSize:15,marginBottom:desc?6:14}}>{title}</div>
-        {desc&&<div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:14,lineHeight:1.6}}>{desc}</div>}
+        <div style={{fontWeight:600,fontSize:15,marginBottom:desc?6:14}}>{title}</div>
+        {desc&&<div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:14,lineHeight:1.65}}>{desc}</div>}
         <div style={{display:"flex",gap:10}}>
           <Btn v={danger?"danger":"primary"} onClick={onYes}>{yesLabel}</Btn>
-          {onNo&&(noDanger?<Btn v="danger" onClick={onNo}>{noLabel}</Btn>:<button onClick={onNo} style={{padding:"8px 18px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:14,fontWeight:500,color:"var(--color-text-secondary)"}}>{noLabel}</button>)}
+          {onNo&&(noDanger?<Btn v="danger" onClick={onNo}>{noLabel}</Btn>:<button className="qa-btn" onClick={onNo} style={{padding:"9px 20px",borderRadius:10,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:14,fontWeight:500,color:"var(--color-text-secondary)"}}>{noLabel}</button>)}
         </div>
       </div>
     </div>
@@ -308,10 +398,11 @@ function Confirm({icon,title,desc,onYes,onNo,yesLabel="Yes",noLabel="No, skip",d
 }
 function Banner({icon,title,sub,color="success",children}) {
   const bgs={success:"var(--color-background-success)",danger:"var(--color-background-danger)",info:"var(--color-background-info)",warning:"var(--color-background-warning)"};
-  return <div style={{...card,background:bgs[color]}}>
+  const brd={success:"rgba(22,101,52,0.2)",danger:"rgba(153,27,27,0.2)",info:"rgba(29,78,216,0.2)",warning:"rgba(146,64,14,0.2)"};
+  return <div style={{...card,background:bgs[color],border:"1px solid "+brd[color]}}>
     <div style={{display:"flex",gap:12,alignItems:"flex-start"}}>
       {icon&&<div style={{fontSize:22}}>{icon}</div>}
-      <div style={{flex:1}}><div style={{fontWeight:500}}>{title}</div>{sub&&<div style={{fontSize:13,color:"var(--color-text-secondary)",marginTop:2}}>{sub}</div>}{children}</div>
+      <div style={{flex:1}}><div style={{fontWeight:600}}>{title}</div>{sub&&<div style={{fontSize:13,color:"var(--color-text-secondary)",marginTop:3,lineHeight:1.6}}>{sub}</div>}{children}</div>
     </div>
   </div>;
 }
@@ -327,23 +418,25 @@ function StepBar({steps,cur,onStepClick}) {
           onMouseEnter={()=>setHov(i)}
           onMouseLeave={()=>setHov(null)}
           title={clickable?"Go back to "+s:undefined}
-          style={{padding:"3px 10px",borderRadius:20,fontSize:12,fontWeight:500,display:"flex",alignItems:"center",gap:5,
+          style={{padding:"4px 11px",borderRadius:20,fontSize:12,fontWeight:500,display:"flex",alignItems:"center",gap:5,
             cursor:clickable?"pointer":"default",
-            opacity:isHov?0.75:1,
+            opacity:isHov?0.72:1,
             textDecoration:isHov?"underline":"none",
             background:done?"var(--color-background-success)":active?"var(--color-background-info)":"var(--color-background-tertiary)",
-            color:done?"var(--color-text-success)":active?"var(--color-text-info)":"var(--color-text-tertiary)",
-            transition:"opacity 0.15s"
+            color:done?"var(--color-text-success)":active?"var(--accent)":"var(--color-text-tertiary)",
+            border:active?"1px solid rgba(79,70,229,0.25)":done?"1px solid rgba(22,101,52,0.2)":"1px solid transparent",
+            boxShadow:active?"0 1px 6px rgba(79,70,229,0.15)":"none",
+            transition:"all 0.18s ease"
           }}
         >{done?"↩":i+1} {s}</div>
-        {i<steps.length-1&&<div style={{width:14,height:1,background:"var(--color-border-secondary)"}}/>}
+        {i<steps.length-1&&<div style={{width:12,height:1,background:"var(--color-border-secondary)",opacity:0.6}}/>}
       </div>;
     })}
   </div>;
 }
 function Tabs({tabs,active,onChange}) {
-  return <div style={{display:"flex",borderBottom:"1px solid var(--color-border-tertiary)",marginBottom:14}}>
-    {tabs.map(t=><button key={t.id} onClick={()=>onChange(t.id)} style={{padding:"8px 16px",border:"none",background:"transparent",cursor:"pointer",fontSize:13,fontWeight:active===t.id?500:400,borderBottom:`2px solid ${active===t.id?"var(--color-text-info)":"transparent"}`,color:active===t.id?"var(--color-text-info)":"var(--color-text-secondary)"}}>{t.label}</button>)}
+  return <div style={{display:"flex",borderBottom:"1px solid var(--color-border-tertiary)",marginBottom:14,gap:2}}>
+    {tabs.map(t=><button key={t.id} onClick={()=>onChange(t.id)} style={{padding:"9px 17px",border:"none",background:"transparent",cursor:"pointer",fontSize:13,fontWeight:active===t.id?600:400,borderBottom:`2px solid ${active===t.id?"var(--accent)":"transparent"}`,color:active===t.id?"var(--accent)":"var(--color-text-secondary)",transition:"color 0.15s ease, border-color 0.15s ease"}}>{t.label}</button>)}
   </div>;
 }
 function Terminal({lines}) {
@@ -1240,13 +1333,13 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
   };
   const SwitchProjModal=switchTarget&&(()=>{
     const target=memberProjects.find(p=>p.id===switchTarget);
-    return <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",zIndex:2000,display:"flex",alignItems:"center",justifyContent:"center"}} onClick={()=>setSwitchTarget(null)}>
-      <div style={{background:"var(--color-background-primary)",borderRadius:14,padding:28,width:400,maxWidth:"90vw",boxShadow:"0 8px 32px rgba(0,0,0,0.18)"}} onClick={e=>e.stopPropagation()}>
-        <div style={{fontWeight:600,fontSize:16,marginBottom:8}}>Switch to "{target?.name}"?</div>
-        <div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:20}}>Your current session will be saved automatically before switching.</div>
+    return <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,0.5)",zIndex:2000,display:"flex",alignItems:"center",justifyContent:"center",backdropFilter:"blur(2px)"}} onClick={()=>setSwitchTarget(null)}>
+      <div style={{background:"var(--color-background-primary)",borderRadius:16,padding:28,width:400,maxWidth:"90vw",boxShadow:"var(--shadow-lg)",border:"1px solid var(--color-border-tertiary)",animation:"qa-fade-up 0.22s ease both"}} onClick={e=>e.stopPropagation()}>
+        <div style={{fontWeight:700,fontSize:16,marginBottom:8,letterSpacing:"-0.01em"}}>Switch to "{target?.name}"?</div>
+        <div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:20,lineHeight:1.6}}>Your current session will be saved automatically before switching.</div>
         <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
-          <button onClick={()=>setSwitchTarget(null)} style={{padding:"8px 18px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:14,color:"var(--color-text-secondary)"}}>Cancel</button>
-          <button onClick={confirmSwitch} style={{padding:"8px 18px",borderRadius:8,border:"none",background:"var(--color-text-info)",color:"#fff",cursor:"pointer",fontSize:14,fontWeight:500}}>Switch project</button>
+          <button className="qa-btn" onClick={()=>setSwitchTarget(null)} style={{padding:"9px 20px",borderRadius:10,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:14,color:"var(--color-text-secondary)"}}>Cancel</button>
+          <button className="qa-btn" onClick={confirmSwitch} style={{padding:"9px 20px",borderRadius:10,border:"none",background:"var(--accent)",color:"#fff",cursor:"pointer",fontSize:14,fontWeight:600}}>Switch project</button>
         </div>
       </div>
     </div>;
@@ -1727,12 +1820,12 @@ OVERALL STORY READINESS FOR QA:
     setShowAddCase(false);
   };
   const curScript=platform==="mobile"?(tab==="ios"?scripts.ios:scripts.android):scripts.web;
-  const ghostBtn={padding:"8px 18px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:14,fontWeight:500,color:"var(--color-text-secondary)"};
+  const ghostBtn={padding:"9px 20px",borderRadius:10,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:14,fontWeight:500,color:"var(--color-text-secondary)",transition:"box-shadow 0.13s ease, transform 0.13s ease"};
 
   /* ── Save modal ── */
   const SaveModal=saveModal&&(()=>{
-    const overlayStyle={position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",zIndex:2000,display:"flex",alignItems:"center",justifyContent:"center"};
-    const boxStyle={background:"var(--color-background-primary)",borderRadius:14,padding:28,width:420,maxWidth:"90vw",boxShadow:"0 8px 32px rgba(0,0,0,0.18)"};
+    const overlayStyle={position:"fixed",inset:0,background:"rgba(15,23,42,0.5)",zIndex:2000,display:"flex",alignItems:"center",justifyContent:"center",backdropFilter:"blur(2px)"};
+    const boxStyle={background:"var(--color-background-primary)",borderRadius:16,padding:28,width:420,maxWidth:"90vw",boxShadow:"var(--shadow-lg)",border:"1px solid var(--color-border-tertiary)",animation:"qa-fade-up 0.22s ease both"};
     if(saveModal.step===1) return(
       <div style={overlayStyle} onClick={()=>setSaveModal(null)}>
         <div style={boxStyle} onClick={e=>e.stopPropagation()}>
@@ -1780,8 +1873,8 @@ OVERALL STORY READINESS FOR QA:
 
   return <div>
     {SaveModal}
-    {toast&&<div style={{position:"fixed",bottom:32,left:"50%",transform:"translateX(-50%)",background:"#1a1a18",color:"#fff",padding:"12px 22px",borderRadius:10,fontSize:14,fontWeight:500,zIndex:9999,boxShadow:"0 4px 16px rgba(0,0,0,0.22)",display:"flex",alignItems:"center",gap:10,pointerEvents:"none"}}>
-      <span style={{color:"#6fcf6f",fontSize:18}}>✓</span>{toast}
+    {toast&&<div className="qa-toast" style={{position:"fixed",bottom:32,left:"50%",transform:"translateX(-50%)",background:"#1e293b",color:"#f8fafc",padding:"12px 24px",borderRadius:12,fontSize:14,fontWeight:500,zIndex:9999,boxShadow:"var(--shadow-lg)",display:"flex",alignItems:"center",gap:10,pointerEvents:"none",border:"1px solid rgba(255,255,255,0.08)"}}>
+      <span style={{color:"#4ade80",fontSize:17}}>✓</span>{toast}
     </div>}
     <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",marginBottom:16}}>
       <div><div style={{fontSize:20,fontWeight:500,marginBottom:4}}>QA Workspace</div>
@@ -1813,7 +1906,7 @@ OVERALL STORY READINESS FOR QA:
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))",gap:16}}>
             {memberProjects.map(p=>{
               const projStories=DB.savedStories.filter(s=>s.sid&&s.sid.startsWith(p.jiraProjKey+"-"));
-              return <div key={p.id} style={{...card,cursor:"pointer",border:selectedProjId===p.id?"2px solid var(--color-text-info)":"1px solid var(--color-border-secondary)",marginBottom:0,transition:"box-shadow 0.15s"}} onClick={()=>{if(p.id===selectedProjId){setPhase("testType");}else{switchProj(p.id);}}}>
+              return <div key={p.id} className="qa-card-hover" style={{...card,cursor:"pointer",border:selectedProjId===p.id?"2px solid var(--accent)":"1px solid var(--color-border-tertiary)",marginBottom:0,boxShadow:selectedProjId===p.id?"0 0 0 3px rgba(79,70,229,0.1), var(--shadow-sm)":"var(--shadow-sm)"}} onClick={()=>{if(p.id===selectedProjId){setPhase("testType");}else{switchProj(p.id);}}}>
                 <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10}}>
                   <div style={{width:40,height:40,borderRadius:10,background:"var(--color-background-info)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:20}}>📁</div>
                   <div><div style={{fontWeight:600,fontSize:15}}>{p.name}</div><div style={{fontSize:12,color:"var(--color-text-tertiary)"}}>{p.jiraProjKey} · {p.platform||"web"}</div></div>
@@ -1835,9 +1928,9 @@ OVERALL STORY READINESS FOR QA:
           <H2 style={{marginBottom:16}}>Choose Test Type</H2>
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))",gap:16}}>
             {[{kind:"functional",icon:"✅",label:"Functional Test",sub:"User stories · Test cases · Execution",desc:"Generate and execute functional test cases from Jira user stories using AI.",bg:"var(--color-background-success)"},{kind:"non-functional",icon:"⚡",label:"Performance Test",sub:"Load · Stress · k6",desc:"Run k6 load and stress tests against your APIs with real-time metrics.",bg:"var(--color-background-warning)"}].map(o=>(
-              <div key={o.kind} style={{...card,cursor:"pointer",border:"2px solid var(--color-border-secondary)",marginBottom:0,transition:"box-shadow 0.15s"}}
-                onMouseEnter={e=>e.currentTarget.style.borderColor="var(--color-text-info)"}
-                onMouseLeave={e=>e.currentTarget.style.borderColor="var(--color-border-secondary)"}
+              <div key={o.kind} className="qa-card-hover" style={{...card,cursor:"pointer",border:"2px solid var(--color-border-tertiary)",marginBottom:0}}
+                onMouseEnter={e=>e.currentTarget.style.borderColor="var(--accent)"}
+                onMouseLeave={e=>e.currentTarget.style.borderColor="var(--color-border-tertiary)"}
                 onClick={()=>{setTestKind(o.kind);setPhase(o.kind==="functional"?"input":"perfTest");}}>
                 <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10}}>
                   <div style={{width:44,height:44,borderRadius:10,background:o.bg,display:"flex",alignItems:"center",justifyContent:"center",fontSize:22}}>{o.icon}</div>
@@ -2653,12 +2746,12 @@ function LoginPage({onLogin}) {
     }catch{setErr("Cannot reach server. Make sure node server.js is running.");}
     setBusy(false); return;
   };
-  return <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"var(--color-background-tertiary)"}}>
-    <div style={{...card,width:380,padding:36}}>
-      <div style={{fontSize:22,fontWeight:500,marginBottom:2}}>QA AI Platform</div>
-      <div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:24}}>AI-powered QA workflow management</div>
-      <div style={{display:"flex",gap:8,marginBottom:20}}>
-        {["admin","member"].map(r=><button key={r} onClick={()=>{setMode(r);setErr("");setEmail(saved?.mode===r?saved.email:"");setPass(saved?.mode===r?saved.pass:"");}} style={{flex:1,padding:"8px 0",borderRadius:8,border:r===mode?"none":"1px solid var(--color-border-secondary)",background:r===mode?"var(--color-text-info)":"transparent",color:r===mode?"#fff":"var(--color-text-secondary)",cursor:"pointer",fontSize:14,fontWeight:500}}>{r==="admin"?"QA Lead":"Team Member"}</button>)}
+  return <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"linear-gradient(135deg, #f1f5f9 0%, #e2e8f0 100%)"}}>
+    <div style={{...card,width:400,padding:40,boxShadow:"var(--shadow-lg)",animation:"qa-fade-up 0.35s ease both"}}>
+      <div style={{fontSize:24,fontWeight:800,marginBottom:3,letterSpacing:"-0.02em"}}>QA AI Platform</div>
+      <div style={{fontSize:13,color:"var(--color-text-tertiary)",marginBottom:28}}>AI-powered QA workflow management</div>
+      <div style={{display:"flex",gap:8,marginBottom:22,padding:4,borderRadius:12,background:"var(--color-background-secondary)",border:"1px solid var(--color-border-tertiary)"}}>
+        {["admin","member"].map(r=><button key={r} className="qa-btn" onClick={()=>{setMode(r);setErr("");setEmail(saved?.mode===r?saved.email:"");setPass(saved?.mode===r?saved.pass:"");}} style={{flex:1,padding:"8px 0",borderRadius:9,border:"none",background:r===mode?"#ffffff":"transparent",color:r===mode?"var(--color-text-primary)":"var(--color-text-secondary)",cursor:"pointer",fontSize:14,fontWeight:r===mode?600:400,boxShadow:r===mode?"var(--shadow-sm)":"none"}}>{r==="admin"?"QA Lead":"Team Member"}</button>)}
       </div>
       <Lbl>{mode==="admin"?"Username":"Email"}</Lbl>
       <input style={{...inp,marginBottom:12}} value={email} onChange={e=>setEmail(e.target.value)} placeholder={mode==="admin"?"admin":"jane@company.com"}/>
@@ -2693,7 +2786,7 @@ function AdminChangePasswordModal({onClose,forced}) {
   };
   const ov={position:"fixed",inset:0,background:"rgba(0,0,0,0.6)",zIndex:2000,display:"flex",alignItems:"center",justifyContent:"center"};
   const bx={background:"var(--color-background-primary)",borderRadius:14,padding:28,width:400,maxWidth:"90vw",boxShadow:"0 8px 32px rgba(0,0,0,0.22)"};
-  const ghostBtn={padding:"8px 18px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:14,fontWeight:500,color:"var(--color-text-secondary)"};
+  const ghostBtn={padding:"9px 20px",borderRadius:10,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:14,fontWeight:500,color:"var(--color-text-secondary)",transition:"box-shadow 0.13s ease, transform 0.13s ease"};
   return <div style={ov} onClick={forced?undefined:onClose}>
     <div style={bx} onClick={e=>e.stopPropagation()}>
       {forced&&<div style={{background:"var(--color-background-warning)",border:"1px solid var(--color-border-warning)",borderRadius:8,padding:"10px 14px",marginBottom:16,fontSize:13,color:"var(--color-text-warning)"}}>
@@ -2879,19 +2972,19 @@ function App() {
   const adminNav=[{sec:"Overview",items:[{id:"dashboard",label:"Dashboard",icon:"📊"}]},{sec:"Manage",items:[{id:"members",label:"Members",icon:"👥"},{id:"projects",label:"Projects",icon:"📁"},{id:"assign",label:"Assignments",icon:"🔗"}]}];
   const memberNav=[{sec:"Work",items:[{id:"workspace",label:"Workspace",icon:"🖥"}]}];
   const nav=user.role==="admin"?adminNav:memberNav;
-  return <div style={{fontFamily:"-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif",color:"var(--color-text-primary)",minHeight:"100vh",background:"var(--color-background-tertiary)",display:"flex"}}>
+  return <div style={{fontFamily:"-apple-system,BlinkMacSystemFont,'Segoe UI','Inter',sans-serif",color:"var(--color-text-primary)",minHeight:"100vh",background:"#f1f5f9",display:"flex"}}>
     {showConfig&&user?.role==="member"&&<MemberConfigDialog memberId={user.id} onClose={()=>setShowConfig(false)}/>}
     {showChangePwd&&user?.role==="admin"&&<AdminChangePasswordModal forced={!!user.forceChangePwd} onClose={()=>{setShowChangePwd(false);setUser(u=>({...u,forceChangePwd:false}));}}/>}
-    <div style={{width:220,minHeight:"100vh",background:"var(--color-background-secondary)",borderRight:"1px solid var(--color-border-tertiary)",display:"flex",flexDirection:"column",flexShrink:0}}>
-      <div style={{padding:"16px 20px 12px",borderBottom:"1px solid var(--color-border-tertiary)"}}>
-        <div style={{fontWeight:500,fontSize:15}}>QA AI Platform</div>
-        <div style={{fontSize:11,color:"var(--color-text-tertiary)",marginTop:2}}>{user.role==="admin"?"QA Lead · Admin":(user.member?.name+" · "+user.member?.role)}</div>
+    <div style={{width:224,minHeight:"100vh",background:"#ffffff",borderRight:"1px solid var(--color-border-tertiary)",display:"flex",flexDirection:"column",flexShrink:0,boxShadow:"1px 0 0 rgba(15,23,42,0.06)"}}>
+      <div style={{padding:"18px 20px 14px",borderBottom:"1px solid var(--color-border-tertiary)"}}>
+        <div style={{fontWeight:700,fontSize:15,letterSpacing:"-0.01em",color:"var(--color-text-primary)"}}>QA AI Platform</div>
+        <div style={{fontSize:11,color:"var(--color-text-tertiary)",marginTop:3}}>{user.role==="admin"?"QA Lead · Admin":(user.member?.name+" · "+user.member?.role)}</div>
       </div>
-      <div style={{flex:1,paddingTop:6,overflowY:"auto"}}>
+      <div style={{flex:1,paddingTop:8,overflowY:"auto"}}>
         {nav.map(g=><div key={g.sec}>
-          <div style={{padding:"14px 20px 4px",fontSize:11,fontWeight:500,color:"var(--color-text-tertiary)",textTransform:"uppercase",letterSpacing:"0.07em"}}>{g.sec}</div>
+          <div style={{padding:"14px 20px 4px",fontSize:10,fontWeight:600,color:"var(--color-text-tertiary)",textTransform:"uppercase",letterSpacing:"0.09em"}}>{g.sec}</div>
           {g.items.map(n=>{const ob=n.id==="bugs"?DB.bugs.filter(b=>b.status==="Open").length:0;
-            return <div key={n.id} onClick={()=>{setPage(n.id);tick(x=>x+1);}} style={{padding:"9px 20px",cursor:"pointer",fontSize:14,fontWeight:page===n.id?500:400,background:page===n.id?"var(--color-background-info)":"transparent",color:page===n.id?"var(--color-text-info)":"var(--color-text-secondary)",borderLeft:page===n.id?"3px solid var(--color-text-info)":"3px solid transparent",display:"flex",alignItems:"center",gap:8}}>
+            return <div key={n.id} onClick={()=>{setPage(n.id);tick(x=>x+1);}} style={{padding:"9px 16px",margin:"1px 8px",borderRadius:9,cursor:"pointer",fontSize:13,fontWeight:page===n.id?600:400,background:page===n.id?"rgba(79,70,229,0.09)":"transparent",color:page===n.id?"var(--accent)":"var(--color-text-secondary)",display:"flex",alignItems:"center",gap:8,transition:"background 0.15s ease, color 0.15s ease"}}>
               <span>{n.icon}</span>{n.label}{ob>0&&<span style={{marginLeft:"auto",background:"var(--color-text-danger)",color:"#fff",borderRadius:20,padding:"0 6px",fontSize:11}}>{ob}</span>}
             </div>;})}
         </div>)}
@@ -2962,19 +3055,19 @@ function App() {
           </div>;
         })()}
       </div>
-      <div style={{padding:"12px 20px",borderTop:"1px solid var(--color-border-tertiary)"}}>
+      <div style={{padding:"14px 20px",borderTop:"1px solid var(--color-border-tertiary)"}}>
         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
-          <div><div style={{fontSize:13,fontWeight:500}}>{user.role==="admin"?"Admin":user.member?.name}</div><div style={{fontSize:11,color:"var(--color-text-tertiary)"}}>{user.role==="admin"?"QA Lead":user.member?.role}</div></div>
+          <div><div style={{fontSize:13,fontWeight:600}}>{user.role==="admin"?"Admin":user.member?.name}</div><div style={{fontSize:11,color:"var(--color-text-tertiary)",marginTop:1}}>{user.role==="admin"?"QA Lead":user.member?.role}</div></div>
           <NotifBell userId={user.role==="admin"?"admin":user.id}/>
         </div>
-        {user.role==="member"&&<button onClick={()=>setShowConfig(true)} style={{width:"100%",padding:"7px 0",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:13,color:"var(--color-text-secondary)",marginBottom:8,display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>
+        {user.role==="member"&&<button className="qa-btn" onClick={()=>setShowConfig(true)} style={{width:"100%",padding:"7px 0",borderRadius:9,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:13,color:"var(--color-text-secondary)",marginBottom:8,display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>
           {sessionStorage.getItem(SESSION_TOKEN_KEY)?<><span style={{color:"var(--color-text-success)"}}>●</span> Settings</>:<><span style={{color:"var(--color-text-warning)"}}>●</span> Settings</>}
         </button>}
-        {user.role==="admin"&&<button onClick={()=>setShowChangePwd(true)} style={{width:"100%",padding:"7px 0",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:13,color:"var(--color-text-secondary)",marginBottom:8}}>🔒 Change Password</button>}
-        <button onClick={handleLogout} style={{width:"100%",padding:"8px 0",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:13,color:"var(--color-text-secondary)"}}>Sign out</button>
+        {user.role==="admin"&&<button className="qa-btn" onClick={()=>setShowChangePwd(true)} style={{width:"100%",padding:"7px 0",borderRadius:9,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:13,color:"var(--color-text-secondary)",marginBottom:8}}>🔒 Change Password</button>}
+        <button className="qa-btn" onClick={handleLogout} style={{width:"100%",padding:"8px 0",borderRadius:9,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:13,color:"var(--color-text-secondary)"}}>Sign out</button>
       </div>
     </div>
-    <div style={{flex:1,padding:28,overflow:"auto"}}>
+    <div style={{flex:1,padding:28,overflow:"auto",minHeight:"100vh"}}>
       {user.role==="admin"&&page==="dashboard"&&<DashboardPage/>}
       {user.role==="admin"&&page==="members"&&<MembersPage/>}
       {user.role==="admin"&&page==="projects"&&<ProjectsPage/>}
