@@ -499,12 +499,36 @@ function NotifBell({userId}) {
 function renderMd(text){
   const lines=text.split("\n");
   const out=[];let i=0;
+  const isTableRow=l=>/^\|.+\|/.test(l.trim());
+  const isTableSep=l=>/^\|[-|\s:]+\|/.test(l.trim());
   while(i<lines.length){
     const l=lines[i];
-    // heading
+    // === SECTION DIVIDER === (bilingual gap output section headers)
+    if(/^===\s*.+\s*===$/.test(l.trim())){
+      const label=l.trim().replace(/^===\s*/,"").replace(/\s*===$/,"");
+      const isArabic=/[؀-ۿ]/.test(label);
+      out.push(<div key={i} style={{marginTop:24,marginBottom:10,padding:"10px 16px",borderRadius:10,background:"var(--color-background-info)",border:"1px solid rgba(29,78,216,0.18)",fontWeight:700,fontSize:14,color:"var(--color-text-info)",textAlign:isArabic?"right":"left",direction:isArabic?"rtl":"ltr"}}>{label}</div>);
+      i++;continue;
+    }
+    // markdown headings
     if(/^###\s/.test(l)){out.push(<div key={i} style={{fontWeight:700,fontSize:13,marginTop:10,marginBottom:2}}>{l.replace(/^###\s/,"")}</div>);i++;continue;}
     if(/^##\s/.test(l)){out.push(<div key={i} style={{fontWeight:700,fontSize:14,marginTop:12,marginBottom:3}}>{l.replace(/^##\s/,"")}</div>);i++;continue;}
     if(/^#\s/.test(l)){out.push(<div key={i} style={{fontWeight:700,fontSize:15,marginTop:14,marginBottom:4}}>{l.replace(/^#\s/,"")}</div>);i++;continue;}
+    // table
+    if(isTableRow(l)){
+      const rows=[];
+      while(i<lines.length&&isTableRow(lines[i])){rows.push(lines[i]);i++;}
+      const [headerRow,...bodyRows]=rows.filter(r=>!isTableSep(r));
+      const headers=(headerRow||"").split("|").map(h=>h.trim()).filter(Boolean);
+      const dataRows=bodyRows.map(r=>r.split("|").map(c=>c.trim()).filter(Boolean));
+      const isRtl=/[؀-ۿ]/.test(headerRow||"");
+      out.push(<div key={i} style={{overflowX:"auto",marginBottom:10,direction:isRtl?"rtl":"ltr"}}>
+        <table style={{borderCollapse:"collapse",fontSize:13,width:"100%"}}>
+          <thead><tr>{headers.map((h,j)=><th key={j} style={{padding:"7px 12px",background:"var(--color-background-info)",border:"1px solid var(--color-border-tertiary)",fontWeight:600,textAlign:isRtl?"right":"left",color:"var(--color-text-info)"}}>{h}</th>)}</tr></thead>
+          <tbody>{dataRows.map((row,ri)=><tr key={ri} style={{background:ri%2===0?"var(--color-background-primary)":"var(--color-background-secondary)"}}>{row.map((cell,ci)=><td key={ci} style={{padding:"6px 12px",border:"1px solid var(--color-border-tertiary)",textAlign:isRtl?"right":"left"}}>{inlineMd(cell)}</td>)}</tr>)}</tbody>
+        </table></div>);
+      continue;
+    }
     // bullet list
     if(/^[-*]\s/.test(l)){
       const items=[];
@@ -519,12 +543,18 @@ function renderMd(text){
       out.push(<ol key={i} style={{margin:"4px 0 4px 18px",padding:0}}>{items.map((it,j)=><li key={j} style={{marginBottom:2}}>{inlineMd(it)}</li>)}</ol>);
       continue;
     }
-    // horizontal rule
+    // horizontal rule (dashes only, not === dividers)
     if(/^---+$/.test(l.trim())){out.push(<hr key={i} style={{border:"none",borderTop:"1px solid var(--color-border-tertiary)",margin:"8px 0"}}/>);i++;continue;}
     // blank line
     if(l.trim()===""){out.push(<div key={i} style={{height:6}}/>);i++;continue;}
-    // paragraph
-    out.push(<div key={i} style={{marginBottom:2}}>{inlineMd(l)}</div>);i++;
+    // ALL-CAPS section label (e.g. "REAL GAPS FOUND:", "STORY SUMMARY:") — treat as bold header
+    if(/^[A-Z؀-ۿ][A-Z؀-ۿ\s]+:$/.test(l.trim())||/^[A-Z][A-Z\s]+:$/.test(l.trim())){
+      const isArabic=/[؀-ۿ]/.test(l);
+      out.push(<div key={i} style={{fontWeight:700,fontSize:13,marginTop:14,marginBottom:4,color:"var(--color-text-primary)",textAlign:isArabic?"right":"left",direction:isArabic?"rtl":"ltr"}}>{l.trim()}</div>);i++;continue;
+    }
+    // paragraph — detect Arabic lines and align right
+    const isArabicLine=/[؀-ۿ]/.test(l);
+    out.push(<div key={i} style={{marginBottom:2,textAlign:isArabicLine?"right":"left",direction:isArabicLine?"rtl":"ltr"}}>{inlineMd(l)}</div>);i++;
   }
   return out;
 }
@@ -1419,98 +1449,181 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
   };
 
   const doGap=async()=>{
+    // ── STEP 1: JS-side content guard — stop before calling AI on empty/placeholder content ──
+    if(!sdata?.sim){
+      const desc=(sdata?.description||"").trim();
+      const isPlaceholder=desc.length<100||/performs a core action|receives value|valid input works|generic placeholder/i.test(desc);
+      if(!desc||isPlaceholder){
+        alert("⚠️ The story content appears to be empty or a placeholder.\n\nDescription length: "+desc.length+" characters.\n\nPlease verify that the Jira issue has a real description and acceptance criteria before running gap analysis.");
+        return;
+      }
+    }
     setLoading(true); setLmsg("Running GAP analysis…");
+
+    // ── Build context from fetched data ──
+    const desc=sdata?.description||"";
+    const descLen=desc.length;
     const commentsCtx=(sdata&&!sdata.sim&&sdata.comments?.length>0)
-      ?`\n\nSTORY COMMENTS (${sdata.comments.length} comment${sdata.comments.length===1?"":"s"} — may contain BA clarifications, decisions, or added requirements):\n`+
+      ?`\n\nSTORY COMMENTS (${sdata.comments.length} comment${sdata.comments.length===1?"":"s"}):\n`+
         sdata.comments.map((c,i)=>`Comment ${i+1} [${c.author}]:\n${c.text.slice(0,800)}`).join("\n\n")
       :"";
-    const ctx=sdata&&!sdata.sim?`STORY TITLE: ${sdata.summary}\n\nSTORY CONTENT:\n${sdata.description?.slice(0,8000)||"(no description available)"}${commentsCtx}`:`STORY TITLE: Simulated ${platform} feature for project ${proj.jiraProjKey}\n\nSTORY CONTENT:\nAs a user I want to perform a core action so that I gain value. Acceptance Criteria: 1. The feature works on valid input. 2. Errors are shown for invalid input. 3. The UI is responsive.`;
-    const storyMeta=sdata&&!sdata.sim?`Story ID: ${sid} | Platform: ${platform} | Type: ${sdata.type||"N/A"} | Priority: ${sdata.priority||"N/A"} | Status: ${sdata.status||"N/A"}${(sdata.labels||[]).length>0?" | Labels: "+sdata.labels.join(", "):""}`:
-      `Story ID: ${sid} | Platform: ${platform}`;
-    const GAP_PROMPT=`You are a senior QA analyst specializing in requirements gap analysis. Perform a thorough, accurate gap analysis of the user story below.
+    const storyMeta=sdata&&!sdata.sim
+      ?`Story ID: ${sid} | Platform: ${platform} | Type: ${sdata.type||"N/A"} | Priority: ${sdata.priority||"N/A"} | Status: ${sdata.status||"N/A"}${(sdata.labels||[]).length>0?" | Labels: "+sdata.labels.join(", "):""}`
+      :`Story ID: ${sid} | Platform: ${platform} | [AI simulation — no real Jira content]`;
+    const storyBlock=sdata&&!sdata.sim
+      ?`STORY TITLE: ${sdata.summary}\nDESCRIPTION (${descLen} characters):\n${desc.slice(0,8000)}${commentsCtx}`
+      :`STORY TITLE: Simulated ${platform} feature\nDESCRIPTION:\nAs a user I want to perform a core action so that I gain value.\nAcceptance Criteria:\n1. The feature works on valid input.\n2. Errors are shown for invalid input.\n3. The UI is responsive.`;
 
-DOMAIN AWARENESS:
-Identify domain-specific context from the story (authentication systems, payment flows, government services, industry regulations, country-specific rules, etc.) and apply relevant domain knowledge to your analysis.
-Example: If the story involves Nafath or Saudi government authentication, apply known domain rules such as National ID format (IDs starting with 1 = Saudi citizens, IDs starting with 2 = residents), token handling standards, and government service compliance expectations. Apply similar awareness for any other domain you detect.
+    const GAP_PROMPT=`You are a QA Gap Analysis Agent specialized in analyzing user stories that have already been fetched from Jira by the application.
 
-ANALYSIS CHECKLIST — systematically examine each category:
-1. FUNCTIONAL: Missing user flows, undefined success/failure behaviors, unspecified system responses
-2. DATA VALIDATION: Missing field constraints (format, length, required vs optional, allowed values)
-3. ERROR HANDLING: What happens on failure? Are error messages specified? Recovery paths defined?
-4. ROLES AND PERMISSIONS: Is access control defined for every user role who interacts with this feature?
-5. EDGE CASES: Boundary conditions, empty states, concurrent actions, session expiry mid-flow, duplicates
-6. INTEGRATION: External systems, APIs, notifications, emails, or third-party services — are their behaviors defined?
-7. NON-FUNCTIONAL: Performance thresholds, accessibility, data retention — if relevant and unaddressed
-8. SECURITY: Token handling, session management, redirect URI validation, authorization bypasses, sensitive data exposure, authentication and authorization flows. If the story involves SSO or OAuth, flag any gaps in security parameters in the redirect URL — specifically state, nonce, and code_challenge (PKCE).
-9. UI AND UX: Loading states, empty states, confirmation dialogs, navigation after action, responsive behavior
-10. NAVIGATION AND BROWSER BEHAVIOR: Back button behavior, page refresh, direct URL access, deep linking, browser history manipulation
-11. DEVICE AND ENVIRONMENT: Device-specific behavior — for example, if the flow depends on a mobile app (such as Nafath), what happens when the user is on desktop and does not have the app installed? Consider OS differences, app availability, and fallback behavior.
-
-REQUIRED REASONING PROCESS — follow these steps in order:
-
-STEP 1 - EXTRACT ALL DEFINED BEHAVIORS: Before looking for any gaps, read the entire story and list every behavior, rule, constraint, and outcome that is explicitly stated — including every acceptance criterion. This is your ground truth of what IS defined. You will use this list in Step 2 to prevent false positives.
-
-STEP 2 - IDENTIFY CANDIDATE GAPS: Using the analysis checklist, identify behaviors or requirements that are genuinely absent from the ground truth list built in Step 1. Before flagging any candidate gap, ask: "Is this behavior actually stated anywhere in the story, even in different wording or a different section?" If yes — do NOT flag it. Flagging a behavior that is already defined in any AC is a false positive and an analysis defect.
-
-STEP 3 - COMMENT AUDIT (mandatory): For EACH candidate gap from Step 2, read every comment one by one and ask:
-  - Does any comment explicitly answer or resolve this gap? → DISCARD the gap entirely.
-  - Does any comment partially address it? → KEEP the gap but update its description to reflect only what remains unresolved.
-  - Does any comment contradict or reframe my assumption about this gap? → CORRECT or DISCARD accordingly.
-  Only gaps that survive this audit make it into the final output. Shipping a gap that is already defined in an AC or resolved in a comment is an analysis defect.
-
-STEP 4 - OUTPUT: Write the final report using only the gaps that passed Steps 2 and 3.
-
-STRICT RULES:
-- Every gap MUST reference a SPECIFIC AC number, section name, or phrase from the actual story text or comments.
-- Do NOT raise generic or speculative gaps. Only flag what is genuinely missing or ambiguous.
-- A behavior defined anywhere in the story — even partially, even implicitly — is NOT a gap. Read every AC carefully before flagging.
-- A gap answered anywhere in the story OR in any comment is NOT a gap — discard it.
-- Only list gaps that would prevent a QA engineer from writing or executing a reliable test case.
-- Do NOT drop a real gap unless it is explicitly resolved. Completeness is required — omitting a real gap is a defect.
+The story content below was retrieved directly from Jira. Your task is to analyze it following the 5-step process below.
 
 ${storyMeta}
-${ctx}
+${storyBlock}
 
-IMPORTANT: Write in plain text only. No markdown symbols, no **, no ##, no ---, no backticks, no > quotes. Use CAPS for section titles. Use numbered lists.
+== STEP 1: ACKNOWLEDGE WHAT YOU RECEIVED ==
+Start your response with this header block (fill in the actual values):
 
-Output this EXACT structure:
+STORY FETCHED: ${sid}
+TITLE: [the actual story title from the content above]
+DESCRIPTION LENGTH: ${descLen} characters
+LANGUAGE DETECTED: [Arabic / English / Mixed — based on the actual description text above]
+
+== STEP 2: CONTENT VALIDATION ==
+Before analyzing, verify ALL of the following:
+- The description is NOT empty and is longer than 100 characters
+- The story references a real actor with a specific role (not just "a user" with no context)
+- There is at least one acceptance criterion
+- The description references real domain concepts (not generic placeholders like "performs a core action", "valid input works", "receives value")
+
+If ANY check fails, respond with:
+"CONTENT VALIDATION FAILED: [which check failed and why]. Gap analysis cannot proceed."
+Then STOP. Do not produce a gap analysis.
+
+Only continue to Steps 3-5 if ALL checks pass.
+
+== STEP 3: LANGUAGE HANDLING ==
+Read the story content in its ORIGINAL language — never skip or ignore Arabic text.
+- Arabic only → translate to English for analysis, then output BOTH Arabic and English versions
+- English only → output BOTH English and Arabic versions (translate the Arabic output yourself)
+- Mixed → read as-is, output BOTH English and Arabic versions
+
+CRITICAL: Every field — title, description, acceptance criteria, comments — must be fully read, regardless of whether it is in Arabic or English.
+
+== STEP 4: GAP ANALYSIS ==
+Analyze only the actual story content above. Do NOT fabricate or invent gaps.
+Every gap you report MUST quote or reference a specific phrase, section, or AC number from the story.
+
+Reasoning process (mandatory — do not skip):
+A. Extract every defined behavior, rule, and AC from the story. This is your ground truth.
+B. For each potential gap, ask: "Is this behavior actually stated anywhere?" → If yes, discard it.
+C. For each surviving gap, read every comment: does any comment resolve it? → If yes, discard. If partially, narrow the gap.
+D. Output only gaps that survived B and C.
+
+Analysis checklist (examine each category):
+1. FUNCTIONAL: Missing user flows, undefined success/failure behaviors
+2. DATA VALIDATION: Missing field constraints, formats, lengths, required vs optional
+3. ERROR HANDLING: Error messages, recovery paths, failure scenarios
+4. ROLES AND PERMISSIONS: Access control for each user role mentioned
+5. EDGE CASES: Boundary conditions, empty states, concurrent actions, session expiry
+6. INTEGRATION: External systems, APIs, notifications — behaviors defined?
+7. SECURITY: Token handling, session management, authorization bypasses, OAuth/PKCE gaps
+8. UI AND UX: Loading states, empty states, confirmation dialogs, responsive behavior
+9. NAVIGATION: Back button, refresh, direct URL, browser history
+10. DEVICE AND ENVIRONMENT: Mobile app dependency, OS differences, fallback behavior
+11. DOMAIN-SPECIFIC: Apply domain knowledge (Saudi gov, Nafath, payment flows, etc.) to detect gaps the story author assumed but did not write
+
+== STEP 5: PRODUCE OUTPUT IN BOTH LANGUAGES ==
+Write in plain text only. No **, no ##, no ---, no backticks, no > quotes. Use CAPS for section titles. Use numbered lists. Keep the === dividers exactly as shown.
+
+=== ENGLISH VERSION ===
+
+STORY FETCHED: ${sid}
+TITLE: [actual title]
+DESCRIPTION LENGTH: ${descLen} characters
+LANGUAGE DETECTED: [detected language]
 
 STORY SUMMARY:
-[2-3 sentence summary of what this story does, based strictly on what is written]
+[2-3 sentences describing what this story actually does, based strictly on the content above]
 
 COMMENTS AUDIT:
-[For each gap you considered but discarded because a comment resolved it, write one line:]
-DISCARDED: [Gap title] — resolved by Comment [number] by [author]: [one sentence summarising what the comment clarified]
-[If no gaps were discarded, write: No gaps were invalidated by comments.]
+[For each gap discarded because a comment resolved it:]
+DISCARDED: [Gap title] — resolved by Comment [N] by [author]: [what was clarified]
+[If none discarded: No gaps were invalidated by comments.]
 
 REAL GAPS FOUND:
-GAP [number]: [Short descriptive title]
-Category: [Functional | Data Validation | Error Handling | Roles and Permissions | Edge Cases | Integration | Non-Functional | Security | UI and UX | Navigation and Browser Behavior | Device and Environment]
-Section reference: [Exact AC number, section name, or phrase from the story]
-What is missing: [Specific description of what is undefined, ambiguous, or incomplete]
-Impact on testing: [Why QA cannot write or execute a reliable test without this being clarified]
+GAP [N]: [Gap Title]
+Category: [Functional / Data Validation / Error Handling / Roles and Permissions / Edge Cases / Integration / Security / UI and UX / Navigation and Browser Behavior / Device and Environment]
+Section reference: [Exact quote or AC number from the story]
+What is missing: [Specific description]
+Impact on testing: [Concrete testing impact]
 Risk: [HIGH / MEDIUM / LOW]
-Risk justification: [One sentence explaining why this specific risk level was assigned]
-Blocked test cases: Estimate: [number] — [one-line rationale explaining which test scenarios are blocked and why]
+Risk justification: [One sentence]
+Blocked test cases: Estimate: [N] — [rationale]
 
-[If no real gaps found, write: No gaps found — story is complete for QA.]
+[If no gaps: No gaps found — story is complete for QA.]
 
 QUESTIONS FOR THE BA:
-[For each gap above, one direct question to resolve it — same numbering:]
-Q[number]: [Specific question the QA team should ask the BA to resolve GAP [number]]
+Q[N]: [Direct question to resolve GAP [N]]
 
 ACs THAT NEED CLARIFICATION:
-[List each AC that is ambiguous or incomplete:]
-AC[number]: [What specifically is unclear or missing in this AC]
-
-[If all ACs are clearly defined, write: All ACs are clearly defined.]
+| AC | What Is Unclear |
+|----|-----------------|
+[One row per ambiguous AC. If all clear: All ACs are clearly defined.]
 
 OVERALL STORY READINESS FOR QA:
-[One of: Ready / Needs minor clarification / Needs major clarification / Not ready]
-[One sentence explaining the main reason]`;
+[Ready / Needs minor clarification / Needs major clarification / Not ready]
+[One sentence explaining the main reason]
+
+=== النسخة العربية ===
+
+القصة المُجلَبة: ${sid}
+العنوان: [العنوان الفعلي]
+طول الوصف: ${descLen} حرفاً
+اللغة المكتشفة: [اللغة المكتشفة]
+
+ملخص القصة:
+[2-3 جمل تصف ما تفعله هذه القصة بالفعل، استناداً فقط إلى المحتوى أعلاه]
+
+مراجعة التعليقات:
+[لكل ثغرة تم استبعادها لأن تعليقاً حلّها:]
+مستبعد: [عنوان الثغرة] — حُسم في تعليق [رقم] بواسطة [الكاتب]: [ما تم توضيحه]
+[إذا لم تُستبعد أي ثغرات: لم تُلغَ أي ثغرات بسبب التعليقات.]
+
+الثغرات الحقيقية المكتشفة:
+الثغرة [رقم]: [عنوان الثغرة]
+الفئة: [وظيفية / التحقق من البيانات / معالجة الأخطاء / الأدوار والصلاحيات / الحالات الحدية / التكامل / الأمن / واجهة المستخدم / التنقل / البيئة والأجهزة]
+مرجع القسم: [اقتباس أو رقم معيار القبول من القصة]
+ما هو غائب: [وصف تفصيلي]
+الأثر على الاختبار: [التأثير الملموس]
+درجة الخطر: [مرتفعة / متوسطة / منخفضة]
+تبرير درجة الخطر: [جملة واحدة]
+حالات الاختبار المحجوبة: تقدير: [العدد] — [المبرر]
+
+[إذا لم تكن هناك ثغرات: لا ثغرات مكتشفة — القصة مكتملة للاختبار.]
+
+أسئلة لمحلل الأعمال:
+س[رقم]: [سؤال مباشر لحل الثغرة رقم [N]]
+
+معايير القبول التي تحتاج توضيح:
+| معيار القبول | ما هو غير واضح |
+|---------|----------------|
+[صف لكل معيار غامض. إذا كانت جميعها واضحة: جميع معايير القبول محددة بوضوح.]
+
+جاهزية القصة للاختبار:
+[جاهزة / تحتاج توضيحات بسيطة / تحتاج توضيحات جوهرية / غير جاهزة]
+[جملة واحدة تشرح السبب الرئيسي]`;
+
     try {
-      const r=await callAI([{role:"user",content:GAP_PROMPT}],SYS,5000,"");
-      setGapText(r.replace(/\*{1,3}([^*]+)\*{1,3}/g,"$1").replace(/^#{1,6}\s*/gm,"").replace(/^[-─]{3,}\s*$/gm,"").replace(/^>\s*/gm,"").replace(/`([^`]*)`/g,"$1").trim());
+      const r=await callAI([{role:"user",content:GAP_PROMPT}],SYS,8000,"");
+      // Clean up markdown formatting but preserve === section dividers and Arabic text
+      setGapText(r
+        .replace(/\*{1,3}([^*]+)\*{1,3}/g,"$1")
+        .replace(/^#{1,6}\s*/gm,"")
+        .replace(/^[-─]{3,}(?!\|)(?!=)\s*$/gm,"")
+        .replace(/^>\s*/gm,"")
+        .replace(/`([^`]*)`/g,"$1")
+        .trim());
       setPhase("gap");
     } catch(e){alert(e.message);}
     setLoading(false);
