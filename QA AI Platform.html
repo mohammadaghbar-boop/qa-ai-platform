@@ -2311,12 +2311,10 @@ OVERALL STORY READINESS FOR QA:
           <div style={card}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
               <div style={{display:"flex",gap:8,alignItems:"center"}}><Tag c="blue">{sid}</Tag><span style={{fontWeight:500}}>GAP Analysis</span></div>
-              <button onClick={doGap} style={{...ghostBtn,fontSize:12,padding:"4px 10px"}}>🔄 Regenerate</button>
+              <button className="qa-btn" onClick={doGap} style={{...ghostBtn,fontSize:12,padding:"5px 12px"}}>🔄 Regenerate</button>
             </div>
             <div style={{fontSize:14,lineHeight:1.85}}>
-              {gapText.split("\n").map((line,i)=>{
-                const isTitle=/^[A-Z][A-Z\s&]+:/.test(line.trim());
-                return <div key={i} style={{whiteSpace:"pre-wrap",fontWeight:isTitle?700:400,marginTop:isTitle?14:0,color:isTitle?"var(--color-text-primary)":"inherit"}}>{line||" "}</div>;
+              {renderMd(gapText)}
               })}
             </div>
           </div>
