@@ -219,7 +219,7 @@ setInterval(() => {
 }, 30 * 60 * 1000);
 
 /* ── Claude AI (via Claude CLI — no API key required) ───────────────────── */
-function callClaude(messages, system) {
+function callClaude(messages, system, maxTokens=4000) {
   return new Promise((resolve, reject) => {
     const conversation = messages.map(m =>
       (m.role === 'user' ? 'Human' : 'Assistant') + ': ' + m.content
@@ -228,8 +228,8 @@ function callClaude(messages, system) {
     const isWin = process.platform === 'win32';
     const claudeCmd = isWin ? 'cmd' : 'claude';
     const claudeArgs = isWin
-      ? ['/c', process.env.APPDATA + '\\npm\\claude.cmd', '-p', '--output-format', 'text', '--strict-mcp-config', '--mcp-config', EMPTY_MCP]
-      : ['-p', '--output-format', 'text', '--strict-mcp-config', '--mcp-config', EMPTY_MCP];
+      ? ['/c', process.env.APPDATA + '\\npm\\claude.cmd', '-p', '--output-format', 'text', '--effort', 'low', '--strict-mcp-config', '--mcp-config', EMPTY_MCP]
+      : ['-p', '--output-format', 'text', '--effort', 'low', '--strict-mcp-config', '--mcp-config', EMPTY_MCP];
     const proc = spawn(claudeCmd, claudeArgs, { shell: false, env: process.env });
     let output = '', error = '';
     proc.stdin.write(fullPrompt);
@@ -244,8 +244,8 @@ function callClaude(messages, system) {
           proc.kill('SIGTERM');
         }
       } catch {}
-      reject(new Error('AI request timed out after 5 minutes. Try selecting fewer test cases at once.'));
-    }, 300000);
+      reject(new Error('AI request timed out after 10 minutes. Try selecting fewer test cases at once.'));
+    }, 600000);
     proc.on('close', code => {
       clearTimeout(timer);
       if (code === 0 && output.trim()) resolve(output.trim());
@@ -875,6 +875,35 @@ const server = http.createServer((req, res) => {
       return;
     }
 
+    /* ── /api/members/:id (PUT — admin edits member) ── */
+    if (req.method === 'PUT' && req.url.startsWith('/api/members/')) {
+      try {
+        const adminToken = req.headers['x-admin-token'];
+        if (!adminToken || !adminSessions.has(adminToken)) {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Unauthorized' })); return;
+        }
+        const memberId = req.url.split('/api/members/')[1];
+        const { name, email, role, password } = JSON.parse(body);
+        if (!serverDB.members) serverDB.members = [];
+        const idx = serverDB.members.findIndex(m => m.id === memberId);
+        if (idx === -1) { res.writeHead(404, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Member not found' })); return; }
+        serverDB.members[idx] = { ...serverDB.members[idx], name, email, role };
+        if (password && password.length >= 8) {
+          serverDB.members[idx].passwordHash = hashPasswordSecure(password);
+        }
+        saveServerDB(serverDB);
+        const { passwordHash: _, ...safe } = serverDB.members[idx];
+        console.log('[Member] Updated:', memberId);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(safe));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Invalid request' }));
+      }
+      return;
+    }
+
     /* ── /api/members/:id (DELETE — admin removes member) ── */
     if (req.method === 'DELETE' && req.url.startsWith('/api/members/')) {
       try {
@@ -1000,9 +1029,9 @@ const server = http.createServer((req, res) => {
       const session = getSession(req);
       if (!session) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Authentication required' })); return; }
       try {
-        const { messages, system } = JSON.parse(body);
+        const { messages, system, max } = JSON.parse(body);
         console.log('[AI]   Request received');
-        const text = await callClaude(messages, system);
+        const text = await callClaude(messages, system, max||4000);
         console.log('[AI]   Done');
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ text }));
