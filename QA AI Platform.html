@@ -13,31 +13,117 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js" crossorigin="anonymous"></script>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f5f0; color: #1a1a18; min-height: 100vh; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', sans-serif;
+    background: #f1f5f9;
+    color: #1e293b;
+    min-height: 100vh;
+  }
   :root {
     --color-background-primary: #ffffff;
-    --color-background-secondary: #f9f9f7;
-    --color-background-tertiary: #f1efe8;
-    --color-background-info: #e6f1fb;
-    --color-background-success: #eaf3de;
-    --color-background-warning: #faeeda;
-    --color-background-danger: #fcebeb;
-    --color-text-primary: #1a1a18;
-    --color-text-secondary: #5f5e5a;
-    --color-text-tertiary: #888780;
-    --color-text-info: #185fa5;
-    --color-text-success: #3b6d11;
-    --color-text-warning: #854f0b;
-    --color-text-danger: #a32d2d;
-    --color-border-tertiary: rgba(0,0,0,0.12);
-    --color-border-secondary: rgba(0,0,0,0.2);
+    --color-background-secondary: #f8fafc;
+    --color-background-tertiary: #f1f5f9;
+    --color-background-info: #eff6ff;
+    --color-background-success: #f0fdf4;
+    --color-background-warning: #fffbeb;
+    --color-background-danger: #fef2f2;
+    --color-text-primary: #1e293b;
+    --color-text-secondary: #64748b;
+    --color-text-tertiary: #94a3b8;
+    --color-text-info: #1d4ed8;
+    --color-text-success: #166534;
+    --color-text-warning: #92400e;
+    --color-text-danger: #991b1b;
+    --color-border-tertiary: rgba(15,23,42,0.08);
+    --color-border-secondary: rgba(15,23,42,0.16);
+    --shadow-sm: 0 1px 3px rgba(15,23,42,0.06), 0 1px 2px rgba(15,23,42,0.04);
+    --shadow-md: 0 4px 14px rgba(15,23,42,0.09), 0 1px 4px rgba(15,23,42,0.05);
+    --shadow-lg: 0 12px 40px rgba(15,23,42,0.13), 0 2px 8px rgba(15,23,42,0.06);
+    --accent: #4f46e5;
+    --accent-hover: #4338ca;
     --font-mono: 'Courier New', monospace;
   }
   input, select, textarea, button { font-family: inherit; }
-  input:focus, select:focus, textarea:focus { outline: 2px solid var(--color-text-info); outline-offset: 1px; }
-  * { scrollbar-width: thin; scrollbar-color: #ccc transparent; }
-  @keyframes qa-spin { to { transform: rotate(360deg); } }
-  @keyframes qa-pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.5;transform:scale(1.15)} }
+  input:focus, select:focus, textarea:focus {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+    border-color: var(--accent) !important;
+  }
+  * { scrollbar-width: thin; scrollbar-color: #cbd5e1 transparent; }
+
+  /* ── Keyframes ─────────────────────────────────────── */
+  @keyframes qa-spin    { to { transform: rotate(360deg); } }
+  @keyframes qa-pulse   { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.5;transform:scale(1.15)} }
+  @keyframes qa-fade-up {
+    from { opacity: 0; transform: translateY(10px); }
+    to   { opacity: 1; transform: translateY(0);    }
+  }
+  @keyframes qa-fade-in {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+  }
+  @keyframes qa-slide-in {
+    from { opacity: 0; transform: translateX(16px); }
+    to   { opacity: 1; transform: translateX(0);    }
+  }
+  @keyframes qa-shimmer {
+    0%   { background-position: -600px 0; }
+    100% { background-position:  600px 0; }
+  }
+
+  /* ── Button micro-interactions ─────────────────────── */
+  .qa-btn {
+    transition: transform 0.13s ease, box-shadow 0.13s ease, filter 0.12s ease, opacity 0.13s ease !important;
+    position: relative;
+    overflow: hidden;
+  }
+  .qa-btn:hover:not(:disabled) {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 14px rgba(0,0,0,0.18);
+    filter: brightness(1.06);
+  }
+  .qa-btn:active:not(:disabled) {
+    transform: translateY(0) scale(0.97);
+    box-shadow: none;
+    filter: brightness(0.97);
+  }
+
+  /* ── Card hover lift ───────────────────────────────── */
+  .qa-card-hover {
+    transition: box-shadow 0.2s ease, transform 0.2s ease !important;
+    cursor: pointer;
+  }
+  .qa-card-hover:hover {
+    box-shadow: 0 8px 28px rgba(15,23,42,0.13) !important;
+    transform: translateY(-2px);
+  }
+
+  /* ── Skeleton shimmer ──────────────────────────────── */
+  .qa-skeleton {
+    background: linear-gradient(90deg, #f1f5f9 25%, #e2e8f0 50%, #f1f5f9 75%);
+    background-size: 1200px 100%;
+    animation: qa-shimmer 1.6s infinite linear;
+    border-radius: 6px;
+  }
+
+  /* ── Phase entrance ────────────────────────────────── */
+  .qa-phase {
+    animation: qa-fade-up 0.27s ease both;
+  }
+
+  /* ── Input transitions ─────────────────────────────── */
+  input, select, textarea {
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  }
+  input:hover:not(:focus), select:hover:not(:focus), textarea:hover:not(:focus) {
+    border-color: rgba(15,23,42,0.28) !important;
+  }
+
+  /* ── Toast animation ───────────────────────────────── */
+  .qa-toast {
+    animation: qa-fade-up 0.22s ease both;
+  }
+
   @media print {
     body * { visibility: hidden; }
     #coverage-print-area, #coverage-print-area * { visibility: visible; }
@@ -264,43 +350,47 @@ function parseCSVUsers(text) {
 }
 
 /* ─── Styles ─────────────────────────────────────────────────────────────── */
-const card = { background:"var(--color-background-secondary)", border:"1px solid var(--color-border-tertiary)", borderRadius:12, padding:20, marginBottom:16 };
-const inp  = { width:"100%", padding:"8px 12px", borderRadius:8, border:"1px solid var(--color-border-secondary)", background:"var(--color-background-primary)", color:"var(--color-text-primary)", fontSize:14, boxSizing:"border-box" };
+const card = { background:"var(--color-background-primary)", border:"1px solid var(--color-border-tertiary)", borderRadius:14, padding:20, marginBottom:16, boxShadow:"var(--shadow-sm)", animation:"qa-fade-up 0.28s ease both" };
+const inp  = { width:"100%", padding:"9px 13px", borderRadius:10, border:"1px solid var(--color-border-secondary)", background:"var(--color-background-primary)", color:"var(--color-text-primary)", fontSize:14, boxSizing:"border-box" };
 const sel  = { ...inp };
 const ta   = { ...inp, resize:"vertical" };
 
 function Btn({v="primary",onClick,disabled,full,children}) {
-  const bg = v==="primary"?"var(--color-text-info)":v==="danger"?"var(--color-text-danger)":v==="success"?"var(--color-text-success)":"transparent";
+  const bg = v==="primary"?"var(--accent)":v==="danger"?"var(--color-text-danger)":v==="success"?"var(--color-text-success)":"transparent";
   const col = v==="ghost"?"var(--color-text-secondary)":"#fff";
   const bdr = v==="ghost"?"1px solid var(--color-border-secondary)":"none";
-  return <button disabled={disabled} onClick={onClick} style={{padding:"8px 18px",borderRadius:8,border:bdr,cursor:disabled?"not-allowed":"pointer",fontSize:14,fontWeight:500,display:"inline-flex",alignItems:"center",gap:6,width:full?"100%":"auto",justifyContent:full?"center":"flex-start",opacity:disabled?0.5:1,background:bg,color:col}}>{children}</button>;
+  return <button className="qa-btn" disabled={disabled} onClick={onClick} style={{padding:"9px 20px",borderRadius:10,border:bdr,cursor:disabled?"not-allowed":"pointer",fontSize:14,fontWeight:500,display:"inline-flex",alignItems:"center",gap:6,width:full?"100%":"auto",justifyContent:full?"center":"flex-start",opacity:disabled?0.5:1,background:bg,color:col,letterSpacing:"0.01em"}}>{children}</button>;
 }
 function Tag({c="blue",children}) {
   const bg = c==="blue"?"var(--color-background-info)":c==="green"?"var(--color-background-success)":c==="amber"?"var(--color-background-warning)":c==="red"?"var(--color-background-danger)":"var(--color-background-tertiary)";
   const tx = c==="blue"?"var(--color-text-info)":c==="green"?"var(--color-text-success)":c==="amber"?"var(--color-text-warning)":c==="red"?"var(--color-text-danger)":"var(--color-text-secondary)";
-  return <span style={{display:"inline-block",padding:"2px 9px",borderRadius:20,fontSize:12,fontWeight:500,background:bg,color:tx}}>{children}</span>;
+  const br = c==="blue"?"rgba(29,78,216,0.18)":c==="green"?"rgba(22,101,52,0.18)":c==="amber"?"rgba(146,64,14,0.18)":c==="red"?"rgba(153,27,27,0.18)":"var(--color-border-tertiary)";
+  return <span style={{display:"inline-block",padding:"3px 10px",borderRadius:20,fontSize:12,fontWeight:500,background:bg,color:tx,border:"1px solid "+br}}>{children}</span>;
 }
-const Lbl = ({children}) => <label style={{fontSize:13,fontWeight:500,color:"var(--color-text-secondary)",marginBottom:4,display:"block"}}>{children}</label>;
-const H1 = ({children}) => <div style={{fontSize:20,fontWeight:500,marginBottom:16}}>{children}</div>;
-const H2 = ({children}) => <div style={{fontSize:16,fontWeight:500,marginBottom:12}}>{children}</div>;
+const Lbl = ({children}) => <label style={{fontSize:13,fontWeight:500,color:"var(--color-text-secondary)",marginBottom:5,display:"block"}}>{children}</label>;
+const H1 = ({children}) => <div style={{fontSize:21,fontWeight:700,marginBottom:16,letterSpacing:"-0.01em"}}>{children}</div>;
+const H2 = ({children}) => <div style={{fontSize:15,fontWeight:600,marginBottom:12}}>{children}</div>;
 
 function Loader({msg,sub}) {
-  return <div style={{...card,textAlign:"center",padding:48}}>
-    <div style={{width:40,height:40,border:"4px solid var(--color-border-tertiary)",borderTop:"4px solid var(--color-text-info)",borderRadius:"50%",animation:"qa-spin .85s linear infinite",margin:"0 auto 20px"}}/>
-    <div style={{fontWeight:500,marginBottom:4}}>{msg||"Working…"}</div>
-    {sub&&<div style={{color:"var(--color-text-secondary)",fontSize:13}}>{sub}</div>}
+  return <div style={{...card,textAlign:"center",padding:"40px 32px"}}>
+    <div style={{width:44,height:44,border:"3px solid var(--color-border-tertiary)",borderTop:"3px solid var(--accent)",borderRadius:"50%",animation:"qa-spin .9s linear infinite",margin:"0 auto 18px"}}/>
+    <div style={{fontWeight:600,marginBottom:6,fontSize:15}}>{msg||"Working…"}</div>
+    {sub&&<div style={{color:"var(--color-text-secondary)",fontSize:13,marginBottom:20}}>{sub}</div>}
+    <div style={{marginTop:22,display:"flex",flexDirection:"column",gap:10,textAlign:"left",maxWidth:380,margin:"22px auto 0"}}>
+      {[88,65,76,45].map((w,i)=><div key={i} className="qa-skeleton" style={{height:11,width:w+"%",animationDelay:(i*0.18)+"s"}}/>)}
+    </div>
   </div>;
 }
 function Confirm({icon,title,desc,onYes,onNo,yesLabel="Yes",noLabel="No, skip",danger,noDanger}) {
-  return <div style={{...card,borderLeft:"3px solid var(--color-text-info)"}}>
+  return <div style={{...card,borderLeft:"3px solid var(--accent)"}}>
     <div style={{display:"flex",gap:14}}>
       {icon&&<div style={{fontSize:26,lineHeight:1,paddingTop:2}}>{icon}</div>}
       <div style={{flex:1}}>
-        <div style={{fontWeight:500,fontSize:15,marginBottom:desc?6:14}}>{title}</div>
-        {desc&&<div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:14,lineHeight:1.6}}>{desc}</div>}
+        <div style={{fontWeight:600,fontSize:15,marginBottom:desc?6:14}}>{title}</div>
+        {desc&&<div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:14,lineHeight:1.65}}>{desc}</div>}
         <div style={{display:"flex",gap:10}}>
           <Btn v={danger?"danger":"primary"} onClick={onYes}>{yesLabel}</Btn>
-          {onNo&&(noDanger?<Btn v="danger" onClick={onNo}>{noLabel}</Btn>:<button onClick={onNo} style={{padding:"8px 18px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:14,fontWeight:500,color:"var(--color-text-secondary)"}}>{noLabel}</button>)}
+          {onNo&&(noDanger?<Btn v="danger" onClick={onNo}>{noLabel}</Btn>:<button className="qa-btn" onClick={onNo} style={{padding:"9px 20px",borderRadius:10,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:14,fontWeight:500,color:"var(--color-text-secondary)"}}>{noLabel}</button>)}
         </div>
       </div>
     </div>
@@ -308,10 +398,11 @@ function Confirm({icon,title,desc,onYes,onNo,yesLabel="Yes",noLabel="No, skip",d
 }
 function Banner({icon,title,sub,color="success",children}) {
   const bgs={success:"var(--color-background-success)",danger:"var(--color-background-danger)",info:"var(--color-background-info)",warning:"var(--color-background-warning)"};
-  return <div style={{...card,background:bgs[color]}}>
+  const brd={success:"rgba(22,101,52,0.2)",danger:"rgba(153,27,27,0.2)",info:"rgba(29,78,216,0.2)",warning:"rgba(146,64,14,0.2)"};
+  return <div style={{...card,background:bgs[color],border:"1px solid "+brd[color]}}>
     <div style={{display:"flex",gap:12,alignItems:"flex-start"}}>
       {icon&&<div style={{fontSize:22}}>{icon}</div>}
-      <div style={{flex:1}}><div style={{fontWeight:500}}>{title}</div>{sub&&<div style={{fontSize:13,color:"var(--color-text-secondary)",marginTop:2}}>{sub}</div>}{children}</div>
+      <div style={{flex:1}}><div style={{fontWeight:600}}>{title}</div>{sub&&<div style={{fontSize:13,color:"var(--color-text-secondary)",marginTop:3,lineHeight:1.6}}>{sub}</div>}{children}</div>
     </div>
   </div>;
 }
@@ -327,23 +418,25 @@ function StepBar({steps,cur,onStepClick}) {
           onMouseEnter={()=>setHov(i)}
           onMouseLeave={()=>setHov(null)}
           title={clickable?"Go back to "+s:undefined}
-          style={{padding:"3px 10px",borderRadius:20,fontSize:12,fontWeight:500,display:"flex",alignItems:"center",gap:5,
+          style={{padding:"4px 11px",borderRadius:20,fontSize:12,fontWeight:500,display:"flex",alignItems:"center",gap:5,
             cursor:clickable?"pointer":"default",
-            opacity:isHov?0.75:1,
+            opacity:isHov?0.72:1,
             textDecoration:isHov?"underline":"none",
             background:done?"var(--color-background-success)":active?"var(--color-background-info)":"var(--color-background-tertiary)",
-            color:done?"var(--color-text-success)":active?"var(--color-text-info)":"var(--color-text-tertiary)",
-            transition:"opacity 0.15s"
+            color:done?"var(--color-text-success)":active?"var(--accent)":"var(--color-text-tertiary)",
+            border:active?"1px solid rgba(79,70,229,0.25)":done?"1px solid rgba(22,101,52,0.2)":"1px solid transparent",
+            boxShadow:active?"0 1px 6px rgba(79,70,229,0.15)":"none",
+            transition:"all 0.18s ease"
           }}
         >{done?"↩":i+1} {s}</div>
-        {i<steps.length-1&&<div style={{width:14,height:1,background:"var(--color-border-secondary)"}}/>}
+        {i<steps.length-1&&<div style={{width:12,height:1,background:"var(--color-border-secondary)",opacity:0.6}}/>}
       </div>;
     })}
   </div>;
 }
 function Tabs({tabs,active,onChange}) {
-  return <div style={{display:"flex",borderBottom:"1px solid var(--color-border-tertiary)",marginBottom:14}}>
-    {tabs.map(t=><button key={t.id} onClick={()=>onChange(t.id)} style={{padding:"8px 16px",border:"none",background:"transparent",cursor:"pointer",fontSize:13,fontWeight:active===t.id?500:400,borderBottom:`2px solid ${active===t.id?"var(--color-text-info)":"transparent"}`,color:active===t.id?"var(--color-text-info)":"var(--color-text-secondary)"}}>{t.label}</button>)}
+  return <div style={{display:"flex",borderBottom:"1px solid var(--color-border-tertiary)",marginBottom:14,gap:2}}>
+    {tabs.map(t=><button key={t.id} onClick={()=>onChange(t.id)} style={{padding:"9px 17px",border:"none",background:"transparent",cursor:"pointer",fontSize:13,fontWeight:active===t.id?600:400,borderBottom:`2px solid ${active===t.id?"var(--accent)":"transparent"}`,color:active===t.id?"var(--accent)":"var(--color-text-secondary)",transition:"color 0.15s ease, border-color 0.15s ease"}}>{t.label}</button>)}
   </div>;
 }
 function Terminal({lines}) {
@@ -410,25 +503,30 @@ function renderMd(text){
   const isTableSep=l=>/^\|[-|\s:]+\|/.test(l.trim());
   while(i<lines.length){
     const l=lines[i];
-    // heading
+    // === SECTION DIVIDER === (bilingual gap output section headers)
+    if(/^===\s*.+\s*===$/.test(l.trim())){
+      const label=l.trim().replace(/^===\s*/,"").replace(/\s*===$/,"");
+      const isArabic=/[؀-ۿ]/.test(label);
+      out.push(<div key={i} style={{marginTop:24,marginBottom:10,padding:"10px 16px",borderRadius:10,background:"var(--color-background-info)",border:"1px solid rgba(29,78,216,0.18)",fontWeight:700,fontSize:14,color:"var(--color-text-info)",textAlign:isArabic?"right":"left",direction:isArabic?"rtl":"ltr"}}>{label}</div>);
+      i++;continue;
+    }
+    // markdown headings
     if(/^###\s/.test(l)){out.push(<div key={i} style={{fontWeight:700,fontSize:13,marginTop:10,marginBottom:2}}>{l.replace(/^###\s/,"")}</div>);i++;continue;}
     if(/^##\s/.test(l)){out.push(<div key={i} style={{fontWeight:700,fontSize:14,marginTop:12,marginBottom:3}}>{l.replace(/^##\s/,"")}</div>);i++;continue;}
     if(/^#\s/.test(l)){out.push(<div key={i} style={{fontWeight:700,fontSize:15,marginTop:14,marginBottom:4}}>{l.replace(/^#\s/,"")}</div>);i++;continue;}
-    // markdown table
+    // table
     if(isTableRow(l)){
-      const tableLines=[];
-      while(i<lines.length&&(isTableRow(lines[i])||isTableSep(lines[i]))){tableLines.push(lines[i]);i++;}
-      const parseRow=r=>r.trim().replace(/^\||\|$/g,"").split("|").map(c=>c.trim());
-      const headerCells=parseRow(tableLines[0]);
-      const bodyRows=tableLines.filter((_,idx)=>idx>0&&!isTableSep(tableLines[idx]));
-      out.push(
-        <div key={i} style={{overflowX:"auto",marginBottom:8,marginTop:4}}>
-          <table style={{borderCollapse:"collapse",width:"100%",fontSize:13}}>
-            <thead><tr>{headerCells.map((h,j)=><th key={j} style={{padding:"6px 10px",textAlign:"left",background:"var(--color-background-tertiary)",border:"1px solid var(--color-border-secondary)",fontWeight:600,whiteSpace:"nowrap"}}>{inlineMd(h)}</th>)}</tr></thead>
-            <tbody>{bodyRows.map((row,ri)=><tr key={ri} style={{background:ri%2===0?"var(--color-background-primary)":"var(--color-background-secondary)"}}>{parseRow(row).map((cell,ci)=><td key={ci} style={{padding:"6px 10px",border:"1px solid var(--color-border-secondary)",verticalAlign:"top",lineHeight:1.5}}>{inlineMd(cell)}</td>)}</tr>)}</tbody>
-          </table>
-        </div>
-      );
+      const rows=[];
+      while(i<lines.length&&isTableRow(lines[i])){rows.push(lines[i]);i++;}
+      const [headerRow,...bodyRows]=rows.filter(r=>!isTableSep(r));
+      const headers=(headerRow||"").split("|").map(h=>h.trim()).filter(Boolean);
+      const dataRows=bodyRows.map(r=>r.split("|").map(c=>c.trim()).filter(Boolean));
+      const isRtl=/[؀-ۿ]/.test(headerRow||"");
+      out.push(<div key={i} style={{overflowX:"auto",marginBottom:10,direction:isRtl?"rtl":"ltr"}}>
+        <table style={{borderCollapse:"collapse",fontSize:13,width:"100%"}}>
+          <thead><tr>{headers.map((h,j)=><th key={j} style={{padding:"7px 12px",background:"var(--color-background-info)",border:"1px solid var(--color-border-tertiary)",fontWeight:600,textAlign:isRtl?"right":"left",color:"var(--color-text-info)"}}>{h}</th>)}</tr></thead>
+          <tbody>{dataRows.map((row,ri)=><tr key={ri} style={{background:ri%2===0?"var(--color-background-primary)":"var(--color-background-secondary)"}}>{row.map((cell,ci)=><td key={ci} style={{padding:"6px 12px",border:"1px solid var(--color-border-tertiary)",textAlign:isRtl?"right":"left"}}>{inlineMd(cell)}</td>)}</tr>)}</tbody>
+        </table></div>);
       continue;
     }
     // bullet list
@@ -445,12 +543,18 @@ function renderMd(text){
       out.push(<ol key={i} style={{margin:"4px 0 4px 18px",padding:0}}>{items.map((it,j)=><li key={j} style={{marginBottom:2}}>{inlineMd(it)}</li>)}</ol>);
       continue;
     }
-    // horizontal rule
+    // horizontal rule (dashes only, not === dividers)
     if(/^---+$/.test(l.trim())){out.push(<hr key={i} style={{border:"none",borderTop:"1px solid var(--color-border-tertiary)",margin:"8px 0"}}/>);i++;continue;}
     // blank line
     if(l.trim()===""){out.push(<div key={i} style={{height:6}}/>);i++;continue;}
-    // paragraph
-    out.push(<div key={i} style={{marginBottom:2}}>{inlineMd(l)}</div>);i++;
+    // ALL-CAPS section label (e.g. "REAL GAPS FOUND:", "STORY SUMMARY:") — treat as bold header
+    if(/^[A-Z؀-ۿ][A-Z؀-ۿ\s]+:$/.test(l.trim())||/^[A-Z][A-Z\s]+:$/.test(l.trim())){
+      const isArabic=/[؀-ۿ]/.test(l);
+      out.push(<div key={i} style={{fontWeight:700,fontSize:13,marginTop:14,marginBottom:4,color:"var(--color-text-primary)",textAlign:isArabic?"right":"left",direction:isArabic?"rtl":"ltr"}}>{l.trim()}</div>);i++;continue;
+    }
+    // paragraph — detect Arabic lines and align right
+    const isArabicLine=/[؀-ۿ]/.test(l);
+    out.push(<div key={i} style={{marginBottom:2,textAlign:isArabicLine?"right":"left",direction:isArabicLine?"rtl":"ltr"}}>{inlineMd(l)}</div>);i++;
   }
   return out;
 }
@@ -1108,7 +1212,7 @@ function Workspace({member,refreshSaved,restoreTarget,clearRestore,onActiveSid,o
   const memberProjects=DB.assignments.filter(x=>x.memberId===member.id).map(a=>DB.projects.find(x=>x.id===a.projectId)).filter(Boolean);
   const [selectedProjId,setSelectedProjId]=React.useState(memberProjects[0]?.id||"");
   const proj=memberProjects.find(x=>x.id===selectedProjId)||memberProjects[0]||null;
-const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.memberId===member.id); return ps.length>1?"project":"testType"; }); const [sid,setSid]=useState(""); const [sdata,setSdata]=useState(null);
+const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); const [sdata,setSdata]=useState(null);
   const [platform,setPlatform]=useState("web"); const [ctypes,setCtypes]=useState([]);
   const [readyFilter,setReadyFilter]=useState("all");
   const [gapText,setGapText]=useState(""); const [cases,setCases]=useState([]);
@@ -1193,13 +1297,12 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
       setResult(s.result||null);setExecLines(s.execLines||[]);
       setCoverageText(s.coverageText||"");setSessionBugs(s.sessionBugs||[]);
       setSelectedForScripts(s.selectedForScripts||[]);setAppUrl(s.appUrl||"");
-      if(s.perfForm)setPerfForm(s.perfForm);if(s.perfResult)setPerfResult(s.perfResult);
     }catch{}
   },[]);
   // Save workspace state on every change
   useEffect(()=>{
     if(phase==="input"||phase==="testType"){localStorage.removeItem(WS_SNAP);return;}
-    try{localStorage.setItem(WS_SNAP,JSON.stringify({phase,testKind,sid,sdata,platform,ctypes,gapText,cases,scripts,tab,result,execLines,coverageText,sessionBugs,selectedForScripts,appUrl,perfForm,perfResult}));}catch{}
+    try{localStorage.setItem(WS_SNAP,JSON.stringify({phase,testKind,sid,sdata,platform,ctypes,gapText,cases,scripts,tab,result,execLines,coverageText,sessionBugs,selectedForScripts,appUrl}));}catch{}
     // Also keep per-story cache up to date
     if(sid&&sdata)saveStoryToCache(sid,{phase,sdata,platform,ctypes,gapText,cases,scripts,result,sessionBugs,coverageText,appUrl});
   },[phase,sid,sdata,platform,ctypes,gapText,cases,scripts,tab,result,execLines,coverageText,sessionBugs,selectedForScripts,appUrl]);
@@ -1260,13 +1363,13 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
   };
   const SwitchProjModal=switchTarget&&(()=>{
     const target=memberProjects.find(p=>p.id===switchTarget);
-    return <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",zIndex:2000,display:"flex",alignItems:"center",justifyContent:"center"}} onClick={()=>setSwitchTarget(null)}>
-      <div style={{background:"var(--color-background-primary)",borderRadius:14,padding:28,width:400,maxWidth:"90vw",boxShadow:"0 8px 32px rgba(0,0,0,0.18)"}} onClick={e=>e.stopPropagation()}>
-        <div style={{fontWeight:600,fontSize:16,marginBottom:8}}>Switch to "{target?.name}"?</div>
-        <div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:20}}>Your current session will be saved automatically before switching.</div>
+    return <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,0.5)",zIndex:2000,display:"flex",alignItems:"center",justifyContent:"center",backdropFilter:"blur(2px)"}} onClick={()=>setSwitchTarget(null)}>
+      <div style={{background:"var(--color-background-primary)",borderRadius:16,padding:28,width:400,maxWidth:"90vw",boxShadow:"var(--shadow-lg)",border:"1px solid var(--color-border-tertiary)",animation:"qa-fade-up 0.22s ease both"}} onClick={e=>e.stopPropagation()}>
+        <div style={{fontWeight:700,fontSize:16,marginBottom:8,letterSpacing:"-0.01em"}}>Switch to "{target?.name}"?</div>
+        <div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:20,lineHeight:1.6}}>Your current session will be saved automatically before switching.</div>
         <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
-          <button onClick={()=>setSwitchTarget(null)} style={{padding:"8px 18px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:14,color:"var(--color-text-secondary)"}}>Cancel</button>
-          <button onClick={confirmSwitch} style={{padding:"8px 18px",borderRadius:8,border:"none",background:"var(--color-text-info)",color:"#fff",cursor:"pointer",fontSize:14,fontWeight:500}}>Switch project</button>
+          <button className="qa-btn" onClick={()=>setSwitchTarget(null)} style={{padding:"9px 20px",borderRadius:10,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:14,color:"var(--color-text-secondary)"}}>Cancel</button>
+          <button className="qa-btn" onClick={confirmSwitch} style={{padding:"9px 20px",borderRadius:10,border:"none",background:"var(--accent)",color:"#fff",cursor:"pointer",fontSize:14,fontWeight:600}}>Switch project</button>
         </div>
       </div>
     </div>;
@@ -1346,107 +1449,181 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
   };
 
   const doGap=async()=>{
+    // ── STEP 1: JS-side content guard — stop before calling AI on empty/placeholder content ──
+    if(!sdata?.sim){
+      const desc=(sdata?.description||"").trim();
+      const isPlaceholder=desc.length<100||/performs a core action|receives value|valid input works|generic placeholder/i.test(desc);
+      if(!desc||isPlaceholder){
+        alert("⚠️ The story content appears to be empty or a placeholder.\n\nDescription length: "+desc.length+" characters.\n\nPlease verify that the Jira issue has a real description and acceptance criteria before running gap analysis.");
+        return;
+      }
+    }
     setLoading(true); setLmsg("Running GAP analysis…");
+
+    // ── Build context from fetched data ──
+    const desc=sdata?.description||"";
+    const descLen=desc.length;
     const commentsCtx=(sdata&&!sdata.sim&&sdata.comments?.length>0)
-      ?`\n\nSTORY COMMENTS (${sdata.comments.length} comment${sdata.comments.length===1?"":"s"} — may contain BA clarifications, decisions, or added requirements):\n`+
+      ?`\n\nSTORY COMMENTS (${sdata.comments.length} comment${sdata.comments.length===1?"":"s"}):\n`+
         sdata.comments.map((c,i)=>`Comment ${i+1} [${c.author}]:\n${c.text.slice(0,800)}`).join("\n\n")
       :"";
-    const ctx=sdata&&!sdata.sim?`STORY TITLE: ${sdata.summary}\n\nSTORY CONTENT:\n${sdata.description?.slice(0,8000)||"(no description available)"}${commentsCtx}`:`STORY TITLE: Simulated ${platform} feature for project ${proj.jiraProjKey}\n\nSTORY CONTENT:\nAs a user I want to perform a core action so that I gain value. Acceptance Criteria: 1. The feature works on valid input. 2. Errors are shown for invalid input. 3. The UI is responsive.`;
-    const storyMeta=sdata&&!sdata.sim?`Story ID: ${sid} | Platform: ${platform} | Type: ${sdata.type||"N/A"} | Priority: ${sdata.priority||"N/A"} | Status: ${sdata.status||"N/A"}${(sdata.labels||[]).length>0?" | Labels: "+sdata.labels.join(", "):""}`:
-      `Story ID: ${sid} | Platform: ${platform}`;
-    const GAP_PROMPT=`You are a senior QA analyst specializing in requirements gap analysis. Perform a thorough, accurate gap analysis of the user story below.
+    const storyMeta=sdata&&!sdata.sim
+      ?`Story ID: ${sid} | Platform: ${platform} | Type: ${sdata.type||"N/A"} | Priority: ${sdata.priority||"N/A"} | Status: ${sdata.status||"N/A"}${(sdata.labels||[]).length>0?" | Labels: "+sdata.labels.join(", "):""}`
+      :`Story ID: ${sid} | Platform: ${platform} | [AI simulation — no real Jira content]`;
+    const storyBlock=sdata&&!sdata.sim
+      ?`STORY TITLE: ${sdata.summary}\nDESCRIPTION (${descLen} characters):\n${desc.slice(0,8000)}${commentsCtx}`
+      :`STORY TITLE: Simulated ${platform} feature\nDESCRIPTION:\nAs a user I want to perform a core action so that I gain value.\nAcceptance Criteria:\n1. The feature works on valid input.\n2. Errors are shown for invalid input.\n3. The UI is responsive.`;
 
-DOMAIN AWARENESS:
-Identify domain-specific context from the story (authentication systems, payment flows, government services, industry regulations, country-specific rules, etc.) and apply relevant domain knowledge to your analysis.
-Example: If the story involves Nafath or Saudi government authentication, apply known domain rules such as National ID format (IDs starting with 1 = Saudi citizens, IDs starting with 2 = residents), token handling standards, and government service compliance expectations. Apply similar awareness for any other domain you detect.
+    const GAP_PROMPT=`You are a QA Gap Analysis Agent specialized in analyzing user stories that have already been fetched from Jira by the application.
 
-ANALYSIS CHECKLIST — systematically examine each category:
-1. FUNCTIONAL: Missing user flows, undefined success/failure behaviors, unspecified system responses
-2. DATA VALIDATION: Missing field constraints (format, length, required vs optional, allowed values)
-3. ERROR HANDLING: What happens on failure? Are error messages specified? Recovery paths defined?
-4. ROLES AND PERMISSIONS: Is access control defined for every user role who interacts with this feature?
-5. EDGE CASES: Boundary conditions, empty states, concurrent actions, session expiry mid-flow, duplicates
-6. INTEGRATION: External systems, APIs, notifications, emails, or third-party services — are their behaviors defined?
-7. NON-FUNCTIONAL: Performance thresholds, accessibility, data retention — if relevant and unaddressed
-8. SECURITY: Token handling, session management, redirect URI validation, authorization bypasses, sensitive data exposure, authentication and authorization flows. If the story involves SSO or OAuth, flag any gaps in security parameters in the redirect URL — specifically state, nonce, and code_challenge (PKCE).
-9. UI AND UX: Loading states, empty states, confirmation dialogs, navigation after action, responsive behavior
-10. NAVIGATION AND BROWSER BEHAVIOR: Back button behavior, page refresh, direct URL access, deep linking, browser history manipulation
-11. DEVICE AND ENVIRONMENT: Device-specific behavior — for example, if the flow depends on a mobile app (such as Nafath), what happens when the user is on desktop and does not have the app installed? Consider OS differences, app availability, and fallback behavior.
-
-REQUIRED REASONING PROCESS — follow these steps in order:
-
-STEP 1 - EXTRACT ALL DEFINED BEHAVIORS: Before looking for any gaps, read the entire story and list every behavior, rule, constraint, and outcome that is explicitly stated — including every acceptance criterion. This is your ground truth of what IS defined. You will use this list in Step 2 to prevent false positives.
-
-STEP 2 - IDENTIFY CANDIDATE GAPS: Using the analysis checklist, identify behaviors or requirements that are genuinely absent from the ground truth list built in Step 1. Before flagging any candidate gap, ask: "Is this behavior actually stated anywhere in the story, even in different wording or a different section?" If yes — do NOT flag it. Flagging a behavior that is already defined in any AC is a false positive and an analysis defect.
-
-STEP 3 - COMMENT AUDIT (mandatory): For EACH candidate gap from Step 2, read every comment one by one and ask:
-  - Does any comment explicitly answer or resolve this gap? → DISCARD the gap entirely.
-  - Does any comment partially address it? → KEEP the gap but update its description to reflect only what remains unresolved.
-  - Does any comment contradict or reframe my assumption about this gap? → CORRECT or DISCARD accordingly.
-  Only gaps that survive this audit make it into the final output. Shipping a gap that is already defined in an AC or resolved in a comment is an analysis defect.
-
-STEP 4 - OUTPUT: Write the final report using only the gaps that passed Steps 2 and 3.
-
-STRICT RULES:
-- Every gap MUST reference a SPECIFIC AC number, section name, or phrase from the actual story text or comments.
-- Do NOT raise generic or speculative gaps. Only flag what is genuinely missing or ambiguous.
-- A behavior defined anywhere in the story — even partially, even implicitly — is NOT a gap. Read every AC carefully before flagging.
-- A gap answered anywhere in the story OR in any comment is NOT a gap — discard it.
-- Only list gaps that would prevent a QA engineer from writing or executing a reliable test case.
-- Do NOT drop a real gap unless it is explicitly resolved. Completeness is required — omitting a real gap is a defect.
+The story content below was retrieved directly from Jira. Your task is to analyze it following the 5-step process below.
 
 ${storyMeta}
-${ctx}
+${storyBlock}
 
-IMPORTANT: Write in plain text only. No markdown symbols, no **, no ##, no ---, no backticks, no > quotes. Use CAPS for section titles. Use numbered lists.
+== STEP 1: ACKNOWLEDGE WHAT YOU RECEIVED ==
+Start your response with this header block (fill in the actual values):
 
-Output this EXACT structure:
+STORY FETCHED: ${sid}
+TITLE: [the actual story title from the content above]
+DESCRIPTION LENGTH: ${descLen} characters
+LANGUAGE DETECTED: [Arabic / English / Mixed — based on the actual description text above]
+
+== STEP 2: CONTENT VALIDATION ==
+Before analyzing, verify ALL of the following:
+- The description is NOT empty and is longer than 100 characters
+- The story references a real actor with a specific role (not just "a user" with no context)
+- There is at least one acceptance criterion
+- The description references real domain concepts (not generic placeholders like "performs a core action", "valid input works", "receives value")
+
+If ANY check fails, respond with:
+"CONTENT VALIDATION FAILED: [which check failed and why]. Gap analysis cannot proceed."
+Then STOP. Do not produce a gap analysis.
+
+Only continue to Steps 3-5 if ALL checks pass.
+
+== STEP 3: LANGUAGE HANDLING ==
+Read the story content in its ORIGINAL language — never skip or ignore Arabic text.
+- Arabic only → translate to English for analysis, then output BOTH Arabic and English versions
+- English only → output BOTH English and Arabic versions (translate the Arabic output yourself)
+- Mixed → read as-is, output BOTH English and Arabic versions
+
+CRITICAL: Every field — title, description, acceptance criteria, comments — must be fully read, regardless of whether it is in Arabic or English.
+
+== STEP 4: GAP ANALYSIS ==
+Analyze only the actual story content above. Do NOT fabricate or invent gaps.
+Every gap you report MUST quote or reference a specific phrase, section, or AC number from the story.
+
+Reasoning process (mandatory — do not skip):
+A. Extract every defined behavior, rule, and AC from the story. This is your ground truth.
+B. For each potential gap, ask: "Is this behavior actually stated anywhere?" → If yes, discard it.
+C. For each surviving gap, read every comment: does any comment resolve it? → If yes, discard. If partially, narrow the gap.
+D. Output only gaps that survived B and C.
+
+Analysis checklist (examine each category):
+1. FUNCTIONAL: Missing user flows, undefined success/failure behaviors
+2. DATA VALIDATION: Missing field constraints, formats, lengths, required vs optional
+3. ERROR HANDLING: Error messages, recovery paths, failure scenarios
+4. ROLES AND PERMISSIONS: Access control for each user role mentioned
+5. EDGE CASES: Boundary conditions, empty states, concurrent actions, session expiry
+6. INTEGRATION: External systems, APIs, notifications — behaviors defined?
+7. SECURITY: Token handling, session management, authorization bypasses, OAuth/PKCE gaps
+8. UI AND UX: Loading states, empty states, confirmation dialogs, responsive behavior
+9. NAVIGATION: Back button, refresh, direct URL, browser history
+10. DEVICE AND ENVIRONMENT: Mobile app dependency, OS differences, fallback behavior
+11. DOMAIN-SPECIFIC: Apply domain knowledge (Saudi gov, Nafath, payment flows, etc.) to detect gaps the story author assumed but did not write
+
+== STEP 5: PRODUCE OUTPUT IN BOTH LANGUAGES ==
+Write in plain text only. No **, no ##, no ---, no backticks, no > quotes. Use CAPS for section titles. Use numbered lists. Keep the === dividers exactly as shown.
+
+=== ENGLISH VERSION ===
+
+STORY FETCHED: ${sid}
+TITLE: [actual title]
+DESCRIPTION LENGTH: ${descLen} characters
+LANGUAGE DETECTED: [detected language]
 
 STORY SUMMARY:
-[2-3 sentence summary of what this story does, based strictly on what is written]
+[2-3 sentences describing what this story actually does, based strictly on the content above]
 
 COMMENTS AUDIT:
-[For each gap you considered but discarded because a comment resolved it, write one line:]
-DISCARDED: [Gap title] — resolved by Comment [number] by [author]: [one sentence summarising what the comment clarified]
-[If no gaps were discarded, write: No gaps were invalidated by comments.]
+[For each gap discarded because a comment resolved it:]
+DISCARDED: [Gap title] — resolved by Comment [N] by [author]: [what was clarified]
+[If none discarded: No gaps were invalidated by comments.]
 
 REAL GAPS FOUND:
-GAP [number]: [Short descriptive title]
-Category: [Functional | Data Validation | Error Handling | Roles and Permissions | Edge Cases | Integration | Non-Functional | Security | UI and UX | Navigation and Browser Behavior | Device and Environment]
-Section reference: [Exact AC number, section name, or phrase from the story]
-What is missing: [Specific description of what is undefined, ambiguous, or incomplete]
-Impact on testing: [Why QA cannot write or execute a reliable test without this being clarified]
+GAP [N]: [Gap Title]
+Category: [Functional / Data Validation / Error Handling / Roles and Permissions / Edge Cases / Integration / Security / UI and UX / Navigation and Browser Behavior / Device and Environment]
+Section reference: [Exact quote or AC number from the story]
+What is missing: [Specific description]
+Impact on testing: [Concrete testing impact]
 Risk: [HIGH / MEDIUM / LOW]
-Risk justification: [One sentence explaining why this specific risk level was assigned]
-Blocked test cases: Estimate: [number] — [one-line rationale explaining which test scenarios are blocked and why]
+Risk justification: [One sentence]
+Blocked test cases: Estimate: [N] — [rationale]
 
-[If no real gaps found, write: No gaps found — story is complete for QA.]
+[If no gaps: No gaps found — story is complete for QA.]
 
 QUESTIONS FOR THE BA:
-[For each gap above, one direct question to resolve it — same numbering:]
-Q[number]: [Specific question the QA team should ask the BA to resolve GAP [number]]
+Q[N]: [Direct question to resolve GAP [N]]
 
 ACs THAT NEED CLARIFICATION:
-IMPORTANT: This section MUST always be a markdown table. Never use prose or a list here.
-Use this exact table format:
-
 | AC | What Is Unclear |
-|---|---|
-| AC1 | [specific ambiguity] |
-| AC5 | [specific ambiguity] |
-
-If all ACs are clearly defined, write a single-row table:
-| AC | What Is Unclear |
-|---|---|
-| — | All ACs are clearly defined. |
+|----|-----------------|
+[One row per ambiguous AC. If all clear: All ACs are clearly defined.]
 
 OVERALL STORY READINESS FOR QA:
-[One of: Ready / Needs minor clarification / Needs major clarification / Not ready]
-[One sentence explaining the main reason]`;
+[Ready / Needs minor clarification / Needs major clarification / Not ready]
+[One sentence explaining the main reason]
+
+=== النسخة العربية ===
+
+القصة المُجلَبة: ${sid}
+العنوان: [العنوان الفعلي]
+طول الوصف: ${descLen} حرفاً
+اللغة المكتشفة: [اللغة المكتشفة]
+
+ملخص القصة:
+[2-3 جمل تصف ما تفعله هذه القصة بالفعل، استناداً فقط إلى المحتوى أعلاه]
+
+مراجعة التعليقات:
+[لكل ثغرة تم استبعادها لأن تعليقاً حلّها:]
+مستبعد: [عنوان الثغرة] — حُسم في تعليق [رقم] بواسطة [الكاتب]: [ما تم توضيحه]
+[إذا لم تُستبعد أي ثغرات: لم تُلغَ أي ثغرات بسبب التعليقات.]
+
+الثغرات الحقيقية المكتشفة:
+الثغرة [رقم]: [عنوان الثغرة]
+الفئة: [وظيفية / التحقق من البيانات / معالجة الأخطاء / الأدوار والصلاحيات / الحالات الحدية / التكامل / الأمن / واجهة المستخدم / التنقل / البيئة والأجهزة]
+مرجع القسم: [اقتباس أو رقم معيار القبول من القصة]
+ما هو غائب: [وصف تفصيلي]
+الأثر على الاختبار: [التأثير الملموس]
+درجة الخطر: [مرتفعة / متوسطة / منخفضة]
+تبرير درجة الخطر: [جملة واحدة]
+حالات الاختبار المحجوبة: تقدير: [العدد] — [المبرر]
+
+[إذا لم تكن هناك ثغرات: لا ثغرات مكتشفة — القصة مكتملة للاختبار.]
+
+أسئلة لمحلل الأعمال:
+س[رقم]: [سؤال مباشر لحل الثغرة رقم [N]]
+
+معايير القبول التي تحتاج توضيح:
+| معيار القبول | ما هو غير واضح |
+|---------|----------------|
+[صف لكل معيار غامض. إذا كانت جميعها واضحة: جميع معايير القبول محددة بوضوح.]
+
+جاهزية القصة للاختبار:
+[جاهزة / تحتاج توضيحات بسيطة / تحتاج توضيحات جوهرية / غير جاهزة]
+[جملة واحدة تشرح السبب الرئيسي]`;
+
     try {
-      const r=await callAI([{role:"user",content:GAP_PROMPT}],SYS,5000,"");
-      // Strip markdown formatting but preserve table rows (lines containing |)
-      setGapText(r.replace(/\*{1,3}([^*]+)\*{1,3}/g,"$1").replace(/^#{1,6}\s*/gm,"").replace(/^[-─]{3,}(?!\|)\s*$/gm,"").replace(/^>\s*/gm,"").replace(/`([^`]*)`/g,"$1").trim());
+      const r=await callAI([{role:"user",content:GAP_PROMPT}],SYS,8000,"");
+      // Clean up markdown formatting but preserve === section dividers and Arabic text
+      setGapText(r
+        .replace(/\*{1,3}([^*]+)\*{1,3}/g,"$1")
+        .replace(/^#{1,6}\s*/gm,"")
+        .replace(/^[-─]{3,}(?!\|)(?!=)\s*$/gm,"")
+        .replace(/^>\s*/gm,"")
+        .replace(/`([^`]*)`/g,"$1")
+        .trim());
       setPhase("gap");
     } catch(e){alert(e.message);}
     setLoading(false);
@@ -1674,7 +1851,7 @@ OVERALL STORY READINESS FOR QA:
   const editS=(id,si,v)=>setCases(cs=>cs.map(c=>{if(c.id!==id)return c;const s=[...c.steps];s[si]=v;return{...c,steps:s};}));
   const addStep=id=>setCases(cs=>cs.map(c=>c.id===id?{...c,steps:[...(c.steps||[]),"New step"]}:c));
   const delStep=(id,si)=>setCases(cs=>cs.map(c=>c.id===id?{...c,steps:(c.steps||[]).filter((_,i)=>i!==si)}:c));
-  const reset=()=>{localStorage.removeItem(WS_SNAP);setPhase(memberProjects.length>1?"project":"testType");setTestKind("functional");setPerfResult(null);setPerfForm(PERF_FORM_DEFAULT);setPerfChat(false);setSid("");setSdata(null);setPlatform("web");setCtypes([]);setReadyFilter("all");setGapText("");setCases([]);setEditOn(false);setScripts({web:"",ios:"",android:""});setProjFiles(null);setExecLines([]);setResult(null);setJKey(null);setBugDone(null);setShowBugForm(false);setFixed(false);setChat(false);setShowAddCase(false);setSelectedForScripts([]);setCoverageText("");setSessionBugs([]);setHasSaved(false);setAppUrl("");setScriptCache({});};
+  const reset=()=>{localStorage.removeItem(WS_SNAP);setPhase("project");setTestKind("functional");setPerfResult(null);setPerfForm(PERF_FORM_DEFAULT);setPerfChat(false);setSid("");setSdata(null);setPlatform("web");setCtypes([]);setReadyFilter("all");setGapText("");setCases([]);setEditOn(false);setScripts({web:"",ios:"",android:""});setProjFiles(null);setExecLines([]);setResult(null);setJKey(null);setBugDone(null);setShowBugForm(false);setFixed(false);setChat(false);setShowAddCase(false);setSelectedForScripts([]);setCoverageText("");setSessionBugs([]);setHasSaved(false);setAppUrl("");setScriptCache({});};
   const resetPerf=()=>{setPerfForm(PERF_FORM_DEFAULT);setPerfResult(null);setPerfChat(false);setHasSaved(false);setPhase("perfTest");};
   const [saveModal,setSaveModal]=useState(null);
   // saveModal: null | {step:1,name:""} | {step:2,name:"",newCat:""}
@@ -1756,12 +1933,12 @@ OVERALL STORY READINESS FOR QA:
     setShowAddCase(false);
   };
   const curScript=platform==="mobile"?(tab==="ios"?scripts.ios:scripts.android):scripts.web;
-  const ghostBtn={padding:"8px 18px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:14,fontWeight:500,color:"var(--color-text-secondary)"};
+  const ghostBtn={padding:"9px 20px",borderRadius:10,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:14,fontWeight:500,color:"var(--color-text-secondary)",transition:"box-shadow 0.13s ease, transform 0.13s ease"};
 
   /* ── Save modal ── */
   const SaveModal=saveModal&&(()=>{
-    const overlayStyle={position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",zIndex:2000,display:"flex",alignItems:"center",justifyContent:"center"};
-    const boxStyle={background:"var(--color-background-primary)",borderRadius:14,padding:28,width:420,maxWidth:"90vw",boxShadow:"0 8px 32px rgba(0,0,0,0.18)"};
+    const overlayStyle={position:"fixed",inset:0,background:"rgba(15,23,42,0.5)",zIndex:2000,display:"flex",alignItems:"center",justifyContent:"center",backdropFilter:"blur(2px)"};
+    const boxStyle={background:"var(--color-background-primary)",borderRadius:16,padding:28,width:420,maxWidth:"90vw",boxShadow:"var(--shadow-lg)",border:"1px solid var(--color-border-tertiary)",animation:"qa-fade-up 0.22s ease both"};
     if(saveModal.step===1) return(
       <div style={overlayStyle} onClick={()=>setSaveModal(null)}>
         <div style={boxStyle} onClick={e=>e.stopPropagation()}>
@@ -1809,8 +1986,8 @@ OVERALL STORY READINESS FOR QA:
 
   return <div>
     {SaveModal}
-    {toast&&<div style={{position:"fixed",bottom:32,left:"50%",transform:"translateX(-50%)",background:"#1a1a18",color:"#fff",padding:"12px 22px",borderRadius:10,fontSize:14,fontWeight:500,zIndex:9999,boxShadow:"0 4px 16px rgba(0,0,0,0.22)",display:"flex",alignItems:"center",gap:10,pointerEvents:"none"}}>
-      <span style={{color:"#6fcf6f",fontSize:18}}>✓</span>{toast}
+    {toast&&<div className="qa-toast" style={{position:"fixed",bottom:32,left:"50%",transform:"translateX(-50%)",background:"#1e293b",color:"#f8fafc",padding:"12px 24px",borderRadius:12,fontSize:14,fontWeight:500,zIndex:9999,boxShadow:"var(--shadow-lg)",display:"flex",alignItems:"center",gap:10,pointerEvents:"none",border:"1px solid rgba(255,255,255,0.08)"}}>
+      <span style={{color:"#4ade80",fontSize:17}}>✓</span>{toast}
     </div>}
     <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",marginBottom:16}}>
       <div><div style={{fontSize:20,fontWeight:500,marginBottom:4}}>QA Workspace</div>
@@ -1842,7 +2019,7 @@ OVERALL STORY READINESS FOR QA:
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))",gap:16}}>
             {memberProjects.map(p=>{
               const projStories=DB.savedStories.filter(s=>s.sid&&s.sid.startsWith(p.jiraProjKey+"-"));
-              return <div key={p.id} style={{...card,cursor:"pointer",border:selectedProjId===p.id?"2px solid var(--color-text-info)":"1px solid var(--color-border-secondary)",marginBottom:0,transition:"box-shadow 0.15s"}} onClick={()=>{if(p.id===selectedProjId){setPhase("testType");}else{switchProj(p.id);}}}>
+              return <div key={p.id} className="qa-card-hover" style={{...card,cursor:"pointer",border:selectedProjId===p.id?"2px solid var(--accent)":"1px solid var(--color-border-tertiary)",marginBottom:0,boxShadow:selectedProjId===p.id?"0 0 0 3px rgba(79,70,229,0.1), var(--shadow-sm)":"var(--shadow-sm)"}} onClick={()=>{if(p.id===selectedProjId){setPhase("testType");}else{switchProj(p.id);}}}>
                 <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10}}>
                   <div style={{width:40,height:40,borderRadius:10,background:"var(--color-background-info)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:20}}>📁</div>
                   <div><div style={{fontWeight:600,fontSize:15}}>{p.name}</div><div style={{fontSize:12,color:"var(--color-text-tertiary)"}}>{p.jiraProjKey} · {p.platform||"web"}</div></div>
@@ -1864,9 +2041,9 @@ OVERALL STORY READINESS FOR QA:
           <H2 style={{marginBottom:16}}>Choose Test Type</H2>
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))",gap:16}}>
             {[{kind:"functional",icon:"✅",label:"Functional Test",sub:"User stories · Test cases · Execution",desc:"Generate and execute functional test cases from Jira user stories using AI.",bg:"var(--color-background-success)"},{kind:"non-functional",icon:"⚡",label:"Performance Test",sub:"Load · Stress · k6",desc:"Run k6 load and stress tests against your APIs with real-time metrics.",bg:"var(--color-background-warning)"}].map(o=>(
-              <div key={o.kind} style={{...card,cursor:"pointer",border:"2px solid var(--color-border-secondary)",marginBottom:0,transition:"box-shadow 0.15s"}}
-                onMouseEnter={e=>e.currentTarget.style.borderColor="var(--color-text-info)"}
-                onMouseLeave={e=>e.currentTarget.style.borderColor="var(--color-border-secondary)"}
+              <div key={o.kind} className="qa-card-hover" style={{...card,cursor:"pointer",border:"2px solid var(--color-border-tertiary)",marginBottom:0}}
+                onMouseEnter={e=>e.currentTarget.style.borderColor="var(--accent)"}
+                onMouseLeave={e=>e.currentTarget.style.borderColor="var(--color-border-tertiary)"}
                 onClick={()=>{setTestKind(o.kind);setPhase(o.kind==="functional"?"input":"perfTest");}}>
                 <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10}}>
                   <div style={{width:44,height:44,borderRadius:10,background:o.bg,display:"flex",alignItems:"center",justifyContent:"center",fontSize:22}}>{o.icon}</div>
@@ -2134,7 +2311,7 @@ OVERALL STORY READINESS FOR QA:
           <div style={card}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
               <div style={{display:"flex",gap:8,alignItems:"center"}}><Tag c="blue">{sid}</Tag><span style={{fontWeight:500}}>GAP Analysis</span></div>
-              <button onClick={doGap} style={{...ghostBtn,fontSize:12,padding:"4px 10px"}}>🔄 Regenerate</button>
+              <button className="qa-btn" onClick={doGap} style={{...ghostBtn,fontSize:12,padding:"5px 12px"}}>🔄 Regenerate</button>
             </div>
             <div style={{fontSize:14,lineHeight:1.85}}>{renderMd(gapText)}</div>
           </div>
@@ -2677,12 +2854,12 @@ function LoginPage({onLogin}) {
     }catch{setErr("Cannot reach server. Make sure node server.js is running.");}
     setBusy(false); return;
   };
-  return <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"var(--color-background-tertiary)"}}>
-    <div style={{...card,width:380,padding:36}}>
-      <div style={{fontSize:22,fontWeight:500,marginBottom:2}}>QA AI Platform</div>
-      <div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:24}}>AI-powered QA workflow management</div>
-      <div style={{display:"flex",gap:8,marginBottom:20}}>
-        {["admin","member"].map(r=><button key={r} onClick={()=>{setMode(r);setErr("");setEmail(saved?.mode===r?saved.email:"");setPass(saved?.mode===r?saved.pass:"");}} style={{flex:1,padding:"8px 0",borderRadius:8,border:r===mode?"none":"1px solid var(--color-border-secondary)",background:r===mode?"var(--color-text-info)":"transparent",color:r===mode?"#fff":"var(--color-text-secondary)",cursor:"pointer",fontSize:14,fontWeight:500}}>{r==="admin"?"QA Lead":"Team Member"}</button>)}
+  return <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"linear-gradient(135deg, #f1f5f9 0%, #e2e8f0 100%)"}}>
+    <div style={{...card,width:400,padding:40,boxShadow:"var(--shadow-lg)",animation:"qa-fade-up 0.35s ease both"}}>
+      <div style={{fontSize:24,fontWeight:800,marginBottom:3,letterSpacing:"-0.02em"}}>QA AI Platform</div>
+      <div style={{fontSize:13,color:"var(--color-text-tertiary)",marginBottom:28}}>AI-powered QA workflow management</div>
+      <div style={{display:"flex",gap:8,marginBottom:22,padding:4,borderRadius:12,background:"var(--color-background-secondary)",border:"1px solid var(--color-border-tertiary)"}}>
+        {["admin","member"].map(r=><button key={r} className="qa-btn" onClick={()=>{setMode(r);setErr("");setEmail(saved?.mode===r?saved.email:"");setPass(saved?.mode===r?saved.pass:"");}} style={{flex:1,padding:"8px 0",borderRadius:9,border:"none",background:r===mode?"#ffffff":"transparent",color:r===mode?"var(--color-text-primary)":"var(--color-text-secondary)",cursor:"pointer",fontSize:14,fontWeight:r===mode?600:400,boxShadow:r===mode?"var(--shadow-sm)":"none"}}>{r==="admin"?"QA Lead":"Team Member"}</button>)}
       </div>
       <Lbl>{mode==="admin"?"Username":"Email"}</Lbl>
       <input style={{...inp,marginBottom:12}} value={email} onChange={e=>setEmail(e.target.value)} placeholder={mode==="admin"?"admin":"jane@company.com"}/>
@@ -2717,7 +2894,7 @@ function AdminChangePasswordModal({onClose,forced}) {
   };
   const ov={position:"fixed",inset:0,background:"rgba(0,0,0,0.6)",zIndex:2000,display:"flex",alignItems:"center",justifyContent:"center"};
   const bx={background:"var(--color-background-primary)",borderRadius:14,padding:28,width:400,maxWidth:"90vw",boxShadow:"0 8px 32px rgba(0,0,0,0.22)"};
-  const ghostBtn={padding:"8px 18px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:14,fontWeight:500,color:"var(--color-text-secondary)"};
+  const ghostBtn={padding:"9px 20px",borderRadius:10,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:14,fontWeight:500,color:"var(--color-text-secondary)",transition:"box-shadow 0.13s ease, transform 0.13s ease"};
   return <div style={ov} onClick={forced?undefined:onClose}>
     <div style={bx} onClick={e=>e.stopPropagation()}>
       {forced&&<div style={{background:"var(--color-background-warning)",border:"1px solid var(--color-border-warning)",borderRadius:8,padding:"10px 14px",marginBottom:16,fontSize:13,color:"var(--color-text-warning)"}}>
@@ -2893,7 +3070,7 @@ function App() {
       if(!u.hasSession){setShowConfig(true);}
     }
   };
-  const handleLogout=()=>{_currentMemberId="";localStorage.removeItem(SESSION_KEY);sessionStorage.removeItem(SESSION_KEY);sessionStorage.removeItem(SESSION_TOKEN_KEY);sessionStorage.removeItem(ADMIN_TOKEN_KEY);sessionStorage.removeItem(MEMBER_TOKEN_KEY);setUser(null);setPage("workspace");setShowConfig(false);setShowChangePwd(false);};
+  const handleLogout=()=>{localStorage.removeItem('qa_ws_'+_currentMemberId);_currentMemberId="";localStorage.removeItem(SESSION_KEY);sessionStorage.removeItem(SESSION_KEY);sessionStorage.removeItem(SESSION_TOKEN_KEY);sessionStorage.removeItem(ADMIN_TOKEN_KEY);sessionStorage.removeItem(MEMBER_TOKEN_KEY);setUser(null);setPage("workspace");setShowConfig(false);setShowChangePwd(false);};
   useEffect(()=>{
     const onAuthFailure=()=>handleLogout();
     window.addEventListener('qa-auth-failure',onAuthFailure);
@@ -2903,19 +3080,19 @@ function App() {
   const adminNav=[{sec:"Overview",items:[{id:"dashboard",label:"Dashboard",icon:"📊"}]},{sec:"Manage",items:[{id:"members",label:"Members",icon:"👥"},{id:"projects",label:"Projects",icon:"📁"},{id:"assign",label:"Assignments",icon:"🔗"}]}];
   const memberNav=[{sec:"Work",items:[{id:"workspace",label:"Workspace",icon:"🖥"}]}];
   const nav=user.role==="admin"?adminNav:memberNav;
-  return <div style={{fontFamily:"-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif",color:"var(--color-text-primary)",minHeight:"100vh",background:"var(--color-background-tertiary)",display:"flex"}}>
+  return <div style={{fontFamily:"-apple-system,BlinkMacSystemFont,'Segoe UI','Inter',sans-serif",color:"var(--color-text-primary)",minHeight:"100vh",background:"#f1f5f9",display:"flex"}}>
     {showConfig&&user?.role==="member"&&<MemberConfigDialog memberId={user.id} onClose={()=>setShowConfig(false)}/>}
     {showChangePwd&&user?.role==="admin"&&<AdminChangePasswordModal forced={!!user.forceChangePwd} onClose={()=>{setShowChangePwd(false);setUser(u=>({...u,forceChangePwd:false}));}}/>}
-    <div style={{width:220,minHeight:"100vh",background:"var(--color-background-secondary)",borderRight:"1px solid var(--color-border-tertiary)",display:"flex",flexDirection:"column",flexShrink:0}}>
-      <div style={{padding:"16px 20px 12px",borderBottom:"1px solid var(--color-border-tertiary)"}}>
-        <div style={{fontWeight:500,fontSize:15}}>QA AI Platform</div>
-        <div style={{fontSize:11,color:"var(--color-text-tertiary)",marginTop:2}}>{user.role==="admin"?"QA Lead · Admin":(user.member?.name+" · "+user.member?.role)}</div>
+    <div style={{width:224,minHeight:"100vh",background:"#ffffff",borderRight:"1px solid var(--color-border-tertiary)",display:"flex",flexDirection:"column",flexShrink:0,boxShadow:"1px 0 0 rgba(15,23,42,0.06)"}}>
+      <div style={{padding:"18px 20px 14px",borderBottom:"1px solid var(--color-border-tertiary)"}}>
+        <div style={{fontWeight:700,fontSize:15,letterSpacing:"-0.01em",color:"var(--color-text-primary)"}}>QA AI Platform</div>
+        <div style={{fontSize:11,color:"var(--color-text-tertiary)",marginTop:3}}>{user.role==="admin"?"QA Lead · Admin":(user.member?.name+" · "+user.member?.role)}</div>
       </div>
-      <div style={{flex:1,paddingTop:6,overflowY:"auto"}}>
+      <div style={{flex:1,paddingTop:8,overflowY:"auto"}}>
         {nav.map(g=><div key={g.sec}>
-          <div style={{padding:"14px 20px 4px",fontSize:11,fontWeight:500,color:"var(--color-text-tertiary)",textTransform:"uppercase",letterSpacing:"0.07em"}}>{g.sec}</div>
+          <div style={{padding:"14px 20px 4px",fontSize:10,fontWeight:600,color:"var(--color-text-tertiary)",textTransform:"uppercase",letterSpacing:"0.09em"}}>{g.sec}</div>
           {g.items.map(n=>{const ob=n.id==="bugs"?DB.bugs.filter(b=>b.status==="Open").length:0;
-            return <div key={n.id} onClick={()=>{setPage(n.id);tick(x=>x+1);}} style={{padding:"9px 20px",cursor:"pointer",fontSize:14,fontWeight:page===n.id?500:400,background:page===n.id?"var(--color-background-info)":"transparent",color:page===n.id?"var(--color-text-info)":"var(--color-text-secondary)",borderLeft:page===n.id?"3px solid var(--color-text-info)":"3px solid transparent",display:"flex",alignItems:"center",gap:8}}>
+            return <div key={n.id} onClick={()=>{setPage(n.id);tick(x=>x+1);}} style={{padding:"9px 16px",margin:"1px 8px",borderRadius:9,cursor:"pointer",fontSize:13,fontWeight:page===n.id?600:400,background:page===n.id?"rgba(79,70,229,0.09)":"transparent",color:page===n.id?"var(--accent)":"var(--color-text-secondary)",display:"flex",alignItems:"center",gap:8,transition:"background 0.15s ease, color 0.15s ease"}}>
               <span>{n.icon}</span>{n.label}{ob>0&&<span style={{marginLeft:"auto",background:"var(--color-text-danger)",color:"#fff",borderRadius:20,padding:"0 6px",fontSize:11}}>{ob}</span>}
             </div>;})}
         </div>)}
@@ -2986,19 +3163,19 @@ function App() {
           </div>;
         })()}
       </div>
-      <div style={{padding:"12px 20px",borderTop:"1px solid var(--color-border-tertiary)"}}>
+      <div style={{padding:"14px 20px",borderTop:"1px solid var(--color-border-tertiary)"}}>
         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
-          <div><div style={{fontSize:13,fontWeight:500}}>{user.role==="admin"?"Admin":user.member?.name}</div><div style={{fontSize:11,color:"var(--color-text-tertiary)"}}>{user.role==="admin"?"QA Lead":user.member?.role}</div></div>
+          <div><div style={{fontSize:13,fontWeight:600}}>{user.role==="admin"?"Admin":user.member?.name}</div><div style={{fontSize:11,color:"var(--color-text-tertiary)",marginTop:1}}>{user.role==="admin"?"QA Lead":user.member?.role}</div></div>
           <NotifBell userId={user.role==="admin"?"admin":user.id}/>
         </div>
-        {user.role==="member"&&<button onClick={()=>setShowConfig(true)} style={{width:"100%",padding:"7px 0",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:13,color:"var(--color-text-secondary)",marginBottom:8,display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>
+        {user.role==="member"&&<button className="qa-btn" onClick={()=>setShowConfig(true)} style={{width:"100%",padding:"7px 0",borderRadius:9,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:13,color:"var(--color-text-secondary)",marginBottom:8,display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>
           {sessionStorage.getItem(SESSION_TOKEN_KEY)?<><span style={{color:"var(--color-text-success)"}}>●</span> Settings</>:<><span style={{color:"var(--color-text-warning)"}}>●</span> Settings</>}
         </button>}
-        {user.role==="admin"&&<button onClick={()=>setShowChangePwd(true)} style={{width:"100%",padding:"7px 0",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:13,color:"var(--color-text-secondary)",marginBottom:8}}>🔒 Change Password</button>}
-        <button onClick={handleLogout} style={{width:"100%",padding:"8px 0",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:13,color:"var(--color-text-secondary)"}}>Sign out</button>
+        {user.role==="admin"&&<button className="qa-btn" onClick={()=>setShowChangePwd(true)} style={{width:"100%",padding:"7px 0",borderRadius:9,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:13,color:"var(--color-text-secondary)",marginBottom:8}}>🔒 Change Password</button>}
+        <button className="qa-btn" onClick={handleLogout} style={{width:"100%",padding:"8px 0",borderRadius:9,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:13,color:"var(--color-text-secondary)"}}>Sign out</button>
       </div>
     </div>
-    <div style={{flex:1,padding:28,overflow:"auto"}}>
+    <div style={{flex:1,padding:28,overflow:"auto",minHeight:"100vh"}}>
       {user.role==="admin"&&page==="dashboard"&&<DashboardPage/>}
       {user.role==="admin"&&page==="members"&&<MembersPage/>}
       {user.role==="admin"&&page==="projects"&&<ProjectsPage/>}
