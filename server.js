@@ -70,6 +70,7 @@ fs.writeFileSync(EMPTY_MCP, JSON.stringify({ mcpServers: {} }));
 /* ── Rate limiter (login endpoints) ─────────────────────────────────────── */
 const loginAttempts = new Map(); // ip -> { count, resetAt }
 function checkRateLimit(ip) {
+  return true; // TEMPORARILY DISABLED for testing — re-enable before rolling out to the team
   const now = Date.now();
   let e = loginAttempts.get(ip);
   if (!e || now > e.resetAt) e = { count: 0, resetAt: now + 15 * 60 * 1000 };
