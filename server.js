@@ -27,6 +27,10 @@ const path   = require('path');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 
+// Prevent unhandled errors from crashing the server
+process.on('uncaughtException', err => console.error('[Server] Uncaught exception:', err.message));
+process.on('unhandledRejection', err => console.error('[Server] Unhandled rejection:', err && err.message));
+
 // In-memory session store: token -> { memberId, jiraUrl, jiraAuth, createdAt }
 const sessions = new Map();
 function createSession(memberId, jiraUrl, jiraEmail, jiraToken) {
@@ -204,8 +208,27 @@ if (serverDB.adminPasswordIsDefault === undefined) {
 
 // In-memory admin sessions (cleared on server restart — admin re-logs in)
 const adminSessions = new Map();
-// In-memory member sessions
-const memberSessions = new Map();
+// Member sessions — persisted to disk so server restarts don't log members out
+const MEMBER_SESSIONS_FILE = path.join(__dirname, 'data', 'member-sessions.json');
+const memberSessions = (() => {
+  const m = new Map();
+  try {
+    const raw = JSON.parse(fs.readFileSync(MEMBER_SESSIONS_FILE, 'utf8'));
+    const cutoff = Date.now() - 8 * 60 * 60 * 1000;
+    for (const [k, v] of Object.entries(raw)) {
+      if (v.createdAt > cutoff) m.set(k, v);
+    }
+  } catch {}
+  return m;
+})();
+function saveMemberSessions() {
+  try {
+    fs.mkdirSync(path.join(__dirname, 'data'), { recursive: true });
+    const obj = {};
+    for (const [k, v] of memberSessions) obj[k] = v;
+    fs.writeFileSync(MEMBER_SESSIONS_FILE, JSON.stringify(obj));
+  } catch {}
+}
 // Playwright codegen sessions
 const codegenSessions = new Map();
 // Expire codegen sessions older than 2 hours and kill any lingering processes
@@ -256,6 +279,129 @@ function callClaude(messages, system, maxTokens=4000) {
   });
 }
 
+/* ── UI Design Testing helpers ───────────────────────────────────────────── */
+function parseFigmaUrl(urlStr) {
+  try {
+    let s = (urlStr || '').trim();
+    // Auto-add https:// if missing
+    if (s && !s.startsWith('http')) s = 'https://' + s;
+    const u = new URL(s);
+    if (!u.hostname.endsWith('figma.com')) return null;
+    // Accept /design/, /file/, /proto/, /board/
+    const match = u.pathname.match(/\/(design|file|proto|board)\/([a-zA-Z0-9_-]+)/);
+    if (!match) return null;
+    const fileKey = match[2];
+    let nodeId = u.searchParams.get('node-id') || null;
+    if (nodeId) nodeId = nodeId.replace(/-/g, ':');
+    return { fileKey, nodeId };
+  } catch { return null; }
+}
+
+function figmaRequest(apiPath, figmaToken) {
+  return new Promise((resolve, reject) => {
+    const opts = {
+      hostname: 'api.figma.com', path: apiPath, method: 'GET', timeout: REQ_TIMEOUT,
+      headers: { 'X-Figma-Token': figmaToken, 'Accept': 'application/json' }
+    };
+    const req = https.request(opts, res => {
+      let data = '';
+      res.on('data', chunk => data += chunk.toString());
+      res.on('end', () => { try { const body = JSON.parse(data); if (res.statusCode !== 200) console.log('[Figma RAW]', res.statusCode, JSON.stringify(body)); resolve({ status: res.statusCode, body }); } catch { console.log('[Figma RAW non-JSON]', res.statusCode, data.substring(0,200)); reject(new Error('Invalid JSON from Figma API')); } });
+    });
+    req.on('timeout', () => { req.destroy(new Error('Figma API timeout')); });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+function downloadImageUrl(imageUrl) {
+  const doFetch = (urlStr) => new Promise((resolve, reject) => {
+    const u = new URL(urlStr);
+    const mod = u.protocol === 'https:' ? https : http;
+    const opts = { hostname: u.hostname, path: u.pathname + u.search, method: 'GET', timeout: REQ_TIMEOUT, headers: { 'Accept': 'image/png,image/*' } };
+    const req = mod.request(opts, res => {
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        return doFetch(res.headers.location).then(resolve).catch(reject);
+      }
+      const chunks = [];
+      res.on('data', c => chunks.push(c));
+      res.on('end', () => resolve(Buffer.concat(chunks)));
+    });
+    req.on('timeout', () => { req.destroy(new Error('Image download timeout')); });
+    req.on('error', reject);
+    req.end();
+  });
+  return doFetch(imageUrl);
+}
+
+function callClaudeWithImages(prompt, imagePaths = []) {
+  return new Promise((resolve, reject) => {
+    const isWin = process.platform === 'win32';
+    const claudeExe = isWin ? (process.env.APPDATA + '\\npm\\claude.cmd') : 'claude';
+    const mcpFlags = ['--strict-mcp-config', '--mcp-config', EMPTY_MCP];
+    const baseArgs = ['-p', '--verbose', '--output-format', 'stream-json', '--input-format', 'stream-json', '--effort', 'low', ...mcpFlags];
+    // Build stream-json message with images
+    const content = [];
+    for (const imgPath of imagePaths) {
+      try {
+        const imgData = fs.readFileSync(imgPath).toString('base64');
+        const ext = path.extname(imgPath).toLowerCase();
+        const mediaType = (ext === '.jpg' || ext === '.jpeg') ? 'image/jpeg' : 'image/png';
+        content.push({ type: 'image', source: { type: 'base64', media_type: mediaType, data: imgData } });
+      } catch (e) { console.error('[UID] Failed to read image:', imgPath, e.message); }
+    }
+    content.push({ type: 'text', text: prompt });
+    const msgJson = JSON.stringify({ type: 'user', message: { role: 'user', content } });
+    // Write to temp file then stream into stdin to handle large image data
+    const tmpInput = path.join(os.tmpdir(), 'qa_claude_in_' + crypto.randomBytes(6).toString('hex') + '.json');
+    fs.writeFileSync(tmpInput, msgJson + '\n', 'utf8');
+    const claudeArgs = isWin
+      ? ['/c', claudeExe, ...baseArgs]
+      : baseArgs;
+    const proc = spawn(isWin ? 'cmd' : 'claude', claudeArgs, { shell: false, env: process.env });
+    let output = '', error = '';
+    proc.stdout.on('data', d => output += d.toString());
+    proc.stderr.on('data', d => error  += d.toString());
+    // Suppress EPIPE — Claude CLI may close stdin before we finish streaming
+    proc.stdin.on('error', () => {});
+    // Stream file into stdin (handles large payloads without pipe buffer overflow)
+    const inputStream = fs.createReadStream(tmpInput);
+    inputStream.pipe(proc.stdin);
+    inputStream.on('error', err => { try { proc.stdin.destroy(); } catch {} reject(new Error('Input stream error: ' + err.message)); });
+    const cleanup = () => { try { fs.unlinkSync(tmpInput); } catch {} };
+    const timer = setTimeout(() => {
+      cleanup();
+      try { if (isWin) { spawn('taskkill', ['/F', '/T', '/PID', String(proc.pid)], { shell: true, stdio: 'ignore' }); } else { proc.kill('SIGTERM'); } } catch {}
+      reject(new Error('AI request timed out after 10 minutes.'));
+    }, 600000);
+    proc.on('close', code => {
+      clearTimeout(timer); cleanup();
+      if (code === 0 && output.trim()) {
+        // Parse stream-json output — concatenate all text deltas
+        let text = '';
+        for (const line of output.split('\n')) {
+          const t = line.trim();
+          if (!t) continue;
+          try {
+            const ev = JSON.parse(t);
+            if (ev.type === 'content_block_delta' && ev.delta && ev.delta.type === 'text_delta') {
+              text += ev.delta.text || '';
+            } else if (ev.type === 'result' && ev.result) {
+              // Fallback: top-level result field
+              text = ev.result;
+            }
+          } catch {}
+        }
+        if (text.trim()) resolve(text.trim());
+        else resolve(output.trim()); // fallback: return raw if parsing yields nothing
+      } else {
+        reject(new Error(error.trim() || 'claude CLI returned no output (exit ' + code + ')'));
+      }
+    });
+    proc.on('error', err => { clearTimeout(timer); cleanup(); reject(new Error('Could not start claude CLI: ' + err.message)); });
+  });
+}
+
 /* ── Jira Proxy ─────────────────────────────────────────────────────────── */
 function proxyJira(jiraUrl, jiraPath, method, auth, body) {
   return new Promise((resolve, reject) => {
@@ -264,7 +410,11 @@ function proxyJira(jiraUrl, jiraPath, method, auth, body) {
     }
     // Use only the origin (protocol + hostname) — strip any path the user may have pasted
     const baseUrl = new URL(jiraUrl).origin;
-    const url  = new URL(baseUrl + '/rest/api/3' + jiraPath);
+    // Paths starting with /rest/ but not /rest/api/3 are raw plugin paths (e.g. AIOTest, Zephyr)
+    const fullPath = jiraPath.startsWith('/rest/') && !jiraPath.startsWith('/rest/api/')
+      ? baseUrl + jiraPath
+      : baseUrl + '/rest/api/3' + jiraPath;
+    const url  = new URL(fullPath);
     const opts = {
       hostname: url.hostname,
       path:     url.pathname + url.search,
@@ -781,6 +931,7 @@ const server = http.createServer((req, res) => {
         }
         const token = crypto.randomBytes(32).toString('hex');
         memberSessions.set(token, { memberId: member.id, createdAt: Date.now() });
+        saveMemberSessions();
         console.log('[Member] Login:', member.name);
         // Always create an API session — Jira creds used if saved, otherwise session still works for AI via CLI
         const creds = decryptMemberCredentials(member);
@@ -1147,6 +1298,136 @@ const server = http.createServer((req, res) => {
       } catch (e) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'Invalid request' }));
+      }
+      return;
+    }
+
+    /* ── /api/ui-design/figma ── */
+    if (req.method === 'POST' && req.url === '/api/ui-design/figma') {
+      const _mToken = req.headers['x-member-token'];
+      if (!_mToken || !memberSessions.has(_mToken)) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Authentication required — please sign in' })); return; }
+      try {
+        const { figmaUrl, figmaToken: rawToken, nodeId: reqNodeId } = JSON.parse(body);
+        const figmaToken = (rawToken || '').trim();
+        if (!figmaUrl || !figmaToken) throw new Error('figmaUrl and figmaToken are required');
+        const parsed = parseFigmaUrl(figmaUrl);
+        if (!parsed) throw new Error('Invalid Figma URL. Paste the link directly from Figma (File → Share → Copy link). Accepted formats: figma.com/design/..., figma.com/file/..., figma.com/proto/...');
+        const { fileKey } = parsed;
+        const nodeId = reqNodeId || parsed.nodeId;
+        console.log('[UID] Fetching Figma file:', fileKey, '| token prefix:', figmaToken.substring(0, 8) + '...');
+        const fileResp = await figmaRequest(`/v1/files/${fileKey}?depth=2`, figmaToken);
+        console.log('[UID] Figma API response status:', fileResp.status, '| body err:', fileResp.body?.err || fileResp.body?.message || 'none');
+        if (fileResp.status === 403) throw new Error('Figma 403: token rejected. Make sure: (1) token starts with "figd_", (2) when creating it in Figma you selected "File content → Read" scope, (3) you have view access to this specific file.');
+        if (fileResp.status === 404) throw new Error('Figma file not found. Check the URL.');
+        if (fileResp.status !== 200) throw new Error('Figma API error: ' + (fileResp.body?.err || fileResp.status));
+        const doc = fileResp.body.document;
+        const pages = (doc?.children || []).map(p => ({ name: p.name, nodeId: p.id }));
+        const frames = [];
+        for (const page of doc?.children || []) {
+          for (const child of page.children || []) {
+            if (['FRAME','COMPONENT','SECTION'].includes(child.type)) {
+              frames.push({ name: child.name, nodeId: child.id, pageName: page.name });
+            }
+          }
+        }
+        const targetNodeId = nodeId || frames[0]?.nodeId || pages[0]?.nodeId;
+        let imageBase64 = null;
+        if (targetNodeId) {
+          const imgResp = await figmaRequest(`/v1/images/${fileKey}?ids=${encodeURIComponent(targetNodeId)}&format=png&scale=1.5`, figmaToken);
+          if (imgResp.status === 200 && imgResp.body?.images) {
+            const imgUrl = Object.values(imgResp.body.images)[0];
+            if (imgUrl && imgUrl !== 'null') {
+              const imgBuf = await downloadImageUrl(imgUrl);
+              imageBase64 = imgBuf.toString('base64');
+            }
+          }
+        }
+        console.log('[UID] Figma ok — frames:', frames.length, '| image:', !!imageBase64);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ fileKey, pages, frames, selectedNodeId: targetNodeId, imageBase64 }));
+      } catch (e) {
+        console.error('[UID] Figma error:', e.message);
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: e.message }));
+      }
+      return;
+    }
+
+    /* ── /api/ui-design/screenshot ── */
+    if (req.method === 'POST' && req.url === '/api/ui-design/screenshot') {
+      const _mToken = req.headers['x-member-token'];
+      if (!_mToken || !memberSessions.has(_mToken)) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Authentication required — please sign in' })); return; }
+      try {
+        const { url } = JSON.parse(body);
+        if (!isValidHttpUrl(url)) throw new Error('Invalid URL');
+        const outPath = path.join(os.tmpdir(), 'qa_uid_ss_' + crypto.randomBytes(8).toString('hex') + '.png');
+        console.log('[UID] Taking screenshot of:', url);
+        await new Promise((resolve, reject) => {
+          const spawnEnv = { ...process.env, CI: '1', PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1' };
+          const proc = spawn('npx', ['playwright', 'screenshot', '--browser', 'chromium', '--full-page', url, outPath], { shell: process.platform === 'win32', env: spawnEnv });
+          let stderr = '';
+          proc.stderr.on('data', d => stderr += d.toString());
+          const timer = setTimeout(() => { try { proc.kill(); } catch {} reject(new Error('Screenshot timed out')); }, 90000);
+          proc.on('close', code => { clearTimeout(timer); if (code !== 0 || !fs.existsSync(outPath)) reject(new Error('Screenshot failed: ' + stderr.slice(0, 400))); else resolve(); });
+          proc.on('error', err => { clearTimeout(timer); reject(new Error('Could not run playwright: ' + err.message)); });
+        });
+        const imgBuf = fs.readFileSync(outPath);
+        try { fs.unlinkSync(outPath); } catch {}
+        console.log('[UID] Screenshot ok — size:', imgBuf.length, 'bytes');
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ imageBase64: imgBuf.toString('base64') }));
+      } catch (e) {
+        console.error('[UID] Screenshot error:', e.message);
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: e.message }));
+      }
+      return;
+    }
+
+    /* ── /api/ui-design/analyze ── */
+    if (req.method === 'POST' && req.url === '/api/ui-design/analyze') {
+      const _mToken = req.headers['x-member-token'];
+      if (!_mToken || !memberSessions.has(_mToken)) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Authentication required — please sign in' })); return; }
+      const tmpPaths = [];
+      try {
+        const { figmaImageBase64, screenshotBase64, pageUrl, figmaUrl, mode } = JSON.parse(body);
+        const saveImg = (b64, prefix) => {
+          const p = path.join(os.tmpdir(), prefix + crypto.randomBytes(6).toString('hex') + '.png');
+          fs.writeFileSync(p, Buffer.from(b64, 'base64'));
+          tmpPaths.push(p);
+          return p;
+        };
+        if (mode === 'generate-cases') {
+          if (!figmaImageBase64) throw new Error('figmaImageBase64 required');
+          const figmaPath = saveImg(figmaImageBase64, 'qa_uid_fg_');
+          console.log('[UID] Generating test cases from Figma design…');
+          const prompt = `You are a Senior QA Engineer. I am showing you a Figma UI design mockup.\n\nAnalyze this design carefully and generate comprehensive UI test cases covering: layout, typography, colors, buttons, forms, navigation, spacing, responsiveness, and accessibility.\n\nPage URL: ${pageUrl || 'Not specified'}\nFigma source: ${figmaUrl || 'Not specified'}\n\nReturn ONLY valid JSON in this exact structure, no markdown, no extra text:\n{\n  "testCases": [\n    {\n      "id": "TC-001",\n      "title": "Verify [specific element or behavior]",\n      "type": "ui",\n      "priority": "Critical|High|Medium|Low",\n      "area": "Layout|Typography|Colors|Buttons|Forms|Navigation|Spacing|Responsiveness|Accessibility",\n      "preconditions": "User is on the target page",\n      "steps": ["Step 1: Navigate to the page URL", "Step 2: ..."],\n      "expected": "Expected visible result...",\n      "automatable": true\n    }\n  ]\n}\n\nRules:\n- Every title MUST start with "Verify"\n- Generate at least 20 test cases covering all visible UI elements\n- Include checks for: element presence, correct positioning, text/labels accuracy, color fidelity, interactive states, responsive behavior, accessibility`;
+          const text = await callClaudeWithImages(prompt, [figmaPath]);
+          const jsonMatch = text.match(/\{[\s\S]*\}/);
+          if (!jsonMatch) throw new Error('AI returned invalid format');
+          const result = JSON.parse(jsonMatch[0]);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(result));
+        } else {
+          if (!figmaImageBase64 || !screenshotBase64) throw new Error('Both images required for comparison');
+          const figmaPath = saveImg(figmaImageBase64, 'qa_uid_fg_');
+          const ssPath    = saveImg(screenshotBase64,  'qa_uid_ss_');
+          console.log('[UID] Comparing Figma design vs implementation…');
+          const prompt = `You are a Senior QA Engineer performing a visual regression test.\n\nThe FIRST image is the Figma design (expected).\nThe SECOND image is a live screenshot of the implementation at: ${pageUrl || 'the page'}.\n\nCompare these two images thoroughly and identify ALL visual discrepancies.\n\nReturn ONLY valid JSON in this exact structure, no markdown, no extra text:\n{\n  "summary": "Brief overall assessment of visual fidelity",\n  "passRate": 75,\n  "bugs": [\n    {\n      "id": "VB-001",\n      "title": "Short descriptive bug title",\n      "severity": "Critical|High|Medium|Low",\n      "area": "Layout|Typography|Colors|Spacing|Missing Element|Extra Element|Buttons|Forms|Icons|Images",\n      "description": "Detailed description of the discrepancy",\n      "expected": "What the Figma design shows",\n      "actual": "What the live implementation shows",\n      "recommendation": "Specific fix recommendation"\n    }\n  ]\n}\n\nCheck: layout/alignment, typography (size/weight/family), colors (exact values), spacing (padding/margin), missing/extra elements, button styles, form inputs, icons, images, overall design consistency.`;
+          const text = await callClaudeWithImages(prompt, [figmaPath, ssPath]);
+          const jsonMatch = text.match(/\{[\s\S]*\}/);
+          if (!jsonMatch) throw new Error('AI returned invalid format');
+          const result = JSON.parse(jsonMatch[0]);
+          console.log('[UID] Comparison done — bugs found:', result.bugs?.length || 0);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(result));
+        }
+      } catch (e) {
+        console.error('[UID] Analyze error:', e.message);
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: e.message }));
+      } finally {
+        tmpPaths.forEach(p => { try { fs.unlinkSync(p); } catch {} });
       }
       return;
     }
