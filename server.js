@@ -218,6 +218,47 @@ setInterval(() => {
   }
 }, 30 * 60 * 1000);
 
+/* ── Claude AI (direct Anthropic API — used when ANTHROPIC_API_KEY is set) ── */
+function callAnthropicAPI(messages, system, maxTokens=4000, model='') {
+  return new Promise((resolve, reject) => {
+    const payload = JSON.stringify({
+      model: model || 'claude-haiku-4-5-20251001',
+      max_tokens: maxTokens,
+      system: system || undefined,
+      messages: messages.map(m => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: m.content }))
+    });
+    const req = https.request({
+      hostname: 'api.anthropic.com',
+      path: '/v1/messages',
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': process.env.ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01',
+        'Content-Length': Buffer.byteLength(payload)
+      },
+      timeout: 300000
+    }, res => {
+      let data = '';
+      res.on('data', d => data += d);
+      res.on('end', () => {
+        try {
+          const json = JSON.parse(data);
+          if (res.statusCode === 200 && json.content && json.content[0]) {
+            resolve(json.content.map(b => b.text || '').join(''));
+          } else {
+            reject(new Error('Anthropic API ' + res.statusCode + ': ' + (json.error ? json.error.message : data.slice(0, 300))));
+          }
+        } catch (e) { reject(new Error('Anthropic API parse error: ' + e.message)); }
+      });
+    });
+    req.on('timeout', () => { req.destroy(); reject(new Error('Anthropic API request timed out after 5 minutes.')); });
+    req.on('error', e => reject(new Error('Anthropic API request failed: ' + e.message)));
+    req.write(payload);
+    req.end();
+  });
+}
+
 /* ── Claude AI (via Claude CLI — no API key required) ───────────────────── */
 function callClaude(messages, system, maxTokens=4000, model='') {
   return new Promise((resolve, reject) => {
@@ -1040,8 +1081,11 @@ const server = http.createServer((req, res) => {
       if (!session) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Authentication required' })); return; }
       try {
         const { messages, system, max, model } = JSON.parse(body);
-        console.log('[AI]   Request received' + (model ? ' (model: ' + model + ')' : ''));
-        const text = await callClaude(messages, system, max||4000, model||'');
+        const useAPI = !!process.env.ANTHROPIC_API_KEY;
+        console.log('[AI]   Request received' + (model ? ' (model: ' + model + ')' : '') + (useAPI ? ' [direct API]' : ' [CLI]'));
+        const text = useAPI
+          ? await callAnthropicAPI(messages, system, max||4000, model||'')
+          : await callClaude(messages, system, max||4000, model||'');
         console.log('[AI]   Done');
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ text }));
