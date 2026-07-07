@@ -211,12 +211,12 @@ function aioRows(c, sid) {
   const typeVal = aioType(c.category);
   const statusVal = aioStatus(c.status);
   if (steps.length === 0) {
-    return [["", c.suite||"", c.title, c.description||"", c.preconditions||"", typeVal, c.type||"", priority, statusVal, "", "", c.testData||"", c.expected||"", sid]];
+    return [[c.id||"", c.suite||"", c.title, c.description||"", c.preconditions||"", typeVal, c.type||"", priority, statusVal, "", "", c.testData||"", c.expected||"", sid]];
   }
   return steps.map((step, i) => {
     const expected = stepResults[i] || (i === steps.length - 1 ? c.expected || "" : "");
     return [
-      "",                                  // TC ID (blank => AIO creates a new case)
+      i===0 ? (c.id||"") : "",             // TC ID — case grouping key (first step row only; AIO groups step rows under it)
       i===0 ? (c.suite||"") : "",          // Test Suite (feature sub-area)
       i===0 ? c.title : "",
       i===0 ? (c.description||"") : "",
