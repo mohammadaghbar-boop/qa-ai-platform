@@ -1390,7 +1390,7 @@ const server = http.createServer((req, res) => {
       if (!_mToken || !memberSessions.has(_mToken)) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Authentication required — please sign in' })); return; }
       const tmpPaths = [];
       try {
-        const { figmaImageBase64, screenshotBase64, pageUrl, figmaUrl, mode, jiraTicketKey } = JSON.parse(body);
+        const { figmaImageBase64, screenshotBase64, pageUrl, figmaUrl, mode, jiraTicketKey, storyRequirements } = JSON.parse(body);
         const linkedIssue = jiraTicketKey || 'UNMAPPED';
         const saveImg = (b64, prefix) => {
           const p = path.join(os.tmpdir(), prefix + crypto.randomBytes(6).toString('hex') + '.png');
@@ -1407,10 +1407,13 @@ const server = http.createServer((req, res) => {
 CONTEXT:
 - Live Page URL: ${pageUrl || 'Not specified'}
 - Figma Design Source: ${figmaUrl || 'Not specified'}
-- Linked Jira Story: ${linkedIssue}
+- Linked Jira Story: ${linkedIssue}${storyRequirements ? `
+- Story Requirements / Acceptance Criteria:
+${storyRequirements.split('\n').map(l => '  ' + l).join('\n')}` : ''}
 
 # Step 1: Deep Analysis (Pre-Generation)
-Analyze the Figma design image and extract:
+Analyze the Figma design image${storyRequirements ? ' AND cross-reference the Story Requirements provided in CONTEXT' : ''} and extract:
+- Acceptance Criteria: ${storyRequirements ? 'map every AC from the requirements above to at least 2 test cases each — missing an AC is a defect' : 'extract from the design and any visible text/labels'}
 - Implicit Business Rules: unspoken logic, dependencies, state transitions visible in the design
 - Data Flows & Constraints: field validations, boundaries, duplicates, permissions
 - Regression Impact: effect on existing workflows and integrations
