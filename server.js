@@ -1,4 +1,4 @@
-// QA AI Platform — Local Proxy (Claude AI + Jira)
+﻿// QA AI Platform — Local Proxy (Claude AI + Jira)
 // Run with: node server.js
 // Keep this terminal open while using the app.
 //
@@ -823,7 +823,7 @@ const server = http.createServer((req, res) => {
   if (origin && host && origin.includes(host)) {
     res.setHeader('Access-Control-Allow-Origin',  origin);
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Session-Token, X-Admin-Token');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Session-Token, X-Admin-Token, X-Member-Token');
     res.setHeader('Vary', 'Origin');
   }
 
@@ -1447,7 +1447,8 @@ const server = http.createServer((req, res) => {
       if (!_mToken || !memberSessions.has(_mToken)) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Authentication required — please sign in' })); return; }
       const tmpPaths = [];
       try {
-        const { figmaImageBase64, screenshotBase64, pageUrl, figmaUrl, mode } = JSON.parse(body);
+        const { figmaImageBase64, screenshotBase64, pageUrl, figmaUrl, mode, jiraTicketKey, storyRequirements, storyFileImages, svgAssetNames } = JSON.parse(body);
+        const linkedIssue = jiraTicketKey || 'UNMAPPED';
         const saveImg = (b64, prefix) => {
           const p = path.join(os.tmpdir(), prefix + crypto.randomBytes(6).toString('hex') + '.png');
           fs.writeFileSync(p, Buffer.from(b64, 'base64'));
@@ -1457,9 +1458,96 @@ const server = http.createServer((req, res) => {
         if (mode === 'generate-cases') {
           if (!figmaImageBase64) throw new Error('figmaImageBase64 required');
           const figmaPath = saveImg(figmaImageBase64, 'qa_uid_fg_');
-          console.log('[UID] Generating test cases from Figma design…');
-          const prompt = `You are a Senior QA Engineer. I am showing you a Figma UI design mockup.\n\nAnalyze this design carefully and generate comprehensive UI test cases covering: layout, typography, colors, buttons, forms, navigation, spacing, responsiveness, and accessibility.\n\nPage URL: ${pageUrl || 'Not specified'}\nFigma source: ${figmaUrl || 'Not specified'}\n\nReturn ONLY valid JSON in this exact structure, no markdown, no extra text:\n{\n  "testCases": [\n    {\n      "id": "TC-001",\n      "title": "Verify [specific element or behavior]",\n      "type": "ui",\n      "priority": "Critical|High|Medium|Low",\n      "area": "Layout|Typography|Colors|Buttons|Forms|Navigation|Spacing|Responsiveness|Accessibility",\n      "preconditions": "User is on the target page",\n      "steps": ["Step 1: Navigate to the page URL", "Step 2: ..."],\n      "expected": "Expected visible result...",\n      "automatable": true\n    }\n  ]\n}\n\nRules:\n- Every title MUST start with "Verify"\n- Generate at least 20 test cases covering all visible UI elements\n- Include checks for: element presence, correct positioning, text/labels accuracy, color fidelity, interactive states, responsive behavior, accessibility`;
-          const text = await callClaudeWithImages(prompt, [figmaPath]);
+          // Save any uploaded story reference images as temp files
+          const storyImgPaths = [];
+          if (Array.isArray(storyFileImages)) {
+            for (const sf of storyFileImages) {
+              if (sf.base64) {
+                const p = path.join(os.tmpdir(), 'qa_uid_ref_' + crypto.randomBytes(6).toString('hex') + '.png');
+                fs.writeFileSync(p, Buffer.from(sf.base64, 'base64'));
+                tmpPaths.push(p);
+                storyImgPaths.push(p);
+              }
+            }
+          }
+          const allImagePaths = [figmaPath, ...storyImgPaths];
+          console.log('[UID] Generating test cases — images:', allImagePaths.length, storyImgPaths.length > 0 ? `(+${storyImgPaths.length} reference)` : '');
+          const prompt = `You are a world-class Senior QA Engineer & Business Analyst. Analyze the provided Figma UI design image${storyImgPaths.length > 0 ? ` and the ${storyImgPaths.length} additional reference image(s)` : ''} and generate a highly optimized, production-ready, maintainable Test Suite. Prioritize risk-based testing, data integrity, and system stability over high test case counts.
+
+CONTEXT:
+- Live Page URL: ${pageUrl || 'Not specified'}
+- Figma Design Source: ${figmaUrl || 'Not specified'}
+- Linked Jira Story: ${linkedIssue}${storyImgPaths.length > 0 ? `\n- Reference Images Provided: ${storyImgPaths.length} additional image(s) — treat as supplementary design/requirement visuals` : ''}${storyRequirements ? `
+- Story Requirements / Acceptance Criteria:
+${storyRequirements.split('\n').map(l => '  ' + l).join('\n')}` : ''}${Array.isArray(svgAssetNames)&&svgAssetNames.length>0?`\n- SVG Icon Assets (${svgAssetNames.length} files): ${svgAssetNames.join(', ')}\n  These are the actual SVG icon/asset files used in the design. Generate test cases that verify each icon referenced in the Figma design matches the correct SVG asset.`:''}
+
+# Step 1: Deep Analysis (Pre-Generation)
+Analyze the Figma design image${storyRequirements ? ' AND cross-reference the Story Requirements provided in CONTEXT' : ''} and extract:
+- Acceptance Criteria: ${storyRequirements ? 'map every AC from the requirements above to at least 2 test cases each — missing an AC is a defect' : 'extract from the design and any visible text/labels'}
+- Implicit Business Rules: unspoken logic, dependencies, state transitions visible in the design
+- Data Flows & Constraints: field validations, boundaries, duplicates, permissions
+- Regression Impact: effect on existing workflows and integrations
+- Integration & SSO Dependencies: session expiry, token refresh, third-party redirects, behavior on timeout/failure
+- Localization/RTL: this platform supports Arabic ONLY. Never generate English-language test cases. Validate Arabic rendering, full RTL layout integrity, mixed-direction content (LTR tokens such as URLs, protocol names, emails, and digits embedded inside Arabic sentences), correct punctuation placement in RTL context, truncation, and overflow.
+- Figma Design Token Extraction (MANDATORY) — extract and document every element on every visible screen and state:
+  * Typography: font family, size (px), weight, line height, text color (exact hex), alignment (right/left/center), decoration, transform
+  * Colors: exact hex of every background, text, icon, border, divider, overlay, and state color — NEVER describe by name only
+  * Spacing & Layout: padding of every container (top/right/bottom/left), margins and gaps, alignment, stacking order, grid/flex arrangement
+  * Dimensions: width/height of components, bars, icons, badges, buttons; border radius; border width and color; shadows
+  * Icons & Images: icon size, color, stroke vs fill, container shape, exact placement relative to text
+  * Interactive Elements: every button, input, dropdown, checkbox, toggle, link — with ALL states (default, hover, pressed, focused, disabled, loading, error, success) and the visual spec of each state
+  * Conditional & System States: show/hide elements, empty, loading, error, success states
+  * RTL Composition: position of every element in RTL layout (right edge vs left edge), chevron/arrow directions, icon mirroring
+  If any spec cannot be measured from the image, flag it explicitly — never guess values.
+
+# Step 2: Test Coverage — "Lean QA"
+Maximize coverage, minimize redundancy. Cover:
+1. Happy Path / core workflows
+2. Negative & edge cases
+3. Security & permissions
+4. Data integrity & API validation
+5. Performance as testable assertions
+6. Integration & session handling
+7. Localization & RTL — Arabic-only; every mixed-direction and RTL case that carries real functional risk
+8. Figma Design Comparison — every element and property extracted in Step 1 must have at least one test case. Design-comparison test cases MUST reference the concrete expected values extracted from the design (exact hex colors, font sizes/weights, dimensions in px, alignment, spacing). Example: "Verify that the banner bar is 32px high with background #F3F4F6 and the toggle label renders in green #1B8354" — NOT "Verify that the banner matches Figma".
+
+# Step 3: Output Rules
+- Every title MUST start with "Verify that..." — descriptive with clear expected outcome
+- Priority: High = auth/security, data loss, payment/certificate errors, broken core flows; Medium = wrong error handling, non-blocking gaps, degraded integrations; Low = cosmetic issues bundled into broader cases
+- Linked Issue: use "${linkedIssue}" for ALL test cases
+- Status: leave empty string
+- Arabic-only: Never generate English-language test cases. Unexpected English or mixed Arabic-English text in the UI is a defect.
+- For design test cases: include exact expected values (hex, px, weight, alignment) from Step 1 extraction — never generic wording
+- Ambiguous/untestable items: still output a row, stating "Verify that [behavior] — BLOCKED: [what is missing]"
+
+# Step 4: Self-Review (Quality Gate)
+Before finalizing, verify:
+- Every extracted design property group (typography, colors, spacing, alignment, dimensions, icons, interactive states) is covered or flagged BLOCKED
+- Every boundary value (min/max/empty/null/duplicate) has a row
+- Every summary starts with "Verify that..."
+- No duplicate validations
+- No English-language test cases (Arabic-only platform)
+- Design test cases lacking concrete expected values are rewritten with exact specs or flagged BLOCKED
+
+Return ONLY valid JSON (no markdown wrapper, no extra text):
+{
+  "testCases": [
+    {
+      "id": "TC-001",
+      "title": "Verify that...",
+      "type": "ui",
+      "priority": "High|Medium|Low",
+      "area": "Layout|Typography|Colors|Buttons|Forms|Navigation|Spacing|RTL|Interactive|Accessibility|Security|Data",
+      "preconditions": "User is on the target page: ${pageUrl || ''}",
+      "steps": ["Step 1: ...", "Step 2: ..."],
+      "expected": "Detailed expected result with exact values (hex, px, weight) where applicable",
+      "automatable": true,
+      "linkedIssue": "${linkedIssue}",
+      "status": ""
+    }
+  ]
+}`;
+          const text = await callClaudeWithImages(prompt, allImagePaths);
           const jsonMatch = text.match(/\{[\s\S]*\}/);
           if (!jsonMatch) throw new Error('AI returned invalid format');
           const result = JSON.parse(jsonMatch[0]);
@@ -1486,6 +1574,132 @@ const server = http.createServer((req, res) => {
       } finally {
         tmpPaths.forEach(p => { try { fs.unlinkSync(p); } catch {} });
       }
+      return;
+    }
+
+    /* ── /api/ui-design/generate-scripts ───────────────────────────────── */
+    if (req.method === 'POST' && req.url === '/api/ui-design/generate-scripts') {
+      const _mToken = req.headers['x-member-token'];
+      if (!_mToken || !memberSessions.has(_mToken)) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Authentication required — please sign in' })); return; }
+      try {
+          const { testCases = [], pageUrl = '', figmaUrl = '', projectName = 'Doroob', demandName = 'Feature', jiraTicketKey = '' } = JSON.parse(body);
+          const safeSlug = demandName.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '');
+          const tcList = testCases.map(tc =>
+            `  TC-ID: ${tc.id}\n  Title: ${tc.title}\n  Priority: ${tc.priority||'Medium'}\n  Area: ${tc.area||'UI'}\n  Preconditions: ${tc.preconditions||'User is authenticated'}\n  Steps: ${(tc.steps||[]).join(' → ')}\n  Expected: ${tc.expected||''}`
+          ).join('\n\n');
+
+          const prompt = `You are a world-class Senior QA Automation Engineer working on the ${projectName} platform. Your objective is NOT to write scripts as quickly as possible. Your objective is to write production-ready, maintainable, and reliable Playwright automation scripts that compare the live implementation against the Figma design, detect visual and functional defects, and reflect execution results back onto the test cases sheet.
+
+PROJECT SETUP:
+Create a VS Code project named "doroob". Inside the project create a folder named "${demandName}". All Playwright scripts for this demand must be placed inside that folder.
+Folder structure:
+  doroob/
+    ${demandName}/
+      tests/
+      pages/
+      fixtures/
+      reports/
+  playwright.config.ts
+  package.json
+Use TypeScript. Use the Page Object Model pattern. Install: Playwright, Playwright Test, and visual comparison libraries if needed.
+
+CONTEXT:
+- Live Page URL: ${pageUrl || 'Not specified'}
+- Figma Design Source: ${figmaUrl || 'Not specified'}
+- Linked Jira Story: ${jiraTicketKey || 'Not linked'}
+- Platform: Arabic-only, RTL
+
+SCRIPT WRITING RULES:
+1. Every script begins with a clear description of what it validates.
+2. Every test has its own expected result.
+3. NEVER mark a test passed because the page loaded, a button exists, or an API returned HTTP 200. A test ONLY passes after all expected business behavior and design elements are fully verified.
+4. Each script covers:
+   - Functional validation per acceptance criteria and business rules.
+   - Figma design comparison: typography (family, size, weight, color hex, alignment), exact colors, layout/alignment, button labels and states, icons/images, spacing/padding, input styles and placeholders, error/success message styling, empty/loading states, RTL correctness (Arabic-only platform).
+   - Responsive behavior: desktop (1920x1080), tablet (768x1024), mobile (375x812).
+   - Cross-browser: Chrome, Firefox, Safari (webkit), Edge.
+5. NEVER use page.waitForTimeout() or any fixed delay. For dynamic waits use: await expect(locator).toBeVisible({timeout:10000}), page.waitForLoadState('networkidle'), or page.waitForSelector().
+6. STRONG assertions ONLY: toHaveText(), toHaveURL(), toContainText(), toHaveValue(), toBeChecked(), toHaveCount(), toHaveCSS() for design assertions.
+7. For design comparison assertions, use toHaveCSS() with exact values extracted from the Figma specs in the test case (e.g. toHaveCSS('background-color', 'rgb(...)'), toHaveCSS('font-size', '16px')).
+
+STRICT PASS/FAIL CRITERIA — treat any of the following as a failure:
+- Broken layout or incorrect alignment vs Figma
+- Incorrect colors, fonts, or spacing vs exact Figma values
+- Missing/incorrect button labels
+- Incorrect placeholder text or field labels
+- Error messages exposing technical info, stack traces, IDs, or HTTP errors
+- Any English or mixed Arabic/English text in the UI (Arabic-only platform)
+- RTL issues: incorrect alignment, chevron/arrow direction, icon mirroring
+- Incorrect navigation or unexpected redirects
+- Missing loading indicators
+- Incorrect or missing validation messages
+- Any visual or functional difference between the Figma design and the live implementation
+
+BUG HUNTING MINDSET — in every test, challenge the implementation:
+- What could break? What assumptions is the developer making?
+- Can validation be bypassed? Can permissions be bypassed?
+- Can browser refresh break the flow? Can multiple tabs cause problems?
+- Can empty values cause issues?
+- Can the UI break on mobile or tablet?
+- Can RTL or mixed-direction content break?
+- Can session expiration cause problems?
+- Does the implementation match every element in the Figma design exactly?
+
+TEST CASES TO IMPLEMENT:
+${tcList}
+
+Generate exactly THREE files.
+
+FILE 1 — playwright.config.ts (at project root):
+Multi-browser: chromium, firefox, webkit (Safari), edge (use channel: 'msedge')
+Three viewports as projects: Desktop 1920x1080, Tablet 768x1024, Mobile 375x812
+baseURL: '${pageUrl || 'http://localhost:3000'}'
+reporter: [['html', {open:'never'}]]
+testDir: './${demandName}/tests'
+retries: 1 in CI, 0 locally
+use: { locale: 'ar', timezoneId: 'Asia/Riyadh', trace: 'on-first-retry', screenshot: 'only-on-failure' }
+
+FILE 2 — ${demandName}/pages/${safeSlug}.page.ts:
+Page Object class "${demandName.replace(/\s+/g,'').replace(/[^a-zA-Z0-9]/g,'')}Page"
+Import Page, Locator from @playwright/test
+Define every selector referenced in the test cases as a readonly Locator
+Encapsulate every action (click, fill, navigate, assert) as an async method
+Strict locator priority: getByRole > getByLabel > getByPlaceholder > getByTestId > getByText
+Include a verifyDesignToken(locator: Locator, property: string, expectedValue: string) helper that calls expect(locator).toHaveCSS(property, expectedValue)
+
+FILE 3 — ${demandName}/tests/${safeSlug}.spec.ts:
+Import test, expect from @playwright/test
+Import the Page Object
+test.describe('${demandName}${jiraTicketKey?' — '+jiraTicketKey:''}', () => { ... })
+One test() per test case. Title = TC-ID + test title.
+beforeEach: instantiate page object, navigate to page
+For EVERY test:
+  - Assert the page loaded with a meaningful assertion (NOT just toBeVisible)
+  - Validate functional behavior step by step following the test case steps
+  - Validate at least ONE design property from the test case using toHaveCSS() or toHaveText()
+  - Final assertion MUST directly validate the exact expected result from the test case
+
+Return ONLY valid JSON (no markdown wrapper, no extra text):
+{
+  "config": "<full playwright.config.ts content>",
+  "page": "<full ${demandName}/pages/${safeSlug}.page.ts content>",
+  "spec": "<full ${demandName}/tests/${safeSlug}.spec.ts content>",
+  "demandSlug": "${safeSlug}",
+  "demandName": "${demandName}"
+}`;
+
+          console.log('[UID] Generating Playwright scripts for', demandName, '(', testCases.length, 'test cases)');
+          const text = await callClaudeWithImages(prompt, []);
+          const jsonMatch = text.match(/\{[\s\S]*\}/);
+          if (!jsonMatch) throw new Error('AI returned invalid format');
+          const result = JSON.parse(jsonMatch[0]);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(result));
+        } catch (e) {
+          console.error('[UID] Script gen error:', e.message);
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: e.message }));
+        }
       return;
     }
 
