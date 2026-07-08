@@ -349,6 +349,106 @@ function parseCSVUsers(text) {
   return { users };
 }
 
+// A saved story "belongs" to a project either via a Jira-ticket-prefixed sid
+// (functional tests) or an explicit projectId (ui-design / non-functional
+// tests, which have no sid). Functional-test stories never carry a projectId,
+// so if the project has no Jira key there is no reliable signal either way —
+// fall back to visible (matching the pre-existing behavior of showing
+// everything in that case) rather than silently hiding the user's own data.
+function storyMatchesProject(s, jiraProjKey, projectId) {
+  if (s.projectId) return s.projectId === projectId;
+  if (s.sid && jiraProjKey) return s.sid.startsWith(jiraProjKey + "-");
+  return !jiraProjKey;
+}
+
+function tokenizeShellCommand(str) {
+  const tokens = [];
+  let i = 0, cur = '', inSingle = false, inDouble = false, sawAny = false;
+  while (i < str.length) {
+    const c = str[i];
+    if (inSingle) {
+      if (c === "'") { inSingle = false; } else { cur += c; }
+    } else if (inDouble) {
+      if (c === '"') { inDouble = false; }
+      else if (c === '\\' && i + 1 < str.length && '"\\$`'.includes(str[i + 1])) { cur += str[i + 1]; i++; }
+      else { cur += c; }
+    } else {
+      if (c === "'") { inSingle = true; sawAny = true; }
+      else if (c === '"') { inDouble = true; sawAny = true; }
+      else if (/\s/.test(c)) { if (sawAny || cur) { tokens.push(cur); cur = ''; sawAny = false; } }
+      else if (c === '\\' && i + 1 < str.length) { cur += str[i + 1]; i++; sawAny = true; }
+      else { cur += c; sawAny = true; }
+    }
+    i++;
+  }
+  if (cur || sawAny) tokens.push(cur);
+  return tokens;
+}
+
+// Parses a pasted cURL command (from browser DevTools / Postman "Copy as cURL")
+// into { url, method, body, bearer, basicUser, basicPass }. Unknown flags are ignored.
+function parseCurlCommand(raw) {
+  if (!raw || !raw.trim()) return null;
+  // Normalize line continuations: bash "\", cmd "^", PowerShell "`", each followed by a newline.
+  const normalized = raw.replace(/[\\^`]\s*\r?\n/g, ' ').replace(/\r?\n/g, ' ');
+  const tokens = tokenizeShellCommand(normalized.trim());
+  if (!tokens.length) return null;
+  let i = 0;
+  if (/^curl(\.exe)?$/i.test(tokens[0])) i = 1;
+
+  let url = '', method = '', body = '', bearer = '', basicUser = '', basicPass = '';
+  let hasData = false;
+  const headers = [];
+
+  for (; i < tokens.length; i++) {
+    const t = tokens[i];
+    if (t === '-X' || t === '--request') { method = (tokens[++i] || '').toUpperCase(); }
+    else if (t === '-H' || t === '--header') { headers.push(tokens[++i] || ''); }
+    else if (t === '-d' || t === '--data' || t === '--data-raw' || t === '--data-binary' || t === '--data-ascii') { body = tokens[++i] || ''; hasData = true; }
+    else if (t === '--data-urlencode') { const v = tokens[++i] || ''; body = body ? body + '&' + v : v; hasData = true; }
+    else if (t === '-u' || t === '--user') {
+      const up = tokens[++i] || '';
+      const idx = up.indexOf(':');
+      basicUser = idx >= 0 ? up.slice(0, idx) : up;
+      basicPass = idx >= 0 ? up.slice(idx + 1) : '';
+    }
+    else if (t === '--url') { url = tokens[++i] || ''; }
+    else if (!url && /^https?:\/\//i.test(t)) { url = t; }
+    // everything else (-k, -s, -L, --compressed, -i, -v, ...) is silently ignored
+  }
+
+  // Any header that isn't Authorization (handled above) or Content-Type/Accept
+  // (already sent by every test) is likely a custom auth mechanism — e.g. an
+  // API key header — so surface it as an importable custom header.
+  const otherHeaders = [];
+  headers.forEach(h => {
+    const idx = h.indexOf(':');
+    if (idx === -1) return;
+    const rawName = h.slice(0, idx).trim();
+    const name = rawName.toLowerCase();
+    const value = h.slice(idx + 1).trim();
+    if (name === 'authorization') {
+      if (/^bearer\s+/i.test(value)) bearer = value.replace(/^bearer\s+/i, '');
+      else if (/^basic\s+/i.test(value)) {
+        try {
+          const decoded = atob(value.replace(/^basic\s+/i, ''));
+          const idx2 = decoded.indexOf(':');
+          basicUser = idx2 >= 0 ? decoded.slice(0, idx2) : decoded;
+          basicPass = idx2 >= 0 ? decoded.slice(idx2 + 1) : '';
+        } catch {}
+      }
+    } else if (name !== 'content-type' && name !== 'accept') {
+      otherHeaders.push({ name: rawName, value });
+    }
+  });
+
+  if (!method) method = hasData ? 'POST' : 'GET';
+  const ALLOWED_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'];
+  if (!ALLOWED_METHODS.includes(method)) method = hasData ? 'POST' : 'GET';
+
+  return { url, method, body, bearer, basicUser, basicPass, otherHeaders };
+}
+
 /* ─── Styles ─────────────────────────────────────────────────────────────── */
 const card = { background:"var(--color-background-primary)", border:"1px solid var(--color-border-tertiary)", borderRadius:14, padding:20, marginBottom:16, boxShadow:"var(--shadow-sm)", animation:"qa-fade-up 0.28s ease both" };
 const inp  = { width:"100%", padding:"9px 13px", borderRadius:10, border:"1px solid var(--color-border-secondary)", background:"var(--color-background-primary)", color:"var(--color-text-primary)", fontSize:14, boxSizing:"border-box" };
@@ -1283,12 +1383,14 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
   const showToast=(msg)=>{setToast(msg);setTimeout(()=>setToast(null),3000);};
 
   // ── Non-functional / performance test state ──────────────────────────────
-  const PERF_FORM_DEFAULT={testType:"load",testName:"",method:"GET",apiUrl:"",expectedStatus:200,authType:"none",token:"",basicUsername:"",basicPassword:"",requestBody:"",vus:100,duration:"60s",ramp:"10s",p95Threshold:2000,csvUsers:null,csvFileName:"",csvError:""};
+  const PERF_FORM_DEFAULT={testType:"load",testName:"",method:"GET",apiUrl:"",expectedStatus:200,authType:"none",token:"",basicUsername:"",basicPassword:"",requestBody:"",vus:100,duration:"60s",ramp:"10s",p95Threshold:2000,csvUsers:null,csvFileName:"",csvError:"",variables:[],customHeaders:[]};
   const [testKind,setTestKind]=useState("functional");
   const [perfForm,setPerfForm]=useState(PERF_FORM_DEFAULT);
   const [perfResult,setPerfResult]=useState(null);
   const [perfLoading,setPerfLoading]=useState(false);
   const [perfChat,setPerfChat]=useState(false);
+  const [curlDraft,setCurlDraft]=useState("");
+  const [curlErr,setCurlErr]=useState("");
 
   // ── UI Design Testing state ───────────────────────────────────────────────
   const [uidForm,setUidForm]=useState({pageUrl:"",figmaUrl:"",figmaToken:"",selectedNodeId:""});
@@ -1304,6 +1406,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
   const [uidJiraTicketKey,setUidJiraTicketKey]=useState("");
   const [uidAiotestStatus,setUidAiotestStatus]=useState({importing:false,done:false,error:""});
   const [uidStoryId,setUidStoryId]=useState(null);
+  const [perfStoryId,setPerfStoryId]=useState(null);
   const [uidTicketSearch,setUidTicketSearch]=useState("");
   const [uidTicketResults,setUidTicketResults]=useState([]);
   const [uidTicketSearching,setUidTicketSearching]=useState(false);
@@ -1424,7 +1527,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
 
   if (!proj) return <div style={card}><div style={{color:"var(--color-text-warning)",fontWeight:500}}>No project assigned. Contact your QA lead.</div></div>;
   const [switchTarget,setSwitchTarget]=React.useState(null);
-  const doSwitchProj=(id)=>{setSelectedProjId(id);setPhase("testType");setTestKind("functional");setPerfResult(null);setSid("");setSdata(null);setCases([]);setResult(null);setExecLines([]);setScripts({web:"",ios:"",android:""});setHasSaved(false);setUidForm({pageUrl:"",figmaUrl:"",figmaToken:"",selectedNodeId:""});setUidCases([]);setUidVisualResult(null);setUidFigmaImg(null);setUidScreenshotImg(null);setUidFigmaFrames([]);setUidJiraStatus({});setUidManualFigmaImg(null);setUidJiraTicketKey("");setUidAiotestStatus({importing:false,done:false,error:""});setUidTicketSearch("");setUidTicketResults([]);setUidTicketSearching(false);};
+  const doSwitchProj=(id)=>{setSelectedProjId(id);setPhase("testType");setTestKind("functional");setPerfForm(PERF_FORM_DEFAULT);setPerfResult(null);setPerfStoryId(null);setSid("");setSdata(null);setCases([]);setResult(null);setExecLines([]);setScripts({web:"",ios:"",android:""});setHasSaved(false);setUidForm({pageUrl:"",figmaUrl:"",figmaToken:"",selectedNodeId:""});setUidCases([]);setUidVisualResult(null);setUidFigmaImg(null);setUidScreenshotImg(null);setUidFigmaFrames([]);setUidJiraStatus({});setUidManualFigmaImg(null);setUidJiraTicketKey("");setUidStoryId(null);setUidAiotestStatus({importing:false,done:false,error:""});setUidTicketSearch("");setUidTicketResults([]);setUidTicketSearching(false);};
   const switchProj=(id)=>{
     if(id===selectedProjId)return;
     if(sid){setSwitchTarget(id);return;}
@@ -1929,8 +2032,8 @@ OVERALL STORY READINESS FOR QA:
   const editS=(id,si,v)=>setCases(cs=>cs.map(c=>{if(c.id!==id)return c;const s=[...c.steps];s[si]=v;return{...c,steps:s};}));
   const addStep=id=>setCases(cs=>cs.map(c=>c.id===id?{...c,steps:[...(c.steps||[]),"New step"]}:c));
   const delStep=(id,si)=>setCases(cs=>cs.map(c=>c.id===id?{...c,steps:(c.steps||[]).filter((_,i)=>i!==si)}:c));
-  const reset=()=>{localStorage.removeItem(WS_SNAP);setPhase("project");setTestKind("functional");setPerfResult(null);setPerfForm(PERF_FORM_DEFAULT);setPerfChat(false);setSid("");setSdata(null);setPlatform("web");setCtypes([]);setReadyFilter("all");setGapText("");setCases([]);setEditOn(false);setScripts({web:"",ios:"",android:""});setProjFiles(null);setExecLines([]);setResult(null);setJKey(null);setBugDone(null);setShowBugForm(false);setFixed(false);setChat(false);setShowAddCase(false);setSelectedForScripts([]);setCoverageText("");setSessionBugs([]);setHasSaved(false);setAppUrl("");setScriptCache({});setUidForm({pageUrl:"",figmaUrl:"",figmaToken:"",selectedNodeId:""});setUidCases([]);setUidVisualResult(null);setUidFigmaImg(null);setUidManualFigmaImg(null);setUidJiraTicketKey("");setUidStoryId(null);setUidJiraStatus({});setUidAiotestStatus({importing:false,done:false,error:""});};
-  const resetPerf=()=>{setPerfForm(PERF_FORM_DEFAULT);setPerfResult(null);setPerfChat(false);setHasSaved(false);setPhase("perfTest");};
+  const reset=()=>{localStorage.removeItem(WS_SNAP);setPhase("project");setTestKind("functional");setPerfResult(null);setPerfForm(PERF_FORM_DEFAULT);setPerfChat(false);setSid("");setSdata(null);setPlatform("web");setCtypes([]);setReadyFilter("all");setGapText("");setCases([]);setEditOn(false);setScripts({web:"",ios:"",android:""});setProjFiles(null);setExecLines([]);setResult(null);setJKey(null);setBugDone(null);setShowBugForm(false);setFixed(false);setChat(false);setShowAddCase(false);setSelectedForScripts([]);setCoverageText("");setSessionBugs([]);setHasSaved(false);setAppUrl("");setScriptCache({});setUidForm({pageUrl:"",figmaUrl:"",figmaToken:"",selectedNodeId:""});setUidCases([]);setUidVisualResult(null);setUidFigmaImg(null);setUidManualFigmaImg(null);setUidJiraTicketKey("");setUidStoryId(null);setPerfStoryId(null);setUidJiraStatus({});setUidAiotestStatus({importing:false,done:false,error:""});setCurlDraft("");setCurlErr("");};
+  const resetPerf=()=>{setPerfForm(PERF_FORM_DEFAULT);setPerfResult(null);setPerfStoryId(null);setPerfChat(false);setHasSaved(false);setPhase("perfTest");setCurlDraft("");setCurlErr("");};
   const [saveModal,setSaveModal]=useState(null);
   // saveModal: null | {step:1,name:""} | {step:2,name:"",newCat:""}
   const openSaveModal=()=>{
@@ -1942,7 +2045,7 @@ OVERALL STORY READINESS FOR QA:
     }
     if(testKind==="non-functional"){
       const dflt=perfForm.testName||(perfResult?"Perf Test "+new Date().toLocaleDateString():"New Perf Test");
-      const existing=DB.savedStories.find(s=>s.testKind==="non-functional"&&s.perfForm?.testName===perfForm.testName&&perfForm.testName);
+      const existing=perfStoryId?DB.savedStories.find(s=>s.id===perfStoryId):null;
       setSaveModal({step:1,name:existing?.name||dflt});
       return;
     }
@@ -1961,11 +2064,12 @@ OVERALL STORY READINESS FOR QA:
       return;
     }
     if(testKind==="non-functional"){
-      const existing=DB.savedStories.find(s=>s.testKind==="non-functional"&&s.perfForm?.testName===perfForm.testName&&perfForm.testName);
-      const snap={id:existing?.id||uid(),name,testKind:"non-functional",categoryId:categoryId||null,perfForm:{...perfForm},perfResult:perfResult?{...perfResult}:null,savedAt:Date.now()};
+      const existing=perfStoryId?DB.savedStories.find(s=>s.id===perfStoryId):null;
+      const newId=existing?.id||uid();
+      const snap={id:newId,name,testKind:"non-functional",categoryId:categoryId||null,perfForm:{...perfForm},perfResult:perfResult?{...perfResult}:null,projectId:proj?.id||"",savedAt:Date.now()};
       if(existing){DB.savedStories=DB.savedStories.map(s=>s.id===existing.id?snap:s);}
       else{DB.savedStories.unshift(snap);}
-      saveDB();if(refreshSaved)refreshSaved();setHasSaved(true);setSaveModal(null);showToast("Session saved successfully");
+      saveDB();if(refreshSaved)refreshSaved();setPerfStoryId(newId);setHasSaved(true);setSaveModal(null);showToast("Session saved successfully");
       return;
     }
     const existing=DB.savedStories.find(s=>s.sid===sid);
@@ -1999,6 +2103,16 @@ OVERALL STORY READINESS FOR QA:
       setPhase(lastPhase);
       return;
     }
+    if(snap.testKind==="non-functional"){
+      setTestKind("non-functional");
+      setPerfForm(snap.perfForm||PERF_FORM_DEFAULT);
+      setPerfResult(snap.perfResult||null);
+      setPerfStoryId(snap.id);
+      setHasSaved(true);
+      setPhase(snap.perfResult?"perfResult":"perfTest");
+      return;
+    }
+    setTestKind("functional");
     setSid(snap.sid);setSdata(snap.sdata);setPlatform(snap.platform);setCtypes(snap.ctypes||[]);setGapText(snap.gapText||"");setCases(snap.cases||[]);setScripts(snap.scripts||{web:"",ios:"",android:""});setResult(snap.result||null);setSessionBugs(snap.sessionBugs||[]);setCoverageText(snap.coverageText||"");setSelectedForScripts(snap.selectedForScripts||[]);setAppUrl(snap.appUrl||"");setExecLines([]);setJKey(null);setBugDone(null);setShowBugForm(false);setFixed(false);setEditOn(false);setChat(false);setShowAddCase(false);
     const lastPhase=snap.phase||(snap.coverageText?"coverage":snap.result?"result":snap.cases?.some(c=>c.status==="approved")?"review":"ctype");
     setPhase(lastPhase);
@@ -2006,9 +2120,10 @@ OVERALL STORY READINESS FOR QA:
   React.useEffect(()=>{
     if(onActiveSid){
       if(testKind==="ui-design")onActiveSid(uidStoryId?"uid:"+uidStoryId:null);
+      else if(testKind==="non-functional")onActiveSid(perfStoryId?"perf:"+perfStoryId:null);
       else onActiveSid(sid);
     }
-  },[sid,testKind,uidStoryId]);
+  },[sid,testKind,uidStoryId,perfStoryId]);
   React.useEffect(()=>{if(onProjChange)onProjChange(proj);},[selectedProjId]);
   React.useEffect(()=>{if(restoreTarget){restoreStory(restoreTarget);if(clearRestore)clearRestore();}}, [restoreTarget]);
   React.useEffect(()=>{if(resetTrigger>0)reset();},[resetTrigger]);
@@ -2141,7 +2256,7 @@ OVERALL STORY READINESS FOR QA:
           <H2 style={{marginBottom:16}}>Choose a project to start</H2>
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))",gap:16}}>
             {memberProjects.map(p=>{
-              const projStories=DB.savedStories.filter(s=>s.sid&&s.sid.startsWith(p.jiraProjKey+"-"));
+              const projStories=DB.savedStories.filter(s=>storyMatchesProject(s,p.jiraProjKey,p.id));
               return <div key={p.id} className="qa-card-hover" style={{...card,cursor:"pointer",border:selectedProjId===p.id?"2px solid var(--accent)":"1px solid var(--color-border-tertiary)",marginBottom:0,boxShadow:selectedProjId===p.id?"0 0 0 3px rgba(79,70,229,0.1), var(--shadow-sm)":"var(--shadow-sm)"}} onClick={()=>{if(p.id===selectedProjId){setPhase("testType");}else{switchProj(p.id);}}}>
                 <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10}}>
                   <div style={{width:40,height:40,borderRadius:10,background:"var(--color-background-info)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:20}}>📁</div>
@@ -2150,7 +2265,7 @@ OVERALL STORY READINESS FOR QA:
                 <div style={{fontSize:12,color:"var(--color-text-secondary)",marginBottom:projStories.length>0?10:0}}>{projStories.length} saved session{projStories.length!==1?"s":""}</div>
                 {projStories.length>0&&<div style={{borderTop:"1px solid var(--color-border-tertiary)",paddingTop:8,display:"flex",flexDirection:"column",gap:4}}>
                   {projStories.slice(0,3).map(s=><div key={s.id} style={{display:"flex",alignItems:"center",gap:6,fontSize:12}}>
-                    <Tag c="blue" style={{flexShrink:0}}>{s.sid}</Tag>
+                    <Tag c="blue" style={{flexShrink:0}}>{s.sid||(s.testKind==="non-functional"?"PERF":s.testKind==="ui-design"?"UI":"")}</Tag>
                     <span style={{color:"var(--color-text-secondary)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flex:1}}>{s.name||s.sid}</span>
                   </div>)}
                   {projStories.length>3&&<div style={{fontSize:11,color:"var(--color-text-tertiary)"}}>+{projStories.length-3} more</div>}
@@ -2565,9 +2680,31 @@ OVERALL STORY READINESS FOR QA:
           const totalSec=isStress?durSecs[perfForm.duration]*4+rampSecs[perfForm.ramp]*5:(durSecs[perfForm.duration]||60)+(rampSecs[perfForm.ramp]||10)*2;
           const s_=v=>setPerfForm(f=>({...f,...v}));
           const inpN={...inp,maxWidth:130};
+          const applyCurl=()=>{
+            const parsed=parseCurlCommand(curlDraft);
+            if(!parsed||!parsed.url){setCurlErr("Couldn't find a URL in that command.");return;}
+            const updates={apiUrl:parsed.url,method:parsed.method};
+            if(parsed.body)updates.requestBody=parsed.body;
+            if(parsed.bearer){updates.authType="bearer";updates.token=parsed.bearer;}
+            else if(parsed.basicUser){updates.authType="basic";updates.basicUsername=parsed.basicUser;updates.basicPassword=parsed.basicPass;}
+            if(parsed.otherHeaders&&parsed.otherHeaders.length)updates.customHeaders=[...(perfForm.customHeaders||[]),...parsed.otherHeaders];
+            s_(updates);
+            setCurlErr("");
+          };
           return <div style={{display:"flex",gap:20,alignItems:"flex-start"}}>
             {/* ── LEFT: form ── */}
             <div style={{flex:1,minWidth:0,display:"flex",flexDirection:"column",gap:0}}>
+
+              {/* Import from cURL */}
+              <div style={card}>
+                <H2 style={{marginBottom:8}}>Import from cURL</H2>
+                <div style={{fontSize:12,color:"var(--color-text-tertiary)",marginBottom:10}}>Paste a cURL command (from browser DevTools' "Copy as cURL", Postman, etc.) to auto-fill the method, URL, body, and auth below.</div>
+                <textarea style={{...inp,height:70,fontFamily:"monospace",fontSize:12,resize:"vertical"}} value={curlDraft} onChange={e=>{setCurlDraft(e.target.value);setCurlErr("");}} placeholder={'curl -X POST https://api.example.com/items \\\n  -H "Authorization: Bearer eyJ..." \\\n  -d \'{"key":"value"}\''}/>
+                <div style={{display:"flex",gap:10,alignItems:"center",marginTop:8}}>
+                  <button onClick={applyCurl} disabled={!curlDraft.trim()} style={{...ghostBtn,opacity:curlDraft.trim()?1:0.5,cursor:curlDraft.trim()?"pointer":"not-allowed"}}>⬇ Import</button>
+                  {curlErr&&<span style={{fontSize:12,color:"var(--color-text-danger)"}}>{curlErr}</span>}
+                </div>
+              </div>
 
               {/* Test type */}
               <div style={card}>
@@ -2595,7 +2732,22 @@ OVERALL STORY READINESS FOR QA:
                         {["GET","POST","PUT","PATCH","DELETE"].map(m=><option key={m}>{m}</option>)}
                       </select>
                     </div>
-                    <div style={{flex:1}}><Lbl>API Endpoint URL *</Lbl><input style={inp} value={perfForm.apiUrl} onChange={e=>s_({apiUrl:e.target.value})} placeholder="https://api.example.com/endpoint"/></div>
+                    <div style={{flex:1}}><Lbl>API Endpoint URL *</Lbl><input style={inp} value={perfForm.apiUrl} onChange={e=>s_({apiUrl:e.target.value})} placeholder="https://api.example.com/endpoint or .../items/{{itemId}}"/></div>
+                  </div>
+                  <div>
+                    <Lbl>Configurable Variables <span style={{fontWeight:400,color:"var(--color-text-tertiary)"}}>— reference as {"{{name}}"} anywhere in the URL above; each becomes overridable per run</span></Lbl>
+                    {(perfForm.variables||[]).map((v,i)=>(
+                      <div key={i} style={{display:"flex",gap:8,marginTop:6}}>
+                        <input style={{...inp,flex:1}} value={v.name} placeholder="e.g. auctionItemId" onChange={e=>{
+                          const next=[...perfForm.variables]; next[i]={...next[i],name:e.target.value}; s_({variables:next});
+                        }}/>
+                        <input style={{...inp,flex:1}} value={v.value} placeholder="default value" onChange={e=>{
+                          const next=[...perfForm.variables]; next[i]={...next[i],value:e.target.value}; s_({variables:next});
+                        }}/>
+                        <button onClick={()=>s_({variables:perfForm.variables.filter((_,j)=>j!==i)})} style={{...ghostBtn,padding:"0 10px"}} title="Remove">✕</button>
+                      </div>
+                    ))}
+                    <button onClick={()=>s_({variables:[...(perfForm.variables||[]),{name:"",value:""}]})} style={{...ghostBtn,fontSize:12,marginTop:8}}>+ Add Variable</button>
                   </div>
                   <div style={{maxWidth:200}}><Lbl>Expected Status Code</Lbl><input style={inpN} type="number" value={perfForm.expectedStatus} onChange={e=>s_({expectedStatus:parseInt(e.target.value)||200})}/></div>
                   <div>
@@ -2641,7 +2793,22 @@ OVERALL STORY READINESS FOR QA:
                       </div>
                     </div>}
                   </div>}
-                  {["POST","PUT","PATCH"].includes(perfForm.method)&&<div><Lbl>Request Body (JSON)</Lbl><textarea style={{...inp,height:76,fontFamily:"monospace",resize:"vertical"}} value={perfForm.requestBody} onChange={e=>s_({requestBody:e.target.value})} placeholder='{"key":"value"}'/></div>}
+                  <div>
+                    <Lbl>Custom Headers <span style={{fontWeight:400,color:"var(--color-text-tertiary)"}}>— for auth your API expects in its own header, e.g. X-Api-Key. Values can reference {"{{variables}}"} too.</span></Lbl>
+                    {(perfForm.customHeaders||[]).map((h,i)=>(
+                      <div key={i} style={{display:"flex",gap:8,marginTop:6}}>
+                        <input style={{...inp,flex:1}} value={h.name} placeholder="e.g. X-Api-Key" onChange={e=>{
+                          const next=[...perfForm.customHeaders]; next[i]={...next[i],name:e.target.value}; s_({customHeaders:next});
+                        }}/>
+                        <input style={{...inp,flex:1}} value={h.value} placeholder="header value" onChange={e=>{
+                          const next=[...perfForm.customHeaders]; next[i]={...next[i],value:e.target.value}; s_({customHeaders:next});
+                        }}/>
+                        <button onClick={()=>s_({customHeaders:perfForm.customHeaders.filter((_,j)=>j!==i)})} style={{...ghostBtn,padding:"0 10px"}} title="Remove">✕</button>
+                      </div>
+                    ))}
+                    <button onClick={()=>s_({customHeaders:[...(perfForm.customHeaders||[]),{name:"",value:""}]})} style={{...ghostBtn,fontSize:12,marginTop:8}}>+ Add Header</button>
+                  </div>
+                  {["POST","PUT","PATCH"].includes(perfForm.method)&&<div><Lbl>Request Body (JSON) <span style={{fontWeight:400,color:"var(--color-text-tertiary)"}}>— can reference {"{{variables}}"} too</span></Lbl><textarea style={{...inp,height:76,fontFamily:"monospace",resize:"vertical"}} value={perfForm.requestBody} onChange={e=>s_({requestBody:e.target.value})} placeholder='{"key":"{{value}}"}'/></div>}
                 </div>
               </div>
 
@@ -2685,11 +2852,16 @@ OVERALL STORY READINESS FOR QA:
             <div style={{width:230,flexShrink:0}}>
               <div style={{...card,position:"sticky",top:0}}>
                 <H2 style={{marginBottom:12}}>Test Summary</H2>
-                {[
+                {(()=>{
+                  const namedVars=(perfForm.variables||[]).filter(v=>v.name.trim());
+                  const namedHeaders=(perfForm.customHeaders||[]).filter(h=>h.name.trim());
+                  return [
                   {label:"Type",val:<Tag c={isStress?"red":"blue"}>{isStress?"Stress":"Load"}</Tag>},
                   {label:"Name",val:perfForm.testName||"—"},
                   {label:"Method",val:<Tag c="blue">{perfForm.method}</Tag>},
                   {label:"URL",val:<span style={{fontSize:11,wordBreak:"break-all"}}>{perfForm.apiUrl||"—"}</span>},
+                  {label:"Variables",val:namedVars.length?namedVars.map(v=>v.name).join(", "):"—"},
+                  {label:"Custom Headers",val:namedHeaders.length?namedHeaders.map(h=>h.name).join(", "):"—"},
                   {label:"Auth",val:perfForm.authType==="bearer"?"🔑 Bearer":perfForm.authType==="basic"?"👤 Basic":perfForm.authType==="csv"?("🔄 Dynamic ("+(perfForm.csvUsers?.length||0)+" users)"):"🔓 None"},
                   null,
                   {label:"Virtual Users",val:isStress?perfForm.vus+" (max)":String(perfForm.vus)},
@@ -2702,7 +2874,8 @@ OVERALL STORY READINESS FOR QA:
                     <span style={{fontSize:12,color:"var(--color-text-tertiary)",flexShrink:0}}>{row.label}</span>
                     <span style={{fontSize:12,fontWeight:500,textAlign:"right"}}>{row.val}</span>
                   </div>
-                )}
+                  );
+                })()}
                 {isStress&&<div style={{marginTop:8,fontSize:12,color:"var(--color-text-secondary)",background:"var(--color-background-warning)",padding:"8px 10px",borderRadius:8}}>
                   🔥 Steps: {Math.ceil(perfForm.vus*.25)} → {Math.ceil(perfForm.vus*.5)} → {Math.ceil(perfForm.vus*.75)} → {perfForm.vus} VUs
                 </div>}
@@ -3602,9 +3775,9 @@ function App() {
             </div>;})}
         </div>)}
         {user.role==="member"&&savedStories.length>0&&(()=>{
-          const visibleStories=activeProj?.jiraProjKey?savedStories.filter(s=>(s.sid&&s.sid.startsWith(activeProj.jiraProjKey+"-"))||(s.testKind==="ui-design"&&s.projectId===activeProj.id)):savedStories;
+          const visibleStories=activeProj?savedStories.filter(s=>storyMatchesProject(s,activeProj.jiraProjKey,activeProj.id)):savedStories;
           if(visibleStories.length===0)return null;
-          const isActive=s=>s.testKind==="ui-design"?activeSid===("uid:"+s.id)&&page==="workspace":s.sid===activeSid&&page==="workspace";
+          const isActive=s=>s.testKind==="ui-design"?activeSid===("uid:"+s.id)&&page==="workspace":s.testKind==="non-functional"?activeSid===("perf:"+s.id)&&page==="workspace":s.sid===activeSid&&page==="workspace";
           const StoryCard=({s})=>(
             <div key={s.id} style={{borderRadius:7,padding:"8px 9px",background:isActive(s)?"var(--color-background-info)":"var(--color-background-primary)",border:isActive(s)?"1px solid var(--color-text-info)":"1px solid var(--color-border-tertiary)",cursor:renamingId===s.id?"default":"pointer",transition:"border-color 0.15s",borderLeft:isActive(s)?"3px solid var(--color-text-info)":"1px solid var(--color-border-tertiary)"}}
               onMouseEnter={e=>{if(renamingId!==s.id&&!isActive(s))e.currentTarget.style.borderColor="var(--color-border-primary)";}}
@@ -3626,6 +3799,8 @@ function App() {
                     <div style={{display:"flex",gap:3,flexWrap:"wrap"}}>
                       {s.testKind==="ui-design"
                         ?<><Tag c="purple">UI</Tag>{s.uidJiraTicketKey&&<Tag c="blue">{s.uidJiraTicketKey}</Tag>}{(s.uidCases?.length||0)>0&&<Tag c="green">{s.uidCases.length} TC</Tag>}{s.uidVisualResult&&<Tag c="green">✓</Tag>}</>
+                        :s.testKind==="non-functional"
+                        ?<><Tag c="amber">PERF</Tag><Tag c="blue">{s.perfForm?.method||"GET"}</Tag>{s.perfResult&&<Tag c={s.perfResult.passed?"green":"red"}>{s.perfResult.passed?"✓ Pass":"✗ Fail"}</Tag>}</>
                         :<><Tag c="blue">{s.sid}</Tag>{(s.cases?.filter(c=>c.status==="approved")?.length||0)>0&&<Tag c="green">{s.cases.filter(c=>c.status==="approved").length} TC</Tag>}{s.coverageText&&<Tag c="green">✓</Tag>}</>}
                     </div>
                   </div>}

@@ -16,8 +16,11 @@
 //   - Port 3456 (override with PORT env var)
 //   - k6 is bundled inside Docker — no separate install needed
 //   - Sessions are in-memory — if container restarts, members must log out and back in
-//   - No .env file needed — credentials are managed inside the app per member
+//   - Per-member credentials (Jira, etc.) are managed inside the app
+//   - Optional .env (see .env.example) sets ANTHROPIC_API_KEY for non-interactive Claude CLI billing
 // ─────────────────────────────────────────────────────────────────────────────
+
+require('dotenv').config();
 
 const http   = require('http');
 const https  = require('https');
@@ -631,24 +634,76 @@ function runPlaywrightTests(files) {
 }
 
 /* ── Performance Test (k6) ─────────────────────────────────────────────── */
-function generateK6Script({ testType, method, apiUrl, vus, duration, ramp, p95Threshold, authType, token, basicUsername, basicPassword, requestBody, expectedStatus, csvUsers }) {
+function generateK6Script({ testType, method, apiUrl, vus, duration, ramp, p95Threshold, authType, token, basicUsername, basicPassword, requestBody, expectedStatus, csvUsers, variables, customHeaders }) {
   const m    = ['get','post','put','patch','delete'].includes((method||'').toLowerCase()) ? (method||'GET').toLowerCase() : 'get';
   const vusN = parseInt(vus) || 100;
   const p95N = parseInt(p95Threshold) || 2000;
   const exp  = parseInt(expectedStatus) || 200;
+
+  // Configurable variables — e.g. {{auctionItemId}} in the URL, or an API key
+  // in a custom header — so the same test can target a different
+  // record/environment/key per project without editing the script. Each
+  // becomes a k6 __ENV var with the given default.
+  const VAR_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
+  // Names that would collide with identifiers the generated script already
+  // declares (import bindings, k6 globals, JS reserved words) — allowing
+  // these would produce a duplicate-declaration SyntaxError at k6-run time.
+  const RESERVED_VAR_NAMES = new Set([
+    'http', 'check', 'sleep', 'options', '__creds', '__ENV', '__VU', '__ITER',
+    'import', 'export', 'default', 'const', 'let', 'var', 'function', 'return',
+    'class', 'new', 'delete', 'typeof', 'void', 'this', 'true', 'false', 'null', 'undefined',
+  ]);
+  const safeVars = Array.isArray(variables)
+    ? variables.filter(v => v && VAR_NAME_RE.test(v.name) && !RESERVED_VAR_NAMES.has(v.name)).slice(0, 20)
+    : [];
+  const varDefaults = Object.fromEntries(safeVars.map(v => [v.name, String(v.value ?? '')]));
+  const placeholderRe = /\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/g;
+  const resolvedUrl = String(apiUrl || '').replace(placeholderRe, (_, n) => varDefaults[n] ?? '');
+
   // Validate and sanitize URL and durations
-  const safeUrl  = isValidHttpUrl(apiUrl) ? apiUrl : 'http://localhost';
+  const urlTemplate = isValidHttpUrl(resolvedUrl) ? String(apiUrl) : 'http://localhost';
   const safeDur  = sanitizeK6Duration(duration);
   const safeRamp = sanitizeK6Duration(ramp);
 
-  const baseHeaders = { 'Content-Type': 'application/json', 'Accept': 'application/json' };
+  const varDecls = safeVars
+    .map(v => `const ${v.name} = __ENV.${v.name} || ${JSON.stringify(String(v.value ?? ''))};`)
+    .join('\n');
+  // Turns a string that may contain {{variableName}} into a JS source
+  // expression: a template literal (so it stays live/__ENV-overridable) when
+  // variables are configured, otherwise a plain JSON-escaped string literal.
+  // Backslashes, backticks, and ${ in the source content are escaped BEFORE
+  // substituting placeholders, so arbitrary user input (a pasted API key, a
+  // URL) can never break out of the template literal or inject a live
+  // expression — only the ${name} we insert ourselves stays unescaped.
+  const toScriptExpr = (str) => {
+    const s = String(str || '');
+    if (!safeVars.length) return JSON.stringify(s);
+    const escaped = s.replace(/\\/g, '\\\\').replace(/`/g, '\\`').replace(/\$\{/g, '\\${');
+    return '`' + escaped.replace(placeholderRe, (_, n) => n in varDefaults ? '${' + n + '}' : '') + '`';
+  };
+  const urlExpr = toScriptExpr(urlTemplate);
+
+  // Headers: built-in Content-Type/Accept + auth, plus arbitrary custom
+  // headers (e.g. an API key header your auth type doesn't cover). Emitted
+  // as a JS object-literal expression — not JSON.stringify — so header
+  // values can also reference {{variables}}.
+  const HEADER_NAME_RE = /^[A-Za-z0-9-]{1,64}$/;
+  const headerEntries = [
+    { name: 'Content-Type', expr: JSON.stringify('application/json') },
+    { name: 'Accept', expr: JSON.stringify('application/json') },
+  ];
   if (authType === 'bearer' && token)
-    baseHeaders['Authorization'] = 'Bearer ' + token;
+    headerEntries.push({ name: 'Authorization', expr: JSON.stringify('Bearer ' + token) });
   if (authType === 'basic' && basicUsername)
-    baseHeaders['Authorization'] = 'Basic ' + Buffer.from(basicUsername + ':' + (basicPassword || '')).toString('base64');
+    headerEntries.push({ name: 'Authorization', expr: JSON.stringify('Basic ' + Buffer.from(basicUsername + ':' + (basicPassword || '')).toString('base64')) });
+  const safeHeaders = Array.isArray(customHeaders)
+    ? customHeaders.filter(h => h && HEADER_NAME_RE.test(h.name)).slice(0, 20)
+    : [];
+  safeHeaders.forEach(h => headerEntries.push({ name: h.name, expr: toScriptExpr(h.value) }));
+  const headersExpr = '{' + headerEntries.map(h => JSON.stringify(h.name) + ':' + h.expr).join(',') + '}';
 
   const bodyArg = ['post', 'put', 'patch'].includes(m) && requestBody
-    ? `, ${JSON.stringify(String(requestBody))}`
+    ? `, ${toScriptExpr(requestBody)}`
     : '';
 
   let stages;
@@ -666,14 +721,15 @@ function generateK6Script({ testType, method, apiUrl, vus, duration, ramp, p95Th
     return `import http from 'k6/http';
 import { check, sleep } from 'k6';
 const __creds = ${JSON.stringify(encodedCreds)};
+${varDecls}
 export let options = {
   stages: ${stages},
   thresholds: { 'http_req_duration': ['p(95)<${p95N}'], 'http_req_failed': ['rate<0.05'] }
 };
 export default function () {
-  const headers = ${JSON.stringify(baseHeaders)};
+  const headers = ${headersExpr};
   headers['Authorization'] = 'Basic ' + __creds[(__VU - 1) % __creds.length];
-  const res = http.${m}('${safeUrl}'${bodyArg}, { headers });
+  const res = http.${m}(${urlExpr}${bodyArg}, { headers });
   check(res, { 'status ${exp}': r => r.status === ${exp} });
   sleep(1);
 }`;
@@ -681,12 +737,13 @@ export default function () {
 
   return `import http from 'k6/http';
 import { check, sleep } from 'k6';
+${varDecls}
 export let options = {
   stages: ${stages},
   thresholds: { 'http_req_duration': ['p(95)<${p95N}'], 'http_req_failed': ['rate<0.05'] }
 };
 export default function () {
-  const res = http.${m}('${safeUrl}'${bodyArg}, { headers: ${JSON.stringify(baseHeaders)} });
+  const res = http.${m}(${urlExpr}${bodyArg}, { headers: ${headersExpr} });
   check(res, { 'status ${exp}': r => r.status === ${exp} });
   sleep(1);
 }`;

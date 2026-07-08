@@ -4,6 +4,8 @@ services:
     ports:
       - "3456:3456"
     restart: unless-stopped
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
     volumes:
       - qa-data:/app/data
 
