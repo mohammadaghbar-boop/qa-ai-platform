@@ -1,8 +1,8 @@
-// QA AI Platform — Local Proxy (Claude AI + Jira)
+﻿// QA AI Platform â€” Local Proxy (Claude AI + Jira)
 // Run with: node server.js
 // Keep this terminal open while using the app.
 //
-// ── DevOps Deployment ────────────────────────────────────────────────────────
+// â”€â”€ DevOps Deployment â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Branch  : platform_side
 // To run  :
 //   git clone https://github.com/mohammadaghbar-boop/qa-ai-platform.git
@@ -14,10 +14,10 @@
 //
 // Notes   :
 //   - Port 3456 (override with PORT env var)
-//   - k6 is bundled inside Docker — no separate install needed
-//   - Sessions are in-memory — if container restarts, members must log out and back in
-//   - No .env file needed — credentials are managed inside the app per member
-// ─────────────────────────────────────────────────────────────────────────────
+//   - k6 is bundled inside Docker â€” no separate install needed
+//   - Sessions are in-memory â€” if container restarts, members must log out and back in
+//   - No .env file needed â€” credentials are managed inside the app per member
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const http   = require('http');
 const https  = require('https');
@@ -60,21 +60,21 @@ setInterval(() => {
   for (const [t, s] of memberSessions) if (now - (s.createdAt || 0) > ADMIN_SESSION_TTL) memberSessions.delete(t);
 }, 60 * 60 * 1000);
 
-/* ── Configuration ──────────────────────────────────────────────────────── */
+/* â”€â”€ Configuration â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 const PORT              = parseInt(process.env.PORT) || 3456;
 const MAX_BODY          = 20 * 1024 * 1024; // 20 MB per request
 const REQ_TIMEOUT       = 30000;            // 30 s for outgoing HTTP requests
-const API_SESSION_TTL   = 24 * 60 * 60 * 1000; // 24 h — API/Jira credential sessions
-const ADMIN_SESSION_TTL =  8 * 60 * 60 * 1000; // 8 h  — admin + member login sessions
+const API_SESSION_TTL   = 24 * 60 * 60 * 1000; // 24 h â€” API/Jira credential sessions
+const ADMIN_SESSION_TTL =  8 * 60 * 60 * 1000; // 8 h  â€” admin + member login sessions
 
-// Empty MCP config — prevents claude CLI from using MCP tools (e.g. Atlassian)
+// Empty MCP config â€” prevents claude CLI from using MCP tools (e.g. Atlassian)
 const EMPTY_MCP = path.join(os.tmpdir(), 'qa-platform-no-mcp.json');
 fs.writeFileSync(EMPTY_MCP, JSON.stringify({ mcpServers: {} }));
 
-/* ── Rate limiter (login endpoints) ─────────────────────────────────────── */
+/* â”€â”€ Rate limiter (login endpoints) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 const loginAttempts = new Map(); // ip -> { count, resetAt }
 function checkRateLimit(ip) {
-  return true; // TEMPORARILY DISABLED for testing — re-enable before rolling out to the team
+  return true; // TEMPORARILY DISABLED for testing â€” re-enable before rolling out to the team
   const now = Date.now();
   let e = loginAttempts.get(ip);
   if (!e || now > e.resetAt) e = { count: 0, resetAt: now + 15 * 60 * 1000 };
@@ -87,7 +87,7 @@ setInterval(() => {
   for (const [ip, e] of loginAttempts) if (now > e.resetAt) loginAttempts.delete(ip);
 }, 5 * 60 * 1000);
 
-/* ── Input validators & sanitizers ──────────────────────────────────────── */
+/* â”€â”€ Input validators & sanitizers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 function sanitizeFilename(name) {
   return String(name || 'file').replace(/[^\w.\-]/g, '_').slice(0, 100);
 }
@@ -108,12 +108,12 @@ function isValidJiraUrl(s) {
   } catch { return false; }
 }
 
-/* ── File-based data store (admin dashboard sync) ───────────────────────── */
+/* â”€â”€ File-based data store (admin dashboard sync) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 const DATA_DIR  = path.join(__dirname, 'data');
 const DATA_FILE = path.join(DATA_DIR, 'qa-platform-db.json');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
-/* ── Credential encryption (AES-256-GCM, server key in data/server.key) ─── */
+/* â”€â”€ Credential encryption (AES-256-GCM, server key in data/server.key) â”€â”€â”€ */
 const KEY_FILE = path.join(DATA_DIR, 'server.key');
 let _encKey;
 if (fs.existsSync(KEY_FILE)) {
@@ -121,7 +121,7 @@ if (fs.existsSync(KEY_FILE)) {
 } else {
   _encKey = crypto.randomBytes(32);
   fs.writeFileSync(KEY_FILE, _encKey.toString('hex'));
-  console.log('  ℹ  New encryption key generated at data/server.key — back this file up.');
+  console.log('  â„¹  New encryption key generated at data/server.key â€” back this file up.');
 }
 function encryptField(text) {
   const iv  = crypto.randomBytes(12);
@@ -180,7 +180,7 @@ function verifyPassword(p, stored) {
       return crypto.timingSafeEqual(Buffer.from(derived, 'hex'), Buffer.from(hash, 'hex'));
     } catch { return false; }
   }
-  // Legacy SHA-256 — constant-time compare
+  // Legacy SHA-256 â€” constant-time compare
   const legacy = crypto.createHash('sha256').update(p).digest('hex');
   return legacy.length === stored.length &&
     crypto.timingSafeEqual(Buffer.from(legacy, 'hex'), Buffer.from(stored, 'hex'));
@@ -192,23 +192,23 @@ if (!serverDB.adminPasswordHash) {
   serverDB.adminPasswordIsDefault = true;
   saveServerDB(serverDB);
   console.log('');
-  console.log('  ℹ  Default admin credentials: admin / admin');
+  console.log('  â„¹  Default admin credentials: admin / admin');
   console.log('  You will be prompted to change the password on first login.');
   console.log('');
 }
-// Migration: existing db without the isDefault flag — reset to admin so forced change runs
+// Migration: existing db without the isDefault flag â€” reset to admin so forced change runs
 if (serverDB.adminPasswordIsDefault === undefined) {
   serverDB.adminPasswordHash = hashPasswordSecure('admin');
   serverDB.adminPasswordIsDefault = true;
   saveServerDB(serverDB);
   console.log('');
-  console.log('  ℹ  Admin password reset to default (admin). Change it on next login.');
+  console.log('  â„¹  Admin password reset to default (admin). Change it on next login.');
   console.log('');
 }
 
-// In-memory admin sessions (cleared on server restart — admin re-logs in)
+// In-memory admin sessions (cleared on server restart â€” admin re-logs in)
 const adminSessions = new Map();
-// Member sessions — persisted to disk so server restarts don't log members out
+// Member sessions â€” persisted to disk so server restarts don't log members out
 const MEMBER_SESSIONS_FILE = path.join(__dirname, 'data', 'member-sessions.json');
 const memberSessions = (() => {
   const m = new Map();
@@ -242,7 +242,7 @@ setInterval(() => {
   }
 }, 30 * 60 * 1000);
 
-/* ── Claude AI (via Claude CLI — no API key required) ───────────────────── */
+/* â”€â”€ Claude AI (via Claude CLI â€” no API key required) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 function callClaude(messages, system, maxTokens=4000) {
   return new Promise((resolve, reject) => {
     const conversation = messages.map(m =>
@@ -279,7 +279,7 @@ function callClaude(messages, system, maxTokens=4000) {
   });
 }
 
-/* ── UI Design Testing helpers ───────────────────────────────────────────── */
+/* â”€â”€ UI Design Testing helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 function parseFigmaUrl(urlStr) {
   try {
     let s = (urlStr || '').trim();
@@ -362,7 +362,7 @@ function callClaudeWithImages(prompt, imagePaths = []) {
     let output = '', error = '';
     proc.stdout.on('data', d => output += d.toString());
     proc.stderr.on('data', d => error  += d.toString());
-    // Suppress EPIPE — Claude CLI may close stdin before we finish streaming
+    // Suppress EPIPE â€” Claude CLI may close stdin before we finish streaming
     proc.stdin.on('error', () => {});
     // Stream file into stdin (handles large payloads without pipe buffer overflow)
     const inputStream = fs.createReadStream(tmpInput);
@@ -377,7 +377,7 @@ function callClaudeWithImages(prompt, imagePaths = []) {
     proc.on('close', code => {
       clearTimeout(timer); cleanup();
       if (code === 0 && output.trim()) {
-        // Parse stream-json output — concatenate all text deltas
+        // Parse stream-json output â€” concatenate all text deltas
         let text = '';
         for (const line of output.split('\n')) {
           const t = line.trim();
@@ -402,13 +402,13 @@ function callClaudeWithImages(prompt, imagePaths = []) {
   });
 }
 
-/* ── Jira Proxy ─────────────────────────────────────────────────────────── */
+/* â”€â”€ Jira Proxy â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 function proxyJira(jiraUrl, jiraPath, method, auth, body) {
   return new Promise((resolve, reject) => {
     if (!jiraUrl || !isValidJiraUrl(jiraUrl)) {
       reject(new Error('Invalid Jira URL. Must be a public HTTPS address.')); return;
     }
-    // Use only the origin (protocol + hostname) — strip any path the user may have pasted
+    // Use only the origin (protocol + hostname) â€” strip any path the user may have pasted
     const baseUrl = new URL(jiraUrl).origin;
     // Paths starting with /rest/ but not /rest/api/3 are raw plugin paths (e.g. AIOTest, Zephyr)
     const fullPath = jiraPath.startsWith('/rest/') && !jiraPath.startsWith('/rest/api/')
@@ -456,7 +456,7 @@ function proxyJira(jiraUrl, jiraPath, method, auth, body) {
   });
 }
 
-/* ── Jira Attachment Upload ─────────────────────────────────────────────── */
+/* â”€â”€ Jira Attachment Upload â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 function attachToJira(jiraUrl, issueKey, auth, files) {
   return new Promise((resolve, reject) => {
     if (!jiraUrl || !isValidJiraUrl(jiraUrl)) {
@@ -505,7 +505,7 @@ function attachToJira(jiraUrl, issueKey, auth, files) {
   });
 }
 
-/* ── Playwright Test Runner ─────────────────────────────────────────────── */
+/* â”€â”€ Playwright Test Runner â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 function runPlaywrightTests(files) {
   return new Promise((resolve) => {
     const runId  = crypto.randomBytes(16).toString('hex');
@@ -544,7 +544,7 @@ function runPlaywrightTests(files) {
       const globalNm = path.join(process.env.APPDATA, 'npm', 'node_modules');
       if (fs.existsSync(globalNm)) spawnEnv.NODE_PATH = globalNm + (process.env.NODE_PATH ? path.delimiter + process.env.NODE_PATH : '');
     }
-    // Pre-check: verify playwright CLI is reachable (fast fail — no download)
+    // Pre-check: verify playwright CLI is reachable (fast fail â€” no download)
     const { spawnSync } = require('child_process');
     const preCheck = spawnSync('npx', ['playwright', '--version'], {
       cwd: tmpDir, shell: true,
@@ -577,7 +577,7 @@ function runPlaywrightTests(files) {
 
     const timer = setTimeout(() => {
       killProc(); cleanup();
-      resolve({ lines:[...lines,'✗ Test run timed out after 5 minutes'], passed:[], failed:[], error:'timeout' });
+      resolve({ lines:[...lines,'âœ— Test run timed out after 5 minutes'], passed:[], failed:[], error:'timeout' });
     }, 300000);
 
     proc.on('close', (code) => {
@@ -591,7 +591,7 @@ function runPlaywrightTests(files) {
           const walk = (suites) => {
             for (const suite of suites || []) {
               for (const spec of suite.specs || []) {
-                const title = [suite.title, spec.title].filter(Boolean).join(' › ');
+                const title = [suite.title, spec.title].filter(Boolean).join(' â€º ');
                 if (spec.ok) passed.push(title);
                 else failed.push({ title, error: (spec.tests?.[0]?.results?.[0]?.errors?.[0]?.message||'Failed').slice(0,300) });
               }
@@ -599,7 +599,7 @@ function runPlaywrightTests(files) {
             }
           };
           walk(results.suites);
-          // Collect global errors — e.g. test file failed to load (import errors go here, not suites)
+          // Collect global errors â€” e.g. test file failed to load (import errors go here, not suites)
           for (const err of results.errors || []) {
             globalErrors.push((err.message || String(err)).slice(0, 400));
           }
@@ -609,9 +609,9 @@ function runPlaywrightTests(files) {
       // Surface global errors so the user knows WHY 0 tests ran
       if (globalErrors.length > 0) {
         lines.unshift('');
-        globalErrors.forEach(e => lines.unshift('✗ ' + e));
+        globalErrors.forEach(e => lines.unshift('âœ— ' + e));
         lines.unshift('Playwright reported global errors:');
-        // Detect @playwright/test module not found — treat as not_installed
+        // Detect @playwright/test module not found â€” treat as not_installed
         const errText = globalErrors.join('\n').toLowerCase();
         if (errText.includes("cannot find module") && errText.includes('playwright')) {
           resolve({ lines, passed: [], failed: [], error: 'not_installed' });
@@ -630,7 +630,7 @@ function runPlaywrightTests(files) {
   });
 }
 
-/* ── Performance Test (k6) ─────────────────────────────────────────────── */
+/* â”€â”€ Performance Test (k6) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 function generateK6Script({ testType, method, apiUrl, vus, duration, ramp, p95Threshold, authType, token, basicUsername, basicPassword, requestBody, expectedStatus, csvUsers }) {
   const m    = ['get','post','put','patch','delete'].includes((method||'').toLowerCase()) ? (method||'GET').toLowerCase() : 'get';
   const vusN = parseInt(vus) || 100;
@@ -741,7 +741,7 @@ function runK6(scriptPath) {
   });
 }
 
-/* ── HTTP Server ────────────────────────────────────────────────────────── */
+/* â”€â”€ HTTP Server â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 const server = http.createServer((req, res) => {
   // Security headers on every response
   res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -772,7 +772,7 @@ const server = http.createServer((req, res) => {
 
   if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
 
-  /* ── Codegen status (GET — requires session) ── */
+  /* â”€â”€ Codegen status (GET â€” requires session) â”€â”€ */
   if (req.method === 'GET' && req.url.startsWith('/api/codegen/status/')) {
     if (!getSession(req)) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Authentication required' })); return; }
     const sessionId = req.url.split('/api/codegen/status/')[1];
@@ -782,7 +782,7 @@ const server = http.createServer((req, res) => {
     res.end(JSON.stringify({ status: s.status, script: s.script || null })); return;
   }
 
-  /* ── Members list (GET — requires admin token) ── */
+  /* â”€â”€ Members list (GET â€” requires admin token) â”€â”€ */
   if (req.method === 'GET' && req.url === '/api/members') {
     const adminToken = req.headers['x-admin-token'];
     if (!adminToken || !adminSessions.has(adminToken)) {
@@ -794,7 +794,7 @@ const server = http.createServer((req, res) => {
     res.end(JSON.stringify(safe)); return;
   }
 
-  /* ── Admin data (GET — requires admin token) ── */
+  /* â”€â”€ Admin data (GET â€” requires admin token) â”€â”€ */
   if (req.method === 'GET' && req.url === '/api/admin/data') {
     const adminToken = req.headers['x-admin-token'];
     if (!adminToken || !adminSessions.has(adminToken)) {
@@ -812,7 +812,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  /* ── Serve app ── */
+  /* â”€â”€ Serve app â”€â”€ */
   if (req.method === 'GET' && (req.url === '/' || req.url === '/index.html')) {
     try {
       const html = fs.readFileSync(path.join(__dirname, 'QA AI Platform.html'), 'utf8');
@@ -828,7 +828,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  /* ── Read body (with size limit) ── */
+  /* â”€â”€ Read body (with size limit) â”€â”€ */
   let body = '';
   let bodySize = 0;
   req.on('data', chunk => {
@@ -842,7 +842,7 @@ const server = http.createServer((req, res) => {
     body += chunk;
   });
   req.on('end', async () => {
-    /* ── /api/codegen/start (requires session) ── */
+    /* â”€â”€ /api/codegen/start (requires session) â”€â”€ */
     if (req.method === 'POST' && req.url === '/api/codegen/start') {
       if (!getSession(req)) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Authentication required' })); return; }
       try {
@@ -868,7 +868,7 @@ const server = http.createServer((req, res) => {
               session.status = 'empty';
             }
           } catch { session.status = 'error'; }
-          console.log('[Codegen] Session', sessionId, '→', session.status);
+          console.log('[Codegen] Session', sessionId, 'â†’', session.status);
         });
         proc.on('error', e => {
           session.status = e.code === 'ENOENT' ? 'not_installed' : 'error';
@@ -884,7 +884,7 @@ const server = http.createServer((req, res) => {
       return;
     }
 
-    /* ── /api/codegen/:id (DELETE — cancel, requires session) ── */
+    /* â”€â”€ /api/codegen/:id (DELETE â€” cancel, requires session) â”€â”€ */
     if (req.method === 'DELETE' && req.url.startsWith('/api/codegen/')) {
       if (!getSession(req)) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Authentication required' })); return; }
       const sessionId = req.url.split('/api/codegen/')[1];
@@ -894,7 +894,7 @@ const server = http.createServer((req, res) => {
       res.end(JSON.stringify({ ok: true })); return;
     }
 
-    /* ── /api/playwright/run (requires session) ── */
+    /* â”€â”€ /api/playwright/run (requires session) â”€â”€ */
     if (req.method === 'POST' && req.url === '/api/playwright/run') {
       if (!getSession(req)) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Authentication required' })); return; }
       try {
@@ -909,7 +909,7 @@ const server = http.createServer((req, res) => {
       return;
     }
 
-    /* ── /api/members/login ── */
+    /* â”€â”€ /api/members/login â”€â”€ */
     if (req.method === 'POST' && req.url === '/api/members/login') {
       const ip = req.socket.remoteAddress || 'unknown';
       if (!checkRateLimit(ip)) {
@@ -933,7 +933,7 @@ const server = http.createServer((req, res) => {
         memberSessions.set(token, { memberId: member.id, createdAt: Date.now() });
         saveMemberSessions();
         console.log('[Member] Login:', member.name);
-        // Always create an API session — Jira creds used if saved, otherwise session still works for AI via CLI
+        // Always create an API session â€” Jira creds used if saved, otherwise session still works for AI via CLI
         const creds = decryptMemberCredentials(member);
         const sessionToken = createSession(member.id, creds?.jiraUrl||'', creds?.jiraEmail||'', creds?.jiraToken||'');
         res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -945,7 +945,7 @@ const server = http.createServer((req, res) => {
       return;
     }
 
-    /* ── /api/members (POST — admin creates member) ── */
+    /* â”€â”€ /api/members (POST â€” admin creates member) â”€â”€ */
     if (req.method === 'POST' && req.url === '/api/members') {
       try {
         const adminToken = req.headers['x-admin-token'];
@@ -981,7 +981,7 @@ const server = http.createServer((req, res) => {
       return;
     }
 
-    /* ── /api/members/:id/credentials (POST — member stores own credentials) ── */
+    /* â”€â”€ /api/members/:id/credentials (POST â€” member stores own credentials) â”€â”€ */
     if (req.method === 'POST' && /^\/api\/members\/[^/]+\/credentials$/.test(req.url)) {
       try {
         const memberToken = req.headers['x-member-token'];
@@ -1011,14 +1011,14 @@ const server = http.createServer((req, res) => {
       return;
     }
 
-    /* ── /api/members/session/refresh (POST — renew API session from stored creds) ── */
+    /* â”€â”€ /api/members/session/refresh (POST â€” renew API session from stored creds) â”€â”€ */
     if (req.method === 'POST' && req.url === '/api/members/session/refresh') {
       try {
         const memberToken = req.headers['x-member-token'];
         const ms = memberToken ? memberSessions.get(memberToken) : null;
         if (!ms || Date.now() - ms.createdAt > ADMIN_SESSION_TTL) {
           res.writeHead(401, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'Unauthorized — please log in again' })); return;
+          res.end(JSON.stringify({ error: 'Unauthorized â€” please log in again' })); return;
         }
         const member = (serverDB.members || []).find(m => m.id === ms.memberId);
         const creds = member ? decryptMemberCredentials(member) : null;
@@ -1036,7 +1036,7 @@ const server = http.createServer((req, res) => {
       return;
     }
 
-    /* ── /api/members/:id (PUT — admin edits member) ── */
+    /* â”€â”€ /api/members/:id (PUT â€” admin edits member) â”€â”€ */
     if (req.method === 'PUT' && req.url.startsWith('/api/members/')) {
       try {
         const adminToken = req.headers['x-admin-token'];
@@ -1065,7 +1065,7 @@ const server = http.createServer((req, res) => {
       return;
     }
 
-    /* ── /api/members/:id (DELETE — admin removes member) ── */
+    /* â”€â”€ /api/members/:id (DELETE â€” admin removes member) â”€â”€ */
     if (req.method === 'DELETE' && req.url.startsWith('/api/members/')) {
       try {
         const adminToken = req.headers['x-admin-token'];
@@ -1087,7 +1087,7 @@ const server = http.createServer((req, res) => {
       return;
     }
 
-    /* ── /api/admin/login ── */
+    /* â”€â”€ /api/admin/login â”€â”€ */
     if (req.method === 'POST' && req.url === '/api/admin/login') {
       const ip = req.socket.remoteAddress || 'unknown';
       if (!checkRateLimit(ip)) {
@@ -1118,7 +1118,7 @@ const server = http.createServer((req, res) => {
       return;
     }
 
-    /* ── /api/admin/change-password ── */
+    /* â”€â”€ /api/admin/change-password â”€â”€ */
     if (req.method === 'POST' && req.url === '/api/admin/change-password') {
       try {
         const adminToken = req.headers['x-admin-token'];
@@ -1148,7 +1148,7 @@ const server = http.createServer((req, res) => {
       return;
     }
 
-    /* ── /api/auth/session ── */
+    /* â”€â”€ /api/auth/session â”€â”€ */
     if (req.method === 'POST' && req.url === '/api/auth/session') {
       const ip = req.socket.remoteAddress || 'unknown';
       if (!checkRateLimit(ip)) {
@@ -1166,7 +1166,7 @@ const server = http.createServer((req, res) => {
         const validSession = ses && ses.memberId === memberId;
         if (!validMember && !validSession) {
           res.writeHead(401, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'Unauthorized — please log in first' })); return;
+          res.end(JSON.stringify({ error: 'Unauthorized â€” please log in first' })); return;
         }
         // Validate Jira URL if provided
         if (jiraUrl && !isValidJiraUrl(jiraUrl)) {
@@ -1185,7 +1185,7 @@ const server = http.createServer((req, res) => {
       return;
     }
 
-    /* ── /api/ai ── */
+    /* â”€â”€ /api/ai â”€â”€ */
     if (req.method === 'POST' && req.url === '/api/ai') {
       const session = getSession(req);
       if (!session) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Authentication required' })); return; }
@@ -1204,7 +1204,7 @@ const server = http.createServer((req, res) => {
       return;
     }
 
-    /* ── /api/jira ── */
+    /* â”€â”€ /api/jira â”€â”€ */
     if (req.method === 'POST' && req.url === '/api/jira') {
       const session = getSession(req);
       if (!session) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Authentication required' })); return; }
@@ -1213,7 +1213,7 @@ const server = http.createServer((req, res) => {
         const jiraUrl  = session.jiraUrl;
         const auth     = session.jiraAuth;
         const { path: jiraPath, method: jiraMethod, body: jiraBody } = parsed;
-        console.log('[Jira] Request —', jiraMethod, jiraPath);
+        console.log('[Jira] Request â€”', jiraMethod, jiraPath);
         const data = await proxyJira(jiraUrl, jiraPath, jiraMethod, auth, jiraBody);
         console.log('[Jira] Done');
         res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -1226,7 +1226,7 @@ const server = http.createServer((req, res) => {
       return;
     }
 
-    /* ── /api/jira/attach ── */
+    /* â”€â”€ /api/jira/attach â”€â”€ */
     if (req.method === 'POST' && req.url === '/api/jira/attach') {
       const session = getSession(req);
       if (!session) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Authentication required' })); return; }
@@ -1252,17 +1252,17 @@ const server = http.createServer((req, res) => {
       return;
     }
 
-    /* ── /api/perf (requires session) ── */
+    /* â”€â”€ /api/perf (requires session) â”€â”€ */
     if (req.method === 'POST' && req.url === '/api/perf') {
       if (!getSession(req)) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Authentication required' })); return; }
       try {
         const params    = JSON.parse(body);
         const tmpScript = path.join(os.tmpdir(), 'qa_k6_' + crypto.randomBytes(8).toString('hex') + '.js');
         fs.writeFileSync(tmpScript, generateK6Script(params));
-        console.log('[Perf] Running k6 —', params.testName);
+        console.log('[Perf] Running k6 â€”', params.testName);
         const result = await runK6(tmpScript);
         try { fs.unlinkSync(tmpScript); } catch {}
-        console.log('[Perf] Done — passed:', result.passed);
+        console.log('[Perf] Done â€” passed:', result.passed);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(result));
       } catch (e) {
@@ -1273,7 +1273,7 @@ const server = http.createServer((req, res) => {
       return;
     }
 
-    /* ── /api/sync (requires session) ── */
+    /* â”€â”€ /api/sync (requires session) â”€â”€ */
     if (req.method === 'POST' && req.url === '/api/sync') {
       if (!getSession(req)) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Authentication required' })); return; }
       try {
@@ -1302,22 +1302,22 @@ const server = http.createServer((req, res) => {
       return;
     }
 
-    /* ── /api/ui-design/figma ── */
+    /* â”€â”€ /api/ui-design/figma â”€â”€ */
     if (req.method === 'POST' && req.url === '/api/ui-design/figma') {
       const _mToken = req.headers['x-member-token'];
-      if (!_mToken || !memberSessions.has(_mToken)) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Authentication required — please sign in' })); return; }
+      if (!_mToken || !memberSessions.has(_mToken)) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Authentication required â€” please sign in' })); return; }
       try {
         const { figmaUrl, figmaToken: rawToken, nodeId: reqNodeId } = JSON.parse(body);
         const figmaToken = (rawToken || '').trim();
         if (!figmaUrl || !figmaToken) throw new Error('figmaUrl and figmaToken are required');
         const parsed = parseFigmaUrl(figmaUrl);
-        if (!parsed) throw new Error('Invalid Figma URL. Paste the link directly from Figma (File → Share → Copy link). Accepted formats: figma.com/design/..., figma.com/file/..., figma.com/proto/...');
+        if (!parsed) throw new Error('Invalid Figma URL. Paste the link directly from Figma (File â†’ Share â†’ Copy link). Accepted formats: figma.com/design/..., figma.com/file/..., figma.com/proto/...');
         const { fileKey } = parsed;
         const nodeId = reqNodeId || parsed.nodeId;
         console.log('[UID] Fetching Figma file:', fileKey, '| token prefix:', figmaToken.substring(0, 8) + '...');
         const fileResp = await figmaRequest(`/v1/files/${fileKey}?depth=2`, figmaToken);
         console.log('[UID] Figma API response status:', fileResp.status, '| body err:', fileResp.body?.err || fileResp.body?.message || 'none');
-        if (fileResp.status === 403) throw new Error('Figma 403: token rejected. Make sure: (1) token starts with "figd_", (2) when creating it in Figma you selected "File content → Read" scope, (3) you have view access to this specific file.');
+        if (fileResp.status === 403) throw new Error('Figma 403: token rejected. Make sure: (1) token starts with "figd_", (2) when creating it in Figma you selected "File content â†’ Read" scope, (3) you have view access to this specific file.');
         if (fileResp.status === 404) throw new Error('Figma file not found. Check the URL.');
         if (fileResp.status !== 200) throw new Error('Figma API error: ' + (fileResp.body?.err || fileResp.status));
         const doc = fileResp.body.document;
@@ -1342,7 +1342,7 @@ const server = http.createServer((req, res) => {
             }
           }
         }
-        console.log('[UID] Figma ok — frames:', frames.length, '| image:', !!imageBase64);
+        console.log('[UID] Figma ok â€” frames:', frames.length, '| image:', !!imageBase64);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ fileKey, pages, frames, selectedNodeId: targetNodeId, imageBase64 }));
       } catch (e) {
@@ -1353,10 +1353,10 @@ const server = http.createServer((req, res) => {
       return;
     }
 
-    /* ── /api/ui-design/screenshot ── */
+    /* â”€â”€ /api/ui-design/screenshot â”€â”€ */
     if (req.method === 'POST' && req.url === '/api/ui-design/screenshot') {
       const _mToken = req.headers['x-member-token'];
-      if (!_mToken || !memberSessions.has(_mToken)) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Authentication required — please sign in' })); return; }
+      if (!_mToken || !memberSessions.has(_mToken)) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Authentication required â€” please sign in' })); return; }
       try {
         const { url } = JSON.parse(body);
         if (!isValidHttpUrl(url)) throw new Error('Invalid URL');
@@ -1373,7 +1373,7 @@ const server = http.createServer((req, res) => {
         });
         const imgBuf = fs.readFileSync(outPath);
         try { fs.unlinkSync(outPath); } catch {}
-        console.log('[UID] Screenshot ok — size:', imgBuf.length, 'bytes');
+        console.log('[UID] Screenshot ok â€” size:', imgBuf.length, 'bytes');
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ imageBase64: imgBuf.toString('base64') }));
       } catch (e) {
@@ -1384,13 +1384,13 @@ const server = http.createServer((req, res) => {
       return;
     }
 
-    /* ── /api/ui-design/analyze ── */
+    /* â”€â”€ /api/ui-design/analyze â”€â”€ */
     if (req.method === 'POST' && req.url === '/api/ui-design/analyze') {
       const _mToken = req.headers['x-member-token'];
-      if (!_mToken || !memberSessions.has(_mToken)) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Authentication required — please sign in' })); return; }
+      if (!_mToken || !memberSessions.has(_mToken)) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Authentication required â€” please sign in' })); return; }
       const tmpPaths = [];
       try {
-        const { figmaImageBase64, screenshotBase64, pageUrl, figmaUrl, mode, jiraTicketKey, storyRequirements, storyFileImages } = JSON.parse(body);
+        const { figmaImageBase64, screenshotBase64, pageUrl, figmaUrl, mode, jiraTicketKey, storyRequirements, storyFileImages, svgAssetNames } = JSON.parse(body);
         const linkedIssue = jiraTicketKey || 'UNMAPPED';
         const saveImg = (b64, prefix) => {
           const p = path.join(os.tmpdir(), prefix + crypto.randomBytes(6).toString('hex') + '.png');
@@ -1414,36 +1414,36 @@ const server = http.createServer((req, res) => {
             }
           }
           const allImagePaths = [figmaPath, ...storyImgPaths];
-          console.log('[UID] Generating test cases — images:', allImagePaths.length, storyImgPaths.length > 0 ? `(+${storyImgPaths.length} reference)` : '');
+          console.log('[UID] Generating test cases â€” images:', allImagePaths.length, storyImgPaths.length > 0 ? `(+${storyImgPaths.length} reference)` : '');
           const prompt = `You are a world-class Senior QA Engineer & Business Analyst. Analyze the provided Figma UI design image${storyImgPaths.length > 0 ? ` and the ${storyImgPaths.length} additional reference image(s)` : ''} and generate a highly optimized, production-ready, maintainable Test Suite. Prioritize risk-based testing, data integrity, and system stability over high test case counts.
 
 CONTEXT:
 - Live Page URL: ${pageUrl || 'Not specified'}
 - Figma Design Source: ${figmaUrl || 'Not specified'}
-- Linked Jira Story: ${linkedIssue}${storyImgPaths.length > 0 ? `\n- Reference Images Provided: ${storyImgPaths.length} additional image(s) — treat as supplementary design/requirement visuals` : ''}${storyRequirements ? `
+- Linked Jira Story: ${linkedIssue}${storyImgPaths.length > 0 ? `\n- Reference Images Provided: ${storyImgPaths.length} additional image(s) â€” treat as supplementary design/requirement visuals` : ''}${storyRequirements ? `
 - Story Requirements / Acceptance Criteria:
-${storyRequirements.split('\n').map(l => '  ' + l).join('\n')}` : ''}
+${storyRequirements.split('\n').map(l => '  ' + l).join('\n')}` : ''}${Array.isArray(svgAssetNames)&&svgAssetNames.length>0?`\n- SVG Icon Assets (${svgAssetNames.length} files): ${svgAssetNames.join(', ')}\n  These are the actual SVG icon/asset files used in the design. Generate test cases that verify each icon referenced in the Figma design matches the correct SVG asset.`:''}
 
 # Step 1: Deep Analysis (Pre-Generation)
 Analyze the Figma design image${storyRequirements ? ' AND cross-reference the Story Requirements provided in CONTEXT' : ''} and extract:
-- Acceptance Criteria: ${storyRequirements ? 'map every AC from the requirements above to at least 2 test cases each — missing an AC is a defect' : 'extract from the design and any visible text/labels'}
+- Acceptance Criteria: ${storyRequirements ? 'map every AC from the requirements above to at least 2 test cases each â€” missing an AC is a defect' : 'extract from the design and any visible text/labels'}
 - Implicit Business Rules: unspoken logic, dependencies, state transitions visible in the design
 - Data Flows & Constraints: field validations, boundaries, duplicates, permissions
 - Regression Impact: effect on existing workflows and integrations
 - Integration & SSO Dependencies: session expiry, token refresh, third-party redirects, behavior on timeout/failure
 - Localization/RTL: this platform supports Arabic ONLY. Never generate English-language test cases. Validate Arabic rendering, full RTL layout integrity, mixed-direction content (LTR tokens such as URLs, protocol names, emails, and digits embedded inside Arabic sentences), correct punctuation placement in RTL context, truncation, and overflow.
-- Figma Design Token Extraction (MANDATORY) — extract and document every element on every visible screen and state:
+- Figma Design Token Extraction (MANDATORY) â€” extract and document every element on every visible screen and state:
   * Typography: font family, size (px), weight, line height, text color (exact hex), alignment (right/left/center), decoration, transform
-  * Colors: exact hex of every background, text, icon, border, divider, overlay, and state color — NEVER describe by name only
+  * Colors: exact hex of every background, text, icon, border, divider, overlay, and state color â€” NEVER describe by name only
   * Spacing & Layout: padding of every container (top/right/bottom/left), margins and gaps, alignment, stacking order, grid/flex arrangement
   * Dimensions: width/height of components, bars, icons, badges, buttons; border radius; border width and color; shadows
   * Icons & Images: icon size, color, stroke vs fill, container shape, exact placement relative to text
-  * Interactive Elements: every button, input, dropdown, checkbox, toggle, link — with ALL states (default, hover, pressed, focused, disabled, loading, error, success) and the visual spec of each state
+  * Interactive Elements: every button, input, dropdown, checkbox, toggle, link â€” with ALL states (default, hover, pressed, focused, disabled, loading, error, success) and the visual spec of each state
   * Conditional & System States: show/hide elements, empty, loading, error, success states
   * RTL Composition: position of every element in RTL layout (right edge vs left edge), chevron/arrow directions, icon mirroring
-  If any spec cannot be measured from the image, flag it explicitly — never guess values.
+  If any spec cannot be measured from the image, flag it explicitly â€” never guess values.
 
-# Step 2: Test Coverage — "Lean QA"
+# Step 2: Test Coverage â€” "Lean QA"
 Maximize coverage, minimize redundancy. Cover:
 1. Happy Path / core workflows
 2. Negative & edge cases
@@ -1451,17 +1451,17 @@ Maximize coverage, minimize redundancy. Cover:
 4. Data integrity & API validation
 5. Performance as testable assertions
 6. Integration & session handling
-7. Localization & RTL — Arabic-only; every mixed-direction and RTL case that carries real functional risk
-8. Figma Design Comparison — every element and property extracted in Step 1 must have at least one test case. Design-comparison test cases MUST reference the concrete expected values extracted from the design (exact hex colors, font sizes/weights, dimensions in px, alignment, spacing). Example: "Verify that the banner bar is 32px high with background #F3F4F6 and the toggle label renders in green #1B8354" — NOT "Verify that the banner matches Figma".
+7. Localization & RTL â€” Arabic-only; every mixed-direction and RTL case that carries real functional risk
+8. Figma Design Comparison â€” every element and property extracted in Step 1 must have at least one test case. Design-comparison test cases MUST reference the concrete expected values extracted from the design (exact hex colors, font sizes/weights, dimensions in px, alignment, spacing). Example: "Verify that the banner bar is 32px high with background #F3F4F6 and the toggle label renders in green #1B8354" â€” NOT "Verify that the banner matches Figma".
 
 # Step 3: Output Rules
-- Every title MUST start with "Verify that..." — descriptive with clear expected outcome
+- Every title MUST start with "Verify that..." â€” descriptive with clear expected outcome
 - Priority: High = auth/security, data loss, payment/certificate errors, broken core flows; Medium = wrong error handling, non-blocking gaps, degraded integrations; Low = cosmetic issues bundled into broader cases
 - Linked Issue: use "${linkedIssue}" for ALL test cases
 - Status: leave empty string
 - Arabic-only: Never generate English-language test cases. Unexpected English or mixed Arabic-English text in the UI is a defect.
-- For design test cases: include exact expected values (hex, px, weight, alignment) from Step 1 extraction — never generic wording
-- Ambiguous/untestable items: still output a row, stating "Verify that [behavior] — BLOCKED: [what is missing]"
+- For design test cases: include exact expected values (hex, px, weight, alignment) from Step 1 extraction â€” never generic wording
+- Ambiguous/untestable items: still output a row, stating "Verify that [behavior] â€” BLOCKED: [what is missing]"
 
 # Step 4: Self-Review (Quality Gate)
 Before finalizing, verify:
@@ -1500,13 +1500,13 @@ Return ONLY valid JSON (no markdown wrapper, no extra text):
           if (!figmaImageBase64 || !screenshotBase64) throw new Error('Both images required for comparison');
           const figmaPath = saveImg(figmaImageBase64, 'qa_uid_fg_');
           const ssPath    = saveImg(screenshotBase64,  'qa_uid_ss_');
-          console.log('[UID] Comparing Figma design vs implementation…');
+          console.log('[UID] Comparing Figma design vs implementationâ€¦');
           const prompt = `You are a Senior QA Engineer performing a visual regression test.\n\nThe FIRST image is the Figma design (expected).\nThe SECOND image is a live screenshot of the implementation at: ${pageUrl || 'the page'}.\n\nCompare these two images thoroughly and identify ALL visual discrepancies.\n\nReturn ONLY valid JSON in this exact structure, no markdown, no extra text:\n{\n  "summary": "Brief overall assessment of visual fidelity",\n  "passRate": 75,\n  "bugs": [\n    {\n      "id": "VB-001",\n      "title": "Short descriptive bug title",\n      "severity": "Critical|High|Medium|Low",\n      "area": "Layout|Typography|Colors|Spacing|Missing Element|Extra Element|Buttons|Forms|Icons|Images",\n      "description": "Detailed description of the discrepancy",\n      "expected": "What the Figma design shows",\n      "actual": "What the live implementation shows",\n      "recommendation": "Specific fix recommendation"\n    }\n  ]\n}\n\nCheck: layout/alignment, typography (size/weight/family), colors (exact values), spacing (padding/margin), missing/extra elements, button styles, form inputs, icons, images, overall design consistency.`;
           const text = await callClaudeWithImages(prompt, [figmaPath, ssPath]);
           const jsonMatch = text.match(/\{[\s\S]*\}/);
           if (!jsonMatch) throw new Error('AI returned invalid format');
           const result = JSON.parse(jsonMatch[0]);
-          console.log('[UID] Comparison done — bugs found:', result.bugs?.length || 0);
+          console.log('[UID] Comparison done â€” bugs found:', result.bugs?.length || 0);
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify(result));
         }
@@ -1520,15 +1520,15 @@ Return ONLY valid JSON (no markdown wrapper, no extra text):
       return;
     }
 
-    /* ── /api/ui-design/generate-scripts ───────────────────────────────── */
+    /* â”€â”€ /api/ui-design/generate-scripts â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
     if (req.method === 'POST' && req.url === '/api/ui-design/generate-scripts') {
       const _mToken = req.headers['x-member-token'];
-      if (!_mToken || !memberSessions.has(_mToken)) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Authentication required — please sign in' })); return; }
+      if (!_mToken || !memberSessions.has(_mToken)) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Authentication required â€” please sign in' })); return; }
       try {
           const { testCases = [], pageUrl = '', figmaUrl = '', projectName = 'Doroob', demandName = 'Feature', jiraTicketKey = '' } = JSON.parse(body);
           const safeSlug = demandName.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '');
           const tcList = testCases.map(tc =>
-            `  TC-ID: ${tc.id}\n  Title: ${tc.title}\n  Priority: ${tc.priority||'Medium'}\n  Area: ${tc.area||'UI'}\n  Preconditions: ${tc.preconditions||'User is authenticated'}\n  Steps: ${(tc.steps||[]).join(' → ')}\n  Expected: ${tc.expected||''}`
+            `  TC-ID: ${tc.id}\n  Title: ${tc.title}\n  Priority: ${tc.priority||'Medium'}\n  Area: ${tc.area||'UI'}\n  Preconditions: ${tc.preconditions||'User is authenticated'}\n  Steps: ${(tc.steps||[]).join(' â†’ ')}\n  Expected: ${tc.expected||''}`
           ).join('\n\n');
 
           const prompt = `You are a world-class Senior QA Automation Engineer working on the ${projectName} platform. Your objective is NOT to write scripts as quickly as possible. Your objective is to write production-ready, maintainable, and reliable Playwright automation scripts that compare the live implementation against the Figma design, detect visual and functional defects, and reflect execution results back onto the test cases sheet.
@@ -1565,7 +1565,7 @@ SCRIPT WRITING RULES:
 6. STRONG assertions ONLY: toHaveText(), toHaveURL(), toContainText(), toHaveValue(), toBeChecked(), toHaveCount(), toHaveCSS() for design assertions.
 7. For design comparison assertions, use toHaveCSS() with exact values extracted from the Figma specs in the test case (e.g. toHaveCSS('background-color', 'rgb(...)'), toHaveCSS('font-size', '16px')).
 
-STRICT PASS/FAIL CRITERIA — treat any of the following as a failure:
+STRICT PASS/FAIL CRITERIA â€” treat any of the following as a failure:
 - Broken layout or incorrect alignment vs Figma
 - Incorrect colors, fonts, or spacing vs exact Figma values
 - Missing/incorrect button labels
@@ -1578,7 +1578,7 @@ STRICT PASS/FAIL CRITERIA — treat any of the following as a failure:
 - Incorrect or missing validation messages
 - Any visual or functional difference between the Figma design and the live implementation
 
-BUG HUNTING MINDSET — in every test, challenge the implementation:
+BUG HUNTING MINDSET â€” in every test, challenge the implementation:
 - What could break? What assumptions is the developer making?
 - Can validation be bypassed? Can permissions be bypassed?
 - Can browser refresh break the flow? Can multiple tabs cause problems?
@@ -1593,7 +1593,7 @@ ${tcList}
 
 Generate exactly THREE files.
 
-FILE 1 — playwright.config.ts (at project root):
+FILE 1 â€” playwright.config.ts (at project root):
 Multi-browser: chromium, firefox, webkit (Safari), edge (use channel: 'msedge')
 Three viewports as projects: Desktop 1920x1080, Tablet 768x1024, Mobile 375x812
 baseURL: '${pageUrl || 'http://localhost:3000'}'
@@ -1602,7 +1602,7 @@ testDir: './${demandName}/tests'
 retries: 1 in CI, 0 locally
 use: { locale: 'ar', timezoneId: 'Asia/Riyadh', trace: 'on-first-retry', screenshot: 'only-on-failure' }
 
-FILE 2 — ${demandName}/pages/${safeSlug}.page.ts:
+FILE 2 â€” ${demandName}/pages/${safeSlug}.page.ts:
 Page Object class "${demandName.replace(/\s+/g,'').replace(/[^a-zA-Z0-9]/g,'')}Page"
 Import Page, Locator from @playwright/test
 Define every selector referenced in the test cases as a readonly Locator
@@ -1610,10 +1610,10 @@ Encapsulate every action (click, fill, navigate, assert) as an async method
 Strict locator priority: getByRole > getByLabel > getByPlaceholder > getByTestId > getByText
 Include a verifyDesignToken(locator: Locator, property: string, expectedValue: string) helper that calls expect(locator).toHaveCSS(property, expectedValue)
 
-FILE 3 — ${demandName}/tests/${safeSlug}.spec.ts:
+FILE 3 â€” ${demandName}/tests/${safeSlug}.spec.ts:
 Import test, expect from @playwright/test
 Import the Page Object
-test.describe('${demandName}${jiraTicketKey?' — '+jiraTicketKey:''}', () => { ... })
+test.describe('${demandName}${jiraTicketKey?' â€” '+jiraTicketKey:''}', () => { ... })
 One test() per test case. Title = TC-ID + test title.
 beforeEach: instantiate page object, navigate to page
 For EVERY test:
@@ -1654,10 +1654,10 @@ Return ONLY valid JSON (no markdown wrapper, no extra text):
 server.listen(PORT, () => {
   console.log('');
   console.log('  QA AI Platform is running');
-  console.log('  App  → http://localhost:' + PORT + '/');
-  console.log('  AI   → http://localhost:' + PORT + '/api/ai   (Anthropic direct)');
-  console.log('  Jira → http://localhost:' + PORT + '/api/jira');
-  console.log('  Perf → http://localhost:' + PORT + '/api/perf');
+  console.log('  App  â†’ http://localhost:' + PORT + '/');
+  console.log('  AI   â†’ http://localhost:' + PORT + '/api/ai   (Anthropic direct)');
+  console.log('  Jira â†’ http://localhost:' + PORT + '/api/jira');
+  console.log('  Perf â†’ http://localhost:' + PORT + '/api/perf');
   console.log('');
   console.log('  Open http://localhost:' + PORT + '/ in your browser.');
   console.log('  Press Ctrl+C to stop.');
