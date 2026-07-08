@@ -2230,7 +2230,7 @@ OVERALL STORY READINESS FOR QA:
               }
               setUidFigmaImg(figmaBase64);
               setUidLoadMsg("Generating UI test cases from design…");
-              const r2=await fetch(API_BASE+"/api/ui-design/analyze",{method:"POST",headers:{"Content-Type":"application/json","X-Member-Token":sessionStorage.getItem(MEMBER_TOKEN_KEY)||""},body:JSON.stringify({figmaImageBase64:figmaBase64,pageUrl:uidForm.pageUrl,figmaUrl:uidForm.figmaUrl||"",mode:"generate-cases"})});
+              const r2=await fetch(API_BASE+"/api/ui-design/analyze",{method:"POST",headers:{"Content-Type":"application/json","X-Member-Token":sessionStorage.getItem(MEMBER_TOKEN_KEY)||""},body:JSON.stringify({figmaImageBase64:figmaBase64,pageUrl:uidForm.pageUrl,figmaUrl:uidForm.figmaUrl||"",mode:"generate-cases",jiraTicketKey:uidJiraTicketKey||""})});
               const d2=await r2.json();
               if(d2.error)throw new Error(d2.error);
               const cases=(d2.testCases||[]).map((c,i)=>({...c,id:c.id||"TC-"+String(i+1).padStart(3,"0"),status:"pending"}));
@@ -2347,11 +2347,11 @@ OVERALL STORY READINESS FOR QA:
           const approved=uidCases.filter(c=>c.status==="approved");
           const pending=uidCases.filter(c=>c.status==="pending");
           const exportUidExcel=()=>{
-            const header=["ID","Title","Area","Priority","Preconditions","Steps","Expected Result","Automatable"];
-            const rows=[header,...uidCases.filter(c=>c.status!=="rejected").map(c=>[c.id,c.title,c.area||"UI",c.priority||"Medium",c.preconditions||"",(c.steps||[]).join(" | "),c.expected||"",c.automatable!==false?"Yes":"No"])];
+            const header=["ID","Summary","Linked Issue","Priority","Status","Area","Preconditions","Steps","Expected Result","Automatable"];
+            const rows=[header,...uidCases.filter(c=>c.status!=="rejected").map(c=>[c.id,c.title,c.linkedIssue||uidJiraTicketKey||"UNMAPPED",c.priority||"Medium","",c.area||"UI",c.preconditions||"",(c.steps||[]).join(" | "),c.expected||"",c.automatable!==false?"Yes":"No"])];
             const wb=XLSX.utils.book_new();
             const ws=XLSX.utils.aoa_to_sheet(rows);
-            ws["!cols"]=[{wch:10},{wch:50},{wch:18},{wch:10},{wch:30},{wch:60},{wch:50},{wch:12}];
+            ws["!cols"]=[{wch:10},{wch:55},{wch:14},{wch:10},{wch:10},{wch:18},{wch:30},{wch:60},{wch:50},{wch:12}];
             const range=XLSX.utils.decode_range(ws["!ref"]);
             for(let c=range.s.c;c<=range.e.c;c++){const cell=ws[XLSX.utils.encode_cell({r:0,c})];if(cell)cell.s={font:{bold:true},fill:{fgColor:{rgb:"D9E1F2"}}};}
             XLSX.utils.book_append_sheet(wb,ws,"UI Test Cases");
@@ -2422,11 +2422,14 @@ OVERALL STORY READINESS FOR QA:
                     <div style={{flex:1,minWidth:0}}>
                       <div style={{display:"flex",gap:6,alignItems:"center",marginBottom:4,flexWrap:"wrap"}}>
                         <Tag c="blue">{c.id}</Tag>
-                        <Tag c={c.priority==="Critical"||c.priority==="High"?sevColor(c.priority):"blue"}>{c.priority||"Medium"}</Tag>
+                        <Tag c={c.priority==="High"?"red":c.priority==="Critical"?"red":c.priority==="Medium"?"amber":"blue"}>{c.priority||"Medium"}</Tag>
                         <Tag>{c.area||"UI"}</Tag>
+                        {(c.linkedIssue&&c.linkedIssue!=="UNMAPPED")&&<Tag c="green">{c.linkedIssue}</Tag>}
+                        {c.linkedIssue==="UNMAPPED"&&<Tag c="amber">UNMAPPED</Tag>}
                       </div>
-                      <div style={{fontWeight:500,fontSize:13,marginBottom:4}}>{c.title}</div>
-                      {c.steps?.length>0&&<div style={{fontSize:12,color:"var(--color-text-secondary)"}}><b>Steps:</b> {c.steps.join(" → ")}</div>}
+                      <div style={{fontWeight:500,fontSize:13,marginBottom:6}}>{c.title}</div>
+                      {c.preconditions&&<div style={{fontSize:12,color:"var(--color-text-tertiary)",marginBottom:4}}><b>Preconditions:</b> {c.preconditions}</div>}
+                      {c.steps?.length>0&&<div style={{fontSize:12,color:"var(--color-text-secondary)",marginBottom:2}}><b>Steps:</b> {c.steps.join(" → ")}</div>}
                       {c.expected&&<div style={{fontSize:12,color:"var(--color-text-secondary)",marginTop:2}}><b>Expected:</b> {c.expected}</div>}
                     </div>
                     <div style={{display:"flex",gap:6,flexShrink:0}}>

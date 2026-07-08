@@ -1390,7 +1390,8 @@ const server = http.createServer((req, res) => {
       if (!_mToken || !memberSessions.has(_mToken)) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Authentication required — please sign in' })); return; }
       const tmpPaths = [];
       try {
-        const { figmaImageBase64, screenshotBase64, pageUrl, figmaUrl, mode } = JSON.parse(body);
+        const { figmaImageBase64, screenshotBase64, pageUrl, figmaUrl, mode, jiraTicketKey } = JSON.parse(body);
+        const linkedIssue = jiraTicketKey || 'UNMAPPED';
         const saveImg = (b64, prefix) => {
           const p = path.join(os.tmpdir(), prefix + crypto.randomBytes(6).toString('hex') + '.png');
           fs.writeFileSync(p, Buffer.from(b64, 'base64'));
@@ -1401,7 +1402,78 @@ const server = http.createServer((req, res) => {
           if (!figmaImageBase64) throw new Error('figmaImageBase64 required');
           const figmaPath = saveImg(figmaImageBase64, 'qa_uid_fg_');
           console.log('[UID] Generating test cases from Figma design…');
-          const prompt = `You are a Senior QA Engineer. I am showing you a Figma UI design mockup.\n\nAnalyze this design carefully and generate comprehensive UI test cases covering: layout, typography, colors, buttons, forms, navigation, spacing, responsiveness, and accessibility.\n\nPage URL: ${pageUrl || 'Not specified'}\nFigma source: ${figmaUrl || 'Not specified'}\n\nReturn ONLY valid JSON in this exact structure, no markdown, no extra text:\n{\n  "testCases": [\n    {\n      "id": "TC-001",\n      "title": "Verify [specific element or behavior]",\n      "type": "ui",\n      "priority": "Critical|High|Medium|Low",\n      "area": "Layout|Typography|Colors|Buttons|Forms|Navigation|Spacing|Responsiveness|Accessibility",\n      "preconditions": "User is on the target page",\n      "steps": ["Step 1: Navigate to the page URL", "Step 2: ..."],\n      "expected": "Expected visible result...",\n      "automatable": true\n    }\n  ]\n}\n\nRules:\n- Every title MUST start with "Verify"\n- Generate at least 20 test cases covering all visible UI elements\n- Include checks for: element presence, correct positioning, text/labels accuracy, color fidelity, interactive states, responsive behavior, accessibility`;
+          const prompt = `You are a world-class Senior QA Engineer & Business Analyst. Analyze the provided Figma UI design image and generate a highly optimized, production-ready, maintainable Test Suite. Prioritize risk-based testing, data integrity, and system stability over high test case counts.
+
+CONTEXT:
+- Live Page URL: ${pageUrl || 'Not specified'}
+- Figma Design Source: ${figmaUrl || 'Not specified'}
+- Linked Jira Story: ${linkedIssue}
+
+# Step 1: Deep Analysis (Pre-Generation)
+Analyze the Figma design image and extract:
+- Implicit Business Rules: unspoken logic, dependencies, state transitions visible in the design
+- Data Flows & Constraints: field validations, boundaries, duplicates, permissions
+- Regression Impact: effect on existing workflows and integrations
+- Integration & SSO Dependencies: session expiry, token refresh, third-party redirects, behavior on timeout/failure
+- Localization/RTL: this platform supports Arabic ONLY. Never generate English-language test cases. Validate Arabic rendering, full RTL layout integrity, mixed-direction content (LTR tokens such as URLs, protocol names, emails, and digits embedded inside Arabic sentences), correct punctuation placement in RTL context, truncation, and overflow.
+- Figma Design Token Extraction (MANDATORY) — extract and document every element on every visible screen and state:
+  * Typography: font family, size (px), weight, line height, text color (exact hex), alignment (right/left/center), decoration, transform
+  * Colors: exact hex of every background, text, icon, border, divider, overlay, and state color — NEVER describe by name only
+  * Spacing & Layout: padding of every container (top/right/bottom/left), margins and gaps, alignment, stacking order, grid/flex arrangement
+  * Dimensions: width/height of components, bars, icons, badges, buttons; border radius; border width and color; shadows
+  * Icons & Images: icon size, color, stroke vs fill, container shape, exact placement relative to text
+  * Interactive Elements: every button, input, dropdown, checkbox, toggle, link — with ALL states (default, hover, pressed, focused, disabled, loading, error, success) and the visual spec of each state
+  * Conditional & System States: show/hide elements, empty, loading, error, success states
+  * RTL Composition: position of every element in RTL layout (right edge vs left edge), chevron/arrow directions, icon mirroring
+  If any spec cannot be measured from the image, flag it explicitly — never guess values.
+
+# Step 2: Test Coverage — "Lean QA"
+Maximize coverage, minimize redundancy. Cover:
+1. Happy Path / core workflows
+2. Negative & edge cases
+3. Security & permissions
+4. Data integrity & API validation
+5. Performance as testable assertions
+6. Integration & session handling
+7. Localization & RTL — Arabic-only; every mixed-direction and RTL case that carries real functional risk
+8. Figma Design Comparison — every element and property extracted in Step 1 must have at least one test case. Design-comparison test cases MUST reference the concrete expected values extracted from the design (exact hex colors, font sizes/weights, dimensions in px, alignment, spacing). Example: "Verify that the banner bar is 32px high with background #F3F4F6 and the toggle label renders in green #1B8354" — NOT "Verify that the banner matches Figma".
+
+# Step 3: Output Rules
+- Every title MUST start with "Verify that..." — descriptive with clear expected outcome
+- Priority: High = auth/security, data loss, payment/certificate errors, broken core flows; Medium = wrong error handling, non-blocking gaps, degraded integrations; Low = cosmetic issues bundled into broader cases
+- Linked Issue: use "${linkedIssue}" for ALL test cases
+- Status: leave empty string
+- Arabic-only: Never generate English-language test cases. Unexpected English or mixed Arabic-English text in the UI is a defect.
+- For design test cases: include exact expected values (hex, px, weight, alignment) from Step 1 extraction — never generic wording
+- Ambiguous/untestable items: still output a row, stating "Verify that [behavior] — BLOCKED: [what is missing]"
+
+# Step 4: Self-Review (Quality Gate)
+Before finalizing, verify:
+- Every extracted design property group (typography, colors, spacing, alignment, dimensions, icons, interactive states) is covered or flagged BLOCKED
+- Every boundary value (min/max/empty/null/duplicate) has a row
+- Every summary starts with "Verify that..."
+- No duplicate validations
+- No English-language test cases (Arabic-only platform)
+- Design test cases lacking concrete expected values are rewritten with exact specs or flagged BLOCKED
+
+Return ONLY valid JSON (no markdown wrapper, no extra text):
+{
+  "testCases": [
+    {
+      "id": "TC-001",
+      "title": "Verify that...",
+      "type": "ui",
+      "priority": "High|Medium|Low",
+      "area": "Layout|Typography|Colors|Buttons|Forms|Navigation|Spacing|RTL|Interactive|Accessibility|Security|Data",
+      "preconditions": "User is on the target page: ${pageUrl || ''}",
+      "steps": ["Step 1: ...", "Step 2: ..."],
+      "expected": "Detailed expected result with exact values (hex, px, weight) where applicable",
+      "automatable": true,
+      "linkedIssue": "${linkedIssue}",
+      "status": ""
+    }
+  ]
+}`;
           const text = await callClaudeWithImages(prompt, [figmaPath]);
           const jsonMatch = text.match(/\{[\s\S]*\}/);
           if (!jsonMatch) throw new Error('AI returned invalid format');
