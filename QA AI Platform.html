@@ -1309,6 +1309,8 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
   const [uidTicketSearching,setUidTicketSearching]=useState(false);
   const [uidJiraMode,setUidJiraMode]=useState("jira");
   const [uidStoryRequirements,setUidStoryRequirements]=useState("");
+  const [uidStoryFiles,setUidStoryFiles]=useState([]);
+  const [uidStoryFileDrag,setUidStoryFileDrag]=useState(false);
   const [uidEditingBugId,setUidEditingBugId]=useState(null);
   const [uidEditBugForm,setUidEditBugForm]=useState({});
   const [uidShowAddBug,setUidShowAddBug]=useState(false);
@@ -1394,15 +1396,16 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
       if(s.uidSelectedForScript?.length)setUidSelectedForScript(s.uidSelectedForScript);
       if(s.uidJiraMode)setUidJiraMode(s.uidJiraMode);
       if(s.uidStoryRequirements)setUidStoryRequirements(s.uidStoryRequirements);
+      if(s.uidStoryFiles?.length)setUidStoryFiles(s.uidStoryFiles);
     }catch{}
   },[]);
   // Save workspace state on every change
   useEffect(()=>{
     if(phase==="input"||phase==="testType"){localStorage.removeItem(WS_SNAP);return;}
-    try{localStorage.setItem(WS_SNAP,JSON.stringify({phase,testKind,sid,sdata,platform,ctypes,gapText,cases,scripts,tab,result,execLines,coverageText,sessionBugs,selectedForScripts,appUrl,uidForm,uidCases,uidVisualResult,uidFigmaImg,uidManualFigmaImg,uidJiraTicketKey,uidStoryId,uidScript,uidDemandName,uidSelectedForScript,uidJiraMode,uidStoryRequirements}));}catch{}
+    try{localStorage.setItem(WS_SNAP,JSON.stringify({phase,testKind,sid,sdata,platform,ctypes,gapText,cases,scripts,tab,result,execLines,coverageText,sessionBugs,selectedForScripts,appUrl,uidForm,uidCases,uidVisualResult,uidFigmaImg,uidManualFigmaImg,uidJiraTicketKey,uidStoryId,uidScript,uidDemandName,uidSelectedForScript,uidJiraMode,uidStoryRequirements,uidStoryFiles}));}catch{}
     // Also keep per-story cache up to date
     if(sid&&sdata)saveStoryToCache(sid,{phase,sdata,platform,ctypes,gapText,cases,scripts,result,sessionBugs,coverageText,appUrl});
-  },[phase,sid,sdata,platform,ctypes,gapText,cases,scripts,tab,result,execLines,coverageText,sessionBugs,selectedForScripts,appUrl,uidCases,uidVisualResult,uidJiraTicketKey,uidStoryId,uidScript,uidDemandName,uidSelectedForScript,uidJiraMode,uidStoryRequirements]);
+  },[phase,sid,sdata,platform,ctypes,gapText,cases,scripts,tab,result,execLines,coverageText,sessionBugs,selectedForScripts,appUrl,uidCases,uidVisualResult,uidJiraTicketKey,uidStoryId,uidScript,uidDemandName,uidSelectedForScript,uidJiraMode,uidStoryRequirements,uidStoryFiles]);
 
   // Poll codegen session status while recording
   useEffect(()=>{
@@ -1973,7 +1976,7 @@ OVERALL STORY READINESS FOR QA:
     if(testKind==="ui-design"){
       const existing=uidStoryId?DB.savedStories.find(s=>s.id===uidStoryId):null;
       const newId=existing?.id||uid();
-      const snap={id:newId,name,testKind:"ui-design",categoryId:categoryId||null,uidForm:{...uidForm},uidCases:[...uidCases],uidVisualResult:uidVisualResult?{...uidVisualResult}:null,uidFigmaImg,uidManualFigmaImg,uidJiraTicketKey,uidScript:{...uidScript},uidDemandName,uidSelectedForScript:[...uidSelectedForScript],uidJiraMode,uidStoryRequirements,projectId:proj?.id||"",savedAt:Date.now()};
+      const snap={id:newId,name,testKind:"ui-design",categoryId:categoryId||null,uidForm:{...uidForm},uidCases:[...uidCases],uidVisualResult:uidVisualResult?{...uidVisualResult}:null,uidFigmaImg,uidManualFigmaImg,uidJiraTicketKey,uidScript:{...uidScript},uidDemandName,uidSelectedForScript:[...uidSelectedForScript],uidJiraMode,uidStoryRequirements,uidStoryFiles:[...uidStoryFiles],projectId:proj?.id||"",savedAt:Date.now()};
       if(existing){DB.savedStories=DB.savedStories.map(s=>s.id===existing.id?snap:s);}
       else{DB.savedStories.unshift(snap);}
       saveDB();if(refreshSaved)refreshSaved();setUidStoryId(newId);setHasSaved(true);setSaveModal(null);showToast("Session saved successfully");
@@ -2019,6 +2022,7 @@ OVERALL STORY READINESS FOR QA:
       if(snap.uidSelectedForScript?.length)setUidSelectedForScript(snap.uidSelectedForScript);
       if(snap.uidJiraMode)setUidJiraMode(snap.uidJiraMode);
       if(snap.uidStoryRequirements)setUidStoryRequirements(snap.uidStoryRequirements);
+      if(snap.uidStoryFiles?.length)setUidStoryFiles(snap.uidStoryFiles);
       const hasScript=snap.uidScript?.spec||snap.uidScript?.config;
       const lastPhase=snap.uidVisualResult?"uidResults":hasScript?"uidRun":snap.uidCases?.length?"uidCases":"uidSetup";
       setPhase(lastPhase);
@@ -2154,7 +2158,7 @@ OVERALL STORY READINESS FOR QA:
         {testKind==="non-functional"&&(phase==="perfTest"||phase==="perfResult")&&<button onClick={resetPerf} style={ghostBtn} title="Start a new performance test">↩ New Test</button>}
         {testKind==="non-functional"&&(phase==="perfTest"||phase==="perfResult")&&<button onClick={()=>setPerfChat(o=>!o)} style={ghostBtn}>{perfChat?"Hide chat":"🤖 AI Chat"}</button>}
         {testKind==="ui-design"&&(phase==="uidSetup"||phase==="uidCases"||phase==="uidRun"||phase==="uidResults"||phase==="uidBugs")&&<button onClick={openSaveModal} style={ghostBtn} title="Save current session to history">💾 Save</button>}
-        {testKind==="ui-design"&&phase!=="uidJiraTicket"&&<button onClick={()=>{setTestKind("ui-design");setPhase("uidJiraTicket");setUidCases([]);setUidVisualResult(null);setUidFigmaImg(null);setUidScreenshotImg(null);setUidJiraStatus({});setUidManualFigmaImg(null);setUidJiraTicketKey("");setUidAiotestStatus({importing:false,done:false,error:""});setUidTicketSearch("");setUidTicketResults([]);setUidTicketSearching(false);setUidStoryId(null);setUidJiraMode("jira");setUidStoryRequirements("");}} style={ghostBtn} title="Start a new UI design test">↩ New Test</button>}
+        {testKind==="ui-design"&&phase!=="uidJiraTicket"&&<button onClick={()=>{setTestKind("ui-design");setPhase("uidJiraTicket");setUidCases([]);setUidVisualResult(null);setUidFigmaImg(null);setUidScreenshotImg(null);setUidJiraStatus({});setUidManualFigmaImg(null);setUidJiraTicketKey("");setUidAiotestStatus({importing:false,done:false,error:""});setUidTicketSearch("");setUidTicketResults([]);setUidTicketSearching(false);setUidStoryId(null);setUidJiraMode("jira");setUidStoryRequirements("");setUidStoryFiles([]);}} style={ghostBtn} title="Start a new UI design test">↩ New Test</button>}
       </div>
     </div>
     <StepBar steps={WS_STEPS} cur={WS_IDX[phase]??0} onStepClick={goToStep}/>
@@ -2250,7 +2254,10 @@ OVERALL STORY READINESS FOR QA:
               }
               setUidFigmaImg(figmaBase64);
               setUidLoadMsg("Generating UI test cases from design…");
-              const r2=await fetch(API_BASE+"/api/ui-design/analyze",{method:"POST",headers:{"Content-Type":"application/json","X-Member-Token":sessionStorage.getItem(MEMBER_TOKEN_KEY)||""},body:JSON.stringify({figmaImageBase64:figmaBase64,pageUrl:uidForm.pageUrl,figmaUrl:uidForm.figmaUrl||"",mode:"generate-cases",jiraTicketKey:uidJiraTicketKey||"",storyRequirements:uidStoryRequirements||""})});
+              const txtFileContents=uidStoryFiles.filter(f=>!f.isImg&&f.textContent).map(f=>`--- ${f.name} ---\n${f.textContent}`).join("\n\n");
+              const combinedReqs=[uidStoryRequirements,txtFileContents].filter(Boolean).join("\n\n");
+              const storyFileImages=uidStoryFiles.filter(f=>f.isImg).map(f=>({name:f.name,base64:f.base64}));
+              const r2=await fetch(API_BASE+"/api/ui-design/analyze",{method:"POST",headers:{"Content-Type":"application/json","X-Member-Token":sessionStorage.getItem(MEMBER_TOKEN_KEY)||""},body:JSON.stringify({figmaImageBase64:figmaBase64,pageUrl:uidForm.pageUrl,figmaUrl:uidForm.figmaUrl||"",mode:"generate-cases",jiraTicketKey:uidJiraTicketKey||"",storyRequirements:combinedReqs,storyFileImages})});
               const d2=await r2.json();
               if(d2.error)throw new Error(d2.error);
               const cases=(d2.testCases||[]).map((c,i)=>({...c,id:c.id||"TC-"+String(i+1).padStart(3,"0"),status:"pending"}));
@@ -2372,20 +2379,96 @@ OVERALL STORY READINESS FOR QA:
             </div>}
 
             {/* Story requirements panel */}
-            {uidJiraMode==="requirements"&&<div style={card}>
-              <Lbl>Story Requirements / Acceptance Criteria</Lbl>
-              <textarea
-                style={{...ta,minHeight:200,fontFamily:"inherit",fontSize:13,lineHeight:1.6}}
-                value={uidStoryRequirements}
-                onChange={e=>setUidStoryRequirements(e.target.value)}
-                placeholder={"Paste the user story, acceptance criteria, or feature requirements here.\n\nExample:\nAs a user, I want to see a dashboard...\n\nAC-1: The page must display a header with...\nAC-2: The navigation must be RTL...\nAC-3: Color scheme must match brand guidelines (#1B8354)..."}
-              />
-              <div style={{marginTop:6,fontSize:11,color:"var(--color-text-tertiary)"}}>These requirements will be used as additional context when generating test cases alongside the Figma design.</div>
-              {uidStoryRequirements.trim().length>0&&<div style={{marginTop:8,display:"flex",gap:8,alignItems:"center"}}>
-                <Tag c="green">✓ {uidStoryRequirements.trim().split(/\n/).length} lines · {uidStoryRequirements.trim().length} chars</Tag>
-                <button onClick={()=>setUidStoryRequirements("")} style={{...ghostBtn,fontSize:11,padding:"2px 8px"}}>Clear</button>
-              </div>}
-            </div>}
+            {uidJiraMode==="requirements"&&(()=>{
+              const handleStoryFiles=files=>{
+                Array.from(files).forEach(file=>{
+                  const isImg=file.type.startsWith("image/");
+                  const isTxt=file.type==="text/plain"||file.name.endsWith(".md")||file.name.endsWith(".csv")||file.name.endsWith(".txt");
+                  if(!isImg&&!isTxt){alert(`"${file.name}" is not supported. Upload images (PNG/JPG/WebP) or text files (TXT/MD/CSV).`);return;}
+                  const reader=new FileReader();
+                  if(isImg){
+                    reader.readAsDataURL(file);
+                    reader.onload=()=>{
+                      const base64=reader.result.split(",")[1];
+                      setUidStoryFiles(prev=>[...prev,{id:uid(),name:file.name,size:file.size,type:file.type,base64,isImg:true,textContent:null,preview:reader.result}]);
+                    };
+                  }else{
+                    reader.readAsText(file);
+                    reader.onload=()=>{
+                      setUidStoryFiles(prev=>[...prev,{id:uid(),name:file.name,size:file.size,type:file.type,base64:null,isImg:false,textContent:reader.result,preview:null}]);
+                    };
+                  }
+                });
+              };
+              const fmtSize=b=>b>1048576?(b/1048576).toFixed(1)+"MB":b>1024?(b/1024).toFixed(0)+"KB":b+"B";
+              const imgFiles=uidStoryFiles.filter(f=>f.isImg);
+              const txtFiles=uidStoryFiles.filter(f=>!f.isImg);
+              return <div style={card}>
+                <Lbl>Story Requirements / Acceptance Criteria</Lbl>
+                <textarea
+                  style={{...ta,minHeight:180,fontFamily:"inherit",fontSize:13,lineHeight:1.6}}
+                  value={uidStoryRequirements}
+                  onChange={e=>setUidStoryRequirements(e.target.value)}
+                  placeholder={"Paste the user story, acceptance criteria, or feature requirements here.\n\nExample:\nAs a user, I want to see a dashboard...\n\nAC-1: The page must display a header with...\nAC-2: The navigation must be RTL...\nAC-3: Color scheme must match brand guidelines (#1B8354)..."}
+                />
+                {uidStoryRequirements.trim().length>0&&<div style={{marginTop:6,display:"flex",gap:8,alignItems:"center"}}>
+                  <Tag c="green">✓ {uidStoryRequirements.trim().split(/\n/).length} lines · {uidStoryRequirements.trim().length} chars</Tag>
+                  <button onClick={()=>setUidStoryRequirements("")} style={{...ghostBtn,fontSize:11,padding:"2px 8px"}}>Clear</button>
+                </div>}
+
+                {/* File upload zone */}
+                <div style={{marginTop:14}}>
+                  <Lbl>Attach Reference Files (Optional)</Lbl>
+                  <div
+                    onDragOver={e=>{e.preventDefault();setUidStoryFileDrag(true);}}
+                    onDragLeave={()=>setUidStoryFileDrag(false)}
+                    onDrop={e=>{e.preventDefault();setUidStoryFileDrag(false);handleStoryFiles(e.dataTransfer.files);}}
+                    onClick={()=>document.getElementById("uidStoryFileInput").click()}
+                    style={{border:"2px dashed "+(uidStoryFileDrag?"var(--color-accent)":"var(--color-border-secondary)"),borderRadius:8,padding:"18px 16px",textAlign:"center",cursor:"pointer",background:uidStoryFileDrag?"rgba(37,99,235,0.04)":"var(--color-background-secondary)",transition:"all 0.15s",marginBottom:8}}>
+                    <div style={{fontSize:22,marginBottom:6}}>📎</div>
+                    <div style={{fontSize:13,fontWeight:500,color:"var(--color-text-primary)"}}>Click or drag & drop files here</div>
+                    <div style={{fontSize:11,color:"var(--color-text-tertiary)",marginTop:4}}>Images (PNG, JPG, WebP, GIF) · Text files (TXT, MD, CSV)</div>
+                    <input id="uidStoryFileInput" type="file" multiple accept="image/*,.txt,.md,.csv" style={{display:"none"}} onChange={e=>{handleStoryFiles(e.target.files);e.target.value="";}}/>
+                  </div>
+
+                  {/* Image previews */}
+                  {imgFiles.length>0&&<div style={{marginBottom:10}}>
+                    <div style={{fontSize:12,fontWeight:500,color:"var(--color-text-secondary)",marginBottom:6}}>Reference Images ({imgFiles.length})</div>
+                    <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+                      {imgFiles.map(f=>(
+                        <div key={f.id} style={{position:"relative",borderRadius:8,overflow:"hidden",border:"1px solid var(--color-border-secondary)",flexShrink:0}}>
+                          <img src={f.preview} alt={f.name} style={{width:100,height:80,objectFit:"cover",display:"block"}}/>
+                          <div style={{position:"absolute",bottom:0,left:0,right:0,background:"rgba(0,0,0,0.55)",padding:"3px 6px",fontSize:10,color:"#fff",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{f.name}</div>
+                          <button onClick={()=>setUidStoryFiles(prev=>prev.filter(x=>x.id!==f.id))} style={{position:"absolute",top:3,right:3,width:18,height:18,borderRadius:"50%",background:"rgba(0,0,0,0.6)",border:"none",cursor:"pointer",color:"#fff",fontSize:11,display:"flex",alignItems:"center",justifyContent:"center",lineHeight:1}}>✕</button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>}
+
+                  {/* Text file list */}
+                  {txtFiles.length>0&&<div>
+                    <div style={{fontSize:12,fontWeight:500,color:"var(--color-text-secondary)",marginBottom:6}}>Text Files ({txtFiles.length})</div>
+                    <div style={{display:"flex",flexDirection:"column",gap:4}}>
+                      {txtFiles.map(f=>(
+                        <div key={f.id} style={{display:"flex",alignItems:"center",gap:10,padding:"7px 10px",borderRadius:6,border:"1px solid var(--color-border-tertiary)",background:"var(--color-background-secondary)"}}>
+                          <span style={{fontSize:16}}>📄</span>
+                          <div style={{flex:1,minWidth:0}}>
+                            <div style={{fontSize:12,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{f.name}</div>
+                            <div style={{fontSize:11,color:"var(--color-text-tertiary)"}}>{fmtSize(f.size)} · {f.textContent?.split("\n").length||0} lines</div>
+                          </div>
+                          <button onClick={()=>setUidStoryFiles(prev=>prev.filter(x=>x.id!==f.id))} style={{background:"none",border:"none",cursor:"pointer",color:"var(--color-text-tertiary)",fontSize:14,padding:"2px 6px"}}>✕</button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>}
+
+                  {uidStoryFiles.length>0&&<div style={{marginTop:8,padding:"8px 12px",borderRadius:6,background:"var(--color-background-info)",border:"1px solid rgba(29,78,216,0.1)",fontSize:12,color:"var(--color-text-info)"}}>
+                    {imgFiles.length>0&&<span>{imgFiles.length} image{imgFiles.length>1?"s":""} will be sent to the AI as reference visuals alongside the Figma design. </span>}
+                    {txtFiles.length>0&&<span>{txtFiles.length} text file{txtFiles.length>1?"s":""} will be appended to the requirements context.</span>}
+                  </div>}
+                </div>
+              </div>;
+            })()}
 
             <div style={{marginTop:20,display:"flex",gap:10,justifyContent:"space-between",alignItems:"center"}}>
               <button onClick={()=>setPhase("testType")} style={{...ghostBtn,fontSize:13}}>← Back</button>

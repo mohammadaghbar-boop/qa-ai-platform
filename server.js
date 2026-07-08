@@ -1390,7 +1390,7 @@ const server = http.createServer((req, res) => {
       if (!_mToken || !memberSessions.has(_mToken)) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Authentication required — please sign in' })); return; }
       const tmpPaths = [];
       try {
-        const { figmaImageBase64, screenshotBase64, pageUrl, figmaUrl, mode, jiraTicketKey, storyRequirements } = JSON.parse(body);
+        const { figmaImageBase64, screenshotBase64, pageUrl, figmaUrl, mode, jiraTicketKey, storyRequirements, storyFileImages } = JSON.parse(body);
         const linkedIssue = jiraTicketKey || 'UNMAPPED';
         const saveImg = (b64, prefix) => {
           const p = path.join(os.tmpdir(), prefix + crypto.randomBytes(6).toString('hex') + '.png');
@@ -1401,13 +1401,26 @@ const server = http.createServer((req, res) => {
         if (mode === 'generate-cases') {
           if (!figmaImageBase64) throw new Error('figmaImageBase64 required');
           const figmaPath = saveImg(figmaImageBase64, 'qa_uid_fg_');
-          console.log('[UID] Generating test cases from Figma design…');
-          const prompt = `You are a world-class Senior QA Engineer & Business Analyst. Analyze the provided Figma UI design image and generate a highly optimized, production-ready, maintainable Test Suite. Prioritize risk-based testing, data integrity, and system stability over high test case counts.
+          // Save any uploaded story reference images as temp files
+          const storyImgPaths = [];
+          if (Array.isArray(storyFileImages)) {
+            for (const sf of storyFileImages) {
+              if (sf.base64) {
+                const p = path.join(os.tmpdir(), 'qa_uid_ref_' + crypto.randomBytes(6).toString('hex') + '.png');
+                fs.writeFileSync(p, Buffer.from(sf.base64, 'base64'));
+                tmpPaths.push(p);
+                storyImgPaths.push(p);
+              }
+            }
+          }
+          const allImagePaths = [figmaPath, ...storyImgPaths];
+          console.log('[UID] Generating test cases — images:', allImagePaths.length, storyImgPaths.length > 0 ? `(+${storyImgPaths.length} reference)` : '');
+          const prompt = `You are a world-class Senior QA Engineer & Business Analyst. Analyze the provided Figma UI design image${storyImgPaths.length > 0 ? ` and the ${storyImgPaths.length} additional reference image(s)` : ''} and generate a highly optimized, production-ready, maintainable Test Suite. Prioritize risk-based testing, data integrity, and system stability over high test case counts.
 
 CONTEXT:
 - Live Page URL: ${pageUrl || 'Not specified'}
 - Figma Design Source: ${figmaUrl || 'Not specified'}
-- Linked Jira Story: ${linkedIssue}${storyRequirements ? `
+- Linked Jira Story: ${linkedIssue}${storyImgPaths.length > 0 ? `\n- Reference Images Provided: ${storyImgPaths.length} additional image(s) — treat as supplementary design/requirement visuals` : ''}${storyRequirements ? `
 - Story Requirements / Acceptance Criteria:
 ${storyRequirements.split('\n').map(l => '  ' + l).join('\n')}` : ''}
 
@@ -1477,7 +1490,7 @@ Return ONLY valid JSON (no markdown wrapper, no extra text):
     }
   ]
 }`;
-          const text = await callClaudeWithImages(prompt, [figmaPath]);
+          const text = await callClaudeWithImages(prompt, allImagePaths);
           const jsonMatch = text.match(/\{[\s\S]*\}/);
           if (!jsonMatch) throw new Error('AI returned invalid format');
           const result = JSON.parse(jsonMatch[0]);
