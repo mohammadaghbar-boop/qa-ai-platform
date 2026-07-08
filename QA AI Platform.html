@@ -1307,12 +1307,18 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
   const [uidTicketSearch,setUidTicketSearch]=useState("");
   const [uidTicketResults,setUidTicketResults]=useState([]);
   const [uidTicketSearching,setUidTicketSearching]=useState(false);
+  const [uidEditingBugId,setUidEditingBugId]=useState(null);
+  const [uidEditBugForm,setUidEditBugForm]=useState({});
+  const [uidShowAddBug,setUidShowAddBug]=useState(false);
+  const [uidAddBugForm,setUidAddBugForm]=useState({title:"",severity:"High",area:"UI",description:"",expected:"",actual:"",recommendation:""});
+  const [uidReportComment,setUidReportComment]=useState("");
+  const [uidCommentStatus,setUidCommentStatus]=useState({sending:false,done:false,error:""});
 
   // ── Step definitions (reactive: perf path gets its own shorter bar) ───────
   const WS_STEPS = testKind==="non-functional"
     ? ["Project","Test Type","Run Test","Results"]
     : testKind==="ui-design"
-      ? ["Project","Test Type","Jira Ticket","Setup","Test Cases","Run Tests","Results","Bugs"]
+      ? ["Project","Test Type","Jira Ticket","Setup","Test Cases","Run Tests","Results","Bugs","Report"]
       : ["Project","Test Type","User Story","Analysis","Generate","Review","Export","Scripts","Execute","Bug Report","Coverage"];
   const WS_IDX = {
     project:0, testType:1,
@@ -1320,7 +1326,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
     review:5, jira:6, urlPrompt:7, scriptSelect:7, autoReady:7,
     runAsk:8, running:8, result:8, bugReport:9, coverage:10,
     perfTest:2, perfResult:3,
-    uidJiraTicket:2, uidSetup:3, uidCases:4, uidRun:5, uidResults:6, uidBugs:7
+    uidJiraTicket:2, uidSetup:3, uidCases:4, uidRun:5, uidResults:6, uidBugs:7, uidReport:8
   };
 
   const doRunPerfTest=async()=>{
@@ -1929,7 +1935,7 @@ OVERALL STORY READINESS FOR QA:
   const editS=(id,si,v)=>setCases(cs=>cs.map(c=>{if(c.id!==id)return c;const s=[...c.steps];s[si]=v;return{...c,steps:s};}));
   const addStep=id=>setCases(cs=>cs.map(c=>c.id===id?{...c,steps:[...(c.steps||[]),"New step"]}:c));
   const delStep=(id,si)=>setCases(cs=>cs.map(c=>c.id===id?{...c,steps:(c.steps||[]).filter((_,i)=>i!==si)}:c));
-  const reset=()=>{localStorage.removeItem(WS_SNAP);setPhase("project");setTestKind("functional");setPerfResult(null);setPerfForm(PERF_FORM_DEFAULT);setPerfChat(false);setSid("");setSdata(null);setPlatform("web");setCtypes([]);setReadyFilter("all");setGapText("");setCases([]);setEditOn(false);setScripts({web:"",ios:"",android:""});setProjFiles(null);setExecLines([]);setResult(null);setJKey(null);setBugDone(null);setShowBugForm(false);setFixed(false);setChat(false);setShowAddCase(false);setSelectedForScripts([]);setCoverageText("");setSessionBugs([]);setHasSaved(false);setAppUrl("");setScriptCache({});setUidForm({pageUrl:"",figmaUrl:"",figmaToken:"",selectedNodeId:""});setUidCases([]);setUidVisualResult(null);setUidFigmaImg(null);setUidManualFigmaImg(null);setUidJiraTicketKey("");setUidStoryId(null);setUidJiraStatus({});setUidAiotestStatus({importing:false,done:false,error:""});};
+  const reset=()=>{localStorage.removeItem(WS_SNAP);setPhase("project");setTestKind("functional");setPerfResult(null);setPerfForm(PERF_FORM_DEFAULT);setPerfChat(false);setSid("");setSdata(null);setPlatform("web");setCtypes([]);setReadyFilter("all");setGapText("");setCases([]);setEditOn(false);setScripts({web:"",ios:"",android:""});setProjFiles(null);setExecLines([]);setResult(null);setJKey(null);setBugDone(null);setShowBugForm(false);setFixed(false);setChat(false);setShowAddCase(false);setSelectedForScripts([]);setCoverageText("");setSessionBugs([]);setHasSaved(false);setAppUrl("");setScriptCache({});setUidForm({pageUrl:"",figmaUrl:"",figmaToken:"",selectedNodeId:""});setUidCases([]);setUidVisualResult(null);setUidFigmaImg(null);setUidManualFigmaImg(null);setUidJiraTicketKey("");setUidStoryId(null);setUidJiraStatus({});setUidAiotestStatus({importing:false,done:false,error:""});setUidReportComment("");setUidCommentStatus({sending:false,done:false,error:""});};
   const resetPerf=()=>{setPerfForm(PERF_FORM_DEFAULT);setPerfResult(null);setPerfChat(false);setHasSaved(false);setPhase("perfTest");};
   const [saveModal,setSaveModal]=useState(null);
   // saveModal: null | {step:1,name:""} | {step:2,name:"",newCat:""}
@@ -2031,6 +2037,7 @@ OVERALL STORY READINESS FOR QA:
       if(i===4&&uidCases.length>0){setPhase("uidCases");return;}
       if(i===6&&uidVisualResult){setPhase("uidResults");return;}
       if(i===7&&uidVisualResult?.bugs?.length>0){setPhase("uidBugs");return;}
+      if(i===8&&uidVisualResult){setPhase("uidReport");return;}
       return;
     }
     if(i===2){setPhase("input");return;}
@@ -2488,69 +2495,234 @@ OVERALL STORY READINESS FOR QA:
           </div>;
         })()}
 
-        {/* ── UI Design: Bug JIRA import ── */}
+        {/* ── UI Design: Bug review & JIRA import ── */}
         {!uidLoading&&phase==="uidBugs"&&uidVisualResult&&(()=>{
           const bugs=uidVisualResult.bugs||[];
+          const updateBug=(id,updates)=>setUidVisualResult(prev=>({...prev,bugs:(prev.bugs||[]).map(b=>b.id===id?{...b,...updates}:b)}));
+          const deleteBug=id=>{setUidVisualResult(prev=>({...prev,bugs:(prev.bugs||[]).filter(b=>b.id!==id)}));setUidJiraStatus(prev=>{const s={...prev};delete s[id];return s;});};
+          const addNewBug=()=>{
+            const nextNum=(bugs.length+1).toString().padStart(3,"0");
+            setUidVisualResult(prev=>({...prev,bugs:[...(prev.bugs||[]),{id:"VB-"+nextNum,...uidAddBugForm}]}));
+            setUidShowAddBug(false);
+            setUidAddBugForm({title:"",severity:"High",area:"UI",description:"",expected:"",actual:"",recommendation:""});
+          };
           const importBug=async(bug)=>{
             if(!jiraConfigured){alert("No Jira session. Please configure Jira credentials in Settings.");return;}
             setUidJiraStatus(s=>({...s,[bug.id]:"importing"}));
             try{
               const descText=`Visual discrepancy found comparing Figma design vs live implementation.\n\nArea: ${bug.area}\nSeverity: ${bug.severity}\n\nExpected (Figma):\n${bug.expected}\n\nActual (Implementation):\n${bug.actual}\n\nRecommendation:\n${bug.recommendation||"See description."}\n\nPage URL: ${uidForm.pageUrl}\nFigma URL: ${uidForm.figmaUrl}${uidJiraTicketKey?"\n\nLinked Ticket: "+uidJiraTicketKey:""}`;
-              const body={fields:{project:{key:proj.jiraProjKey},summary:"[UI Design] "+bug.title,description:{type:"doc",version:1,content:[{type:"paragraph",content:[{type:"text",text:descText}]}]},issuetype:{name:"Bug"},priority:{name:bug.severity==="Critical"?"Highest":bug.severity==="High"?"High":bug.severity==="Medium"?"Medium":"Low"}}};
+              const body={fields:{project:{key:proj.jiraProjKey},summary:"[UI Design] "+bug.title,description:{type:"doc",version:1,content:[{type:"paragraph",content:[{type:"text",text:descText}]}]},issuetype:{name:"Bug"},priority:{name:bug.severity}}};
               const res=await callJira(proj,"POST","/issue",body);
-              // Link to parent Jira ticket if one was selected
-              if(uidJiraTicketKey&&res.key){
-                try{await callJira(proj,"POST","/issueLink",{type:{name:"Relates"},inwardIssue:{key:res.key},outwardIssue:{key:uidJiraTicketKey}});}catch{}
-              }
+              if(uidJiraTicketKey&&res.key){try{await callJira(proj,"POST","/issueLink",{type:{name:"Relates"},inwardIssue:{key:res.key},outwardIssue:{key:uidJiraTicketKey}});}catch{}}
               setUidJiraStatus(s=>({...s,[bug.id]:res.key||"created"}));
               syncToServer("bug",{memberId:member.id,memberName:member.name,projectId:proj?.id||"",projectName:proj?.name||"",bid:bug.id,sid:"UI-"+proj.jiraProjKey,summary:"[UI Design] "+bug.title,severity:bug.severity,jiraKey:res.key||null,status:"Open"});
             }catch(e){setUidJiraStatus(s=>({...s,[bug.id]:"error: "+e.message.slice(0,200)}));}
           };
-          const importAll=async()=>{
-            for(const b of bugs){if(!uidJiraStatus[b.id]||uidJiraStatus[b.id].startsWith("error")){await importBug(b);}}
-          };
+          const importAll=async()=>{for(const b of bugs){if(!uidJiraStatus[b.id]||uidJiraStatus[b.id].startsWith("error")){await importBug(b);}}};
+          const importedCount=Object.values(uidJiraStatus).filter(s=>s&&!s.startsWith("error")&&s!=="importing").length;
           const allDone=bugs.length>0&&bugs.every(b=>uidJiraStatus[b.id]&&!uidJiraStatus[b.id].startsWith("error")&&uidJiraStatus[b.id]!=="importing");
+          const sevC=s=>s==="Critical"||s==="High"?"red":"amber";
           return <div>
             <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16,flexWrap:"wrap",gap:8}}>
               <div><H2 style={{marginBottom:2}}>Review & Import Bugs to Jira</H2>
-                <div style={{fontSize:13,color:"var(--color-text-secondary)"}}>{bugs.length} visual bug{bugs.length!==1?"s":""} found · {Object.values(uidJiraStatus).filter(s=>s&&!s.startsWith("error")&&s!=="importing").length} imported{uidJiraTicketKey&&<> · Linked to <Tag c="blue">{uidJiraTicketKey}</Tag></>}</div>
+                <div style={{fontSize:13,color:"var(--color-text-secondary)"}}>{bugs.length} visual bug{bugs.length!==1?"s":""} found · {importedCount} imported{uidJiraTicketKey&&<> · Linked to <Tag c="blue">{uidJiraTicketKey}</Tag></>}</div>
               </div>
-              <div style={{display:"flex",gap:8}}>
+              <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                <button onClick={()=>{setUidShowAddBug(o=>!o);setUidEditingBugId(null);}} style={ghostBtn}>+ Add Bug</button>
                 {!jiraConfigured&&<Tag c="amber">No Jira — configure in Settings</Tag>}
                 {jiraConfigured&&!allDone&&<button onClick={importAll} style={{...ghostBtn,fontSize:13}}>Import All to Jira</button>}
                 {allDone&&<Tag c="green">✓ All imported to Jira</Tag>}
                 <button onClick={()=>setPhase("uidResults")} style={{...ghostBtn,fontSize:13}}>← Back to Results</button>
+                <Btn v="primary" onClick={()=>setPhase("uidReport")}>Report →</Btn>
               </div>
             </div>
+            {uidShowAddBug&&<div style={{...card,marginBottom:16,border:"1px solid var(--color-border-accent)"}}>
+              <H2 style={{marginBottom:12}}>Add New Bug</H2>
+              <div style={{display:"flex",flexDirection:"column",gap:10}}>
+                <div><Lbl>Title *</Lbl><input style={inp} value={uidAddBugForm.title} onChange={e=>setUidAddBugForm(p=>({...p,title:e.target.value}))} placeholder="Bug title"/></div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                  <div><Lbl>Severity</Lbl><select style={{...inp,width:"100%"}} value={uidAddBugForm.severity} onChange={e=>setUidAddBugForm(p=>({...p,severity:e.target.value}))}>{["Critical","High","Medium","Low"].map(s=><option key={s}>{s}</option>)}</select></div>
+                  <div><Lbl>Area</Lbl><input style={inp} value={uidAddBugForm.area} onChange={e=>setUidAddBugForm(p=>({...p,area:e.target.value}))} placeholder="e.g. Header, Footer, Form"/></div>
+                </div>
+                <div><Lbl>Description</Lbl><textarea style={{...ta,marginBottom:0}} rows={2} value={uidAddBugForm.description} onChange={e=>setUidAddBugForm(p=>({...p,description:e.target.value}))} placeholder="Describe the visual discrepancy"/></div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                  <div><Lbl>Expected (Figma)</Lbl><textarea style={{...ta,marginBottom:0}} rows={2} value={uidAddBugForm.expected} onChange={e=>setUidAddBugForm(p=>({...p,expected:e.target.value}))} placeholder="What the design shows"/></div>
+                  <div><Lbl>Actual (Implementation)</Lbl><textarea style={{...ta,marginBottom:0}} rows={2} value={uidAddBugForm.actual} onChange={e=>setUidAddBugForm(p=>({...p,actual:e.target.value}))} placeholder="What the live page shows"/></div>
+                </div>
+                <div><Lbl>Recommendation</Lbl><textarea style={{...ta,marginBottom:0}} rows={2} value={uidAddBugForm.recommendation} onChange={e=>setUidAddBugForm(p=>({...p,recommendation:e.target.value}))} placeholder="How to fix"/></div>
+                <div style={{display:"flex",gap:8,marginTop:4}}>
+                  <Btn v="primary" disabled={!uidAddBugForm.title.trim()} onClick={addNewBug}>Add Bug</Btn>
+                  <button onClick={()=>setUidShowAddBug(false)} style={ghostBtn}>Cancel</button>
+                </div>
+              </div>
+            </div>}
             <div style={{display:"flex",flexDirection:"column",gap:10}}>
               {bugs.map(b=>{
                 const status=uidJiraStatus[b.id];
                 const isImported=status&&!status.startsWith("error")&&status!=="importing";
                 const isError=status?.startsWith("error");
                 const isImporting=status==="importing";
-                return <div key={b.id} style={{...card,marginBottom:0,padding:"14px 16px",border:"1px solid "+(isImported?"rgba(22,101,52,0.3)":isError?"rgba(153,27,27,0.2)":"var(--color-border-tertiary)"),background:isImported?"var(--color-background-success)":isError?"var(--color-background-danger)":"var(--color-background-primary)"}} >
-                  <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:12}}>
-                    <div style={{flex:1,minWidth:0}}>
-                      <div style={{display:"flex",gap:6,alignItems:"center",marginBottom:6,flexWrap:"wrap"}}>
-                        <Tag c="red">{b.id}</Tag>
-                        <Tag c={b.severity==="Critical"||b.severity==="High"?"red":"amber"}>{b.severity}</Tag>
-                        <Tag>{b.area}</Tag>
-                        {isImported&&<Tag c="green">✓ {status}</Tag>}
+                return <div key={b.id} style={{...card,marginBottom:0,padding:"14px 16px",border:"1px solid "+(isImported?"rgba(22,101,52,0.3)":isError?"rgba(153,27,27,0.2)":"var(--color-border-tertiary)"),background:isImported?"var(--color-background-success)":isError?"var(--color-background-danger)":"var(--color-background-primary)"}}>
+                  {uidEditingBugId===b.id
+                    ?<div style={{display:"flex",flexDirection:"column",gap:10}}>
+                        <div><Lbl>Title</Lbl><input style={{...inp,marginBottom:0}} value={uidEditBugForm.title||""} onChange={e=>setUidEditBugForm(p=>({...p,title:e.target.value}))}/></div>
+                        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                          <div><Lbl>Severity</Lbl><select style={{...inp,width:"100%",marginBottom:0}} value={uidEditBugForm.severity||"High"} onChange={e=>setUidEditBugForm(p=>({...p,severity:e.target.value}))}>{["Critical","High","Medium","Low"].map(s=><option key={s}>{s}</option>)}</select></div>
+                          <div><Lbl>Area</Lbl><input style={{...inp,marginBottom:0}} value={uidEditBugForm.area||""} onChange={e=>setUidEditBugForm(p=>({...p,area:e.target.value}))}/></div>
+                        </div>
+                        <div><Lbl>Description</Lbl><textarea style={{...ta,marginBottom:0}} rows={2} value={uidEditBugForm.description||""} onChange={e=>setUidEditBugForm(p=>({...p,description:e.target.value}))}/></div>
+                        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                          <div><Lbl>Expected (Figma)</Lbl><textarea style={{...ta,marginBottom:0}} rows={2} value={uidEditBugForm.expected||""} onChange={e=>setUidEditBugForm(p=>({...p,expected:e.target.value}))}/></div>
+                          <div><Lbl>Actual (Implementation)</Lbl><textarea style={{...ta,marginBottom:0}} rows={2} value={uidEditBugForm.actual||""} onChange={e=>setUidEditBugForm(p=>({...p,actual:e.target.value}))}/></div>
+                        </div>
+                        <div><Lbl>Recommendation</Lbl><textarea style={{...ta,marginBottom:0}} rows={2} value={uidEditBugForm.recommendation||""} onChange={e=>setUidEditBugForm(p=>({...p,recommendation:e.target.value}))}/></div>
+                        <div style={{display:"flex",gap:8}}>
+                          <Btn v="primary" onClick={()=>{updateBug(b.id,uidEditBugForm);setUidEditingBugId(null);}}>Save</Btn>
+                          <button onClick={()=>setUidEditingBugId(null)} style={ghostBtn}>Cancel</button>
+                        </div>
                       </div>
-                      <div style={{fontWeight:500,fontSize:13,marginBottom:4}}>{b.title}</div>
-                      <div style={{fontSize:12,color:"var(--color-text-secondary)",marginBottom:4}}>{b.description}</div>
-                      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,fontSize:12}}>
-                        <div><b style={{color:"var(--color-text-success)"}}>Expected:</b> {b.expected}</div>
-                        <div><b style={{color:"var(--color-text-danger)"}}>Actual:</b> {b.actual}</div>
-                      </div>
-                      {isError&&<div style={{marginTop:6,fontSize:12,color:"var(--color-text-danger)",wordBreak:"break-word"}}>{status}</div>}
-                    </div>
-                    {!isImported&&<button disabled={isImporting||!jiraConfigured} onClick={()=>importBug(b)} style={{...ghostBtn,fontSize:13,flexShrink:0,opacity:isImporting||!jiraConfigured?0.5:1,cursor:isImporting||!jiraConfigured?"not-allowed":"pointer"}}>
-                      {isImporting?"Importing…":"→ Import to Jira"}
-                    </button>}
-                  </div>
+                    :<div>
+                        <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:6,flexWrap:"wrap"}}>
+                          <Tag c="red">{b.id}</Tag>
+                          <Tag c={sevC(b.severity)}>{b.severity}</Tag>
+                          <Tag>{b.area}</Tag>
+                          {isImported&&<Tag c="green">✓ {status}</Tag>}
+                          <div style={{marginLeft:"auto",display:"flex",gap:2}}>
+                            {!isImported&&<button title="Edit" onClick={()=>{setUidEditingBugId(b.id);setUidShowAddBug(false);setUidEditBugForm({title:b.title||"",severity:b.severity||"High",area:b.area||"",description:b.description||"",expected:b.expected||"",actual:b.actual||"",recommendation:b.recommendation||""});}} style={{background:"none",border:"none",cursor:"pointer",color:"var(--color-text-tertiary)",fontSize:14,padding:"2px 5px"}}>✎</button>}
+                            <button title="Delete" onClick={()=>deleteBug(b.id)} style={{background:"none",border:"none",cursor:"pointer",color:"var(--color-text-danger)",fontSize:14,padding:"2px 5px"}}>✕</button>
+                          </div>
+                        </div>
+                        <div style={{fontWeight:500,fontSize:13,marginBottom:4}}>{b.title}</div>
+                        <div style={{fontSize:12,color:"var(--color-text-secondary)",marginBottom:6}}>{b.description}</div>
+                        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,fontSize:12,marginBottom:4}}>
+                          <div><b style={{color:"var(--color-text-success)"}}>Expected:</b> {b.expected}</div>
+                          <div><b style={{color:"var(--color-text-danger)"}}>Actual:</b> {b.actual}</div>
+                        </div>
+                        {b.recommendation&&<div style={{fontSize:12,color:"var(--color-text-tertiary)",marginBottom:4}}>💡 {b.recommendation}</div>}
+                        {isError&&<div style={{marginTop:6,fontSize:12,color:"var(--color-text-danger)",wordBreak:"break-word"}}>{status}</div>}
+                        {!isImported&&<div style={{marginTop:10}}>
+                          <button disabled={isImporting||!jiraConfigured} onClick={()=>importBug(b)} style={{...ghostBtn,fontSize:13,opacity:isImporting||!jiraConfigured?0.5:1,cursor:isImporting||!jiraConfigured?"not-allowed":"pointer"}}>
+                            {isImporting?"Importing…":"→ Import to Jira"}
+                          </button>
+                        </div>}
+                      </div>}
                 </div>;
               })}
+            </div>
+          </div>;
+        })()}
+
+        {/* ── UI Design: Report ── */}
+        {!uidLoading&&phase==="uidReport"&&uidVisualResult&&(()=>{
+          const bugs=uidVisualResult.bugs||[];
+          const importedBugs=bugs.filter(b=>uidJiraStatus[b.id]&&!uidJiraStatus[b.id].startsWith("error")&&uidJiraStatus[b.id]!=="importing");
+          const approvedCases=uidCases.filter(c=>c.status!=="rejected");
+          const rejectedCases=uidCases.filter(c=>c.status==="rejected");
+          const criticalBugs=bugs.filter(b=>b.severity==="Critical");
+          const highBugs=bugs.filter(b=>b.severity==="High");
+          const sendComment=async()=>{
+            if(!uidReportComment.trim()){return;}
+            if(!uidJiraTicketKey){alert("No Jira ticket linked.");return;}
+            if(!jiraConfigured){alert("Configure Jira credentials in Settings.");return;}
+            setUidCommentStatus({sending:true,done:false,error:""});
+            try{
+              const lines=[
+                uidReportComment,
+                "",
+                "---",
+                `UI Design Test Summary`,
+                `Page: ${uidForm.pageUrl||"—"}`,
+                `Test Cases: ${uidCases.length} total · ${approvedCases.length} approved · ${rejectedCases.length} rejected`,
+                `Bugs Found: ${bugs.length} (${criticalBugs.length} Critical · ${highBugs.length} High)`,
+                `Bugs Imported to Jira: ${importedBugs.length}`,
+                importedBugs.length>0?`Jira Issues: ${importedBugs.map(b=>uidJiraStatus[b.id]).join(", ")}`:null,
+              ].filter(Boolean).join("\n");
+              const adfBody={type:"doc",version:1,content:[{type:"paragraph",content:[{type:"text",text:lines}]}]};
+              await callJira(proj,"POST",`/issue/${uidJiraTicketKey}/comment`,{body:adfBody});
+              setUidCommentStatus({sending:false,done:true,error:""});
+              showToast("Comment added to "+uidJiraTicketKey);
+            }catch(e){setUidCommentStatus({sending:false,done:false,error:e.message.slice(0,160)});}
+          };
+          const scoreColor=s=>s>=80?"var(--color-text-success)":s>=60?"#d97706":"var(--color-text-danger)";
+          return <div>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:20,flexWrap:"wrap",gap:8}}>
+              <div><H2 style={{marginBottom:2}}>Test Session Report</H2>
+                <div style={{fontSize:13,color:"var(--color-text-secondary)"}}>UI Design test summary{uidJiraTicketKey&&<> for <Tag c="blue">{uidJiraTicketKey}</Tag></>}</div>
+              </div>
+              <button onClick={()=>setPhase("uidBugs")} style={{...ghostBtn,fontSize:13}}>← Back to Bugs</button>
+            </div>
+
+            {/* Summary stat cards */}
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(155px,1fr))",gap:12,marginBottom:20}}>
+              {[
+                {val:uidCases.length,label:"Test Cases",sub:`${approvedCases.length} approved · ${rejectedCases.length} rejected`,color:"var(--accent)"},
+                {val:bugs.length,label:"Bugs Found",sub:`${criticalBugs.length} Critical · ${highBugs.length} High`,color:"var(--color-text-danger)"},
+                {val:importedBugs.length,label:"Imported to Jira",sub:uidJiraTicketKey||"No ticket linked",color:"var(--color-text-success)"},
+                {val:(uidVisualResult.overallScore||0)+"%",label:"Design Match",sub:uidVisualResult.verdict||"",color:scoreColor(uidVisualResult.overallScore||0)},
+              ].map(({val,label,sub,color})=>(
+                <div key={label} style={{...card,padding:"16px 14px",textAlign:"center"}}>
+                  <div style={{fontSize:26,fontWeight:700,color}}>{val}</div>
+                  <div style={{fontSize:12,fontWeight:500,color:"var(--color-text-primary)",marginTop:2}}>{label}</div>
+                  <div style={{fontSize:11,color:"var(--color-text-tertiary)",marginTop:3}}>{sub}</div>
+                </div>
+              ))}
+            </div>
+
+            {/* Session details */}
+            <div style={{...card,marginBottom:16}}>
+              <H2 style={{marginBottom:12}}>Session Details</H2>
+              <div style={{display:"flex",flexDirection:"column",gap:8,fontSize:13}}>
+                {uidJiraTicketKey&&<div style={{display:"flex",gap:10,alignItems:"center"}}><span style={{color:"var(--color-text-tertiary)",minWidth:110,flexShrink:0}}>Linked Ticket</span><Tag c="blue">{uidJiraTicketKey}</Tag></div>}
+                {uidForm.pageUrl&&<div style={{display:"flex",gap:10,alignItems:"flex-start"}}><span style={{color:"var(--color-text-tertiary)",minWidth:110,flexShrink:0}}>Page URL</span><span style={{wordBreak:"break-all"}}>{uidForm.pageUrl}</span></div>}
+                {uidForm.figmaUrl&&<div style={{display:"flex",gap:10,alignItems:"flex-start"}}><span style={{color:"var(--color-text-tertiary)",minWidth:110,flexShrink:0}}>Figma URL</span><span style={{wordBreak:"break-all",overflow:"hidden",textOverflow:"ellipsis",display:"-webkit-box",WebkitLineClamp:1,WebkitBoxOrient:"vertical"}}>{uidForm.figmaUrl}</span></div>}
+                {importedBugs.length>0&&<div style={{display:"flex",gap:10,alignItems:"flex-start"}}><span style={{color:"var(--color-text-tertiary)",minWidth:110,flexShrink:0}}>Jira Issues</span>
+                  <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                    {importedBugs.map(b=><div key={b.id} style={{display:"flex",gap:4,alignItems:"center"}}>
+                      <Tag c="green">{uidJiraStatus[b.id]}</Tag>
+                      <Tag c={b.severity==="Critical"||b.severity==="High"?"red":"amber"}>{b.severity}</Tag>
+                      <span style={{fontSize:12,color:"var(--color-text-secondary)"}}>{b.title}</span>
+                    </div>)}
+                  </div>
+                </div>}
+                {bugs.filter(b=>!uidJiraStatus[b.id]||uidJiraStatus[b.id].startsWith("error")).length>0&&
+                  <div style={{display:"flex",gap:10,alignItems:"flex-start"}}>
+                    <span style={{color:"var(--color-text-tertiary)",minWidth:110,flexShrink:0}}>Not Imported</span>
+                    <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
+                      {bugs.filter(b=>!uidJiraStatus[b.id]||uidJiraStatus[b.id].startsWith("error")).map(b=><Tag key={b.id} c="red">{b.id}</Tag>)}
+                    </div>
+                  </div>}
+              </div>
+            </div>
+
+            {/* Comment to Jira */}
+            <div style={card}>
+              <H2 style={{marginBottom:4}}>Add Comment to Jira Story</H2>
+              <div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:14}}>
+                {uidJiraTicketKey
+                  ?<>Your comment will be posted directly to <Tag c="blue">{uidJiraTicketKey}</Tag>. A test summary is automatically appended.</>
+                  :"No Jira ticket linked — go back to Jira Ticket step to select one."}
+              </div>
+              <textarea
+                style={{...ta,width:"100%",boxSizing:"border-box",minHeight:130,marginBottom:0}}
+                value={uidReportComment}
+                onChange={e=>setUidReportComment(e.target.value)}
+                placeholder={"Write your QA findings, recommendations, or any notes for the developer...\n\nExample:\nAll critical UI bugs have been filed. The hero section and statistics area need urgent attention before release. Navigation and footer passed visual review."}
+              />
+              <div style={{display:"flex",gap:10,alignItems:"center",marginTop:12,flexWrap:"wrap"}}>
+                {uidCommentStatus.done
+                  ?<Tag c="green">✓ Comment added to {uidJiraTicketKey}</Tag>
+                  :<>
+                      <Btn v="primary"
+                        disabled={!uidReportComment.trim()||!uidJiraTicketKey||!jiraConfigured||uidCommentStatus.sending}
+                        onClick={sendComment}>
+                        {uidCommentStatus.sending?"Sending…":"💬 Add Comment to Jira"}
+                      </Btn>
+                      {uidCommentStatus.done&&<button onClick={()=>setUidCommentStatus({sending:false,done:false,error:""})} style={ghostBtn}>Edit & Resend</button>}
+                      {!jiraConfigured&&<Tag c="amber">Configure Jira in Settings first</Tag>}
+                      {!uidJiraTicketKey&&jiraConfigured&&<Tag c="amber">No ticket linked</Tag>}
+                    </>}
+                {uidCommentStatus.error&&<div style={{fontSize:12,color:"var(--color-text-danger)",wordBreak:"break-word",flex:"1 1 100%",marginTop:4}}>{uidCommentStatus.error}</div>}
+              </div>
             </div>
           </div>;
         })()}
