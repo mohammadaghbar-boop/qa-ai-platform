@@ -766,7 +766,7 @@ const server = http.createServer((req, res) => {
   if (origin && host && origin.includes(host)) {
     res.setHeader('Access-Control-Allow-Origin',  origin);
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Session-Token, X-Admin-Token');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Session-Token, X-Admin-Token, X-Member-Token');
     res.setHeader('Vary', 'Origin');
   }
 
@@ -1501,6 +1501,132 @@ Return ONLY valid JSON (no markdown wrapper, no extra text):
       } finally {
         tmpPaths.forEach(p => { try { fs.unlinkSync(p); } catch {} });
       }
+      return;
+    }
+
+    /* ── /api/ui-design/generate-scripts ───────────────────────────────── */
+    if (req.method === 'POST' && req.url === '/api/ui-design/generate-scripts') {
+      const _mToken = req.headers['x-member-token'];
+      if (!_mToken || !memberSessions.has(_mToken)) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Authentication required — please sign in' })); return; }
+      try {
+          const { testCases = [], pageUrl = '', figmaUrl = '', projectName = 'Doroob', demandName = 'Feature', jiraTicketKey = '' } = JSON.parse(body);
+          const safeSlug = demandName.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '');
+          const tcList = testCases.map(tc =>
+            `  TC-ID: ${tc.id}\n  Title: ${tc.title}\n  Priority: ${tc.priority||'Medium'}\n  Area: ${tc.area||'UI'}\n  Preconditions: ${tc.preconditions||'User is authenticated'}\n  Steps: ${(tc.steps||[]).join(' → ')}\n  Expected: ${tc.expected||''}`
+          ).join('\n\n');
+
+          const prompt = `You are a world-class Senior QA Automation Engineer working on the ${projectName} platform. Your objective is NOT to write scripts as quickly as possible. Your objective is to write production-ready, maintainable, and reliable Playwright automation scripts that compare the live implementation against the Figma design, detect visual and functional defects, and reflect execution results back onto the test cases sheet.
+
+PROJECT SETUP:
+Create a VS Code project named "doroob". Inside the project create a folder named "${demandName}". All Playwright scripts for this demand must be placed inside that folder.
+Folder structure:
+  doroob/
+    ${demandName}/
+      tests/
+      pages/
+      fixtures/
+      reports/
+  playwright.config.ts
+  package.json
+Use TypeScript. Use the Page Object Model pattern. Install: Playwright, Playwright Test, and visual comparison libraries if needed.
+
+CONTEXT:
+- Live Page URL: ${pageUrl || 'Not specified'}
+- Figma Design Source: ${figmaUrl || 'Not specified'}
+- Linked Jira Story: ${jiraTicketKey || 'Not linked'}
+- Platform: Arabic-only, RTL
+
+SCRIPT WRITING RULES:
+1. Every script begins with a clear description of what it validates.
+2. Every test has its own expected result.
+3. NEVER mark a test passed because the page loaded, a button exists, or an API returned HTTP 200. A test ONLY passes after all expected business behavior and design elements are fully verified.
+4. Each script covers:
+   - Functional validation per acceptance criteria and business rules.
+   - Figma design comparison: typography (family, size, weight, color hex, alignment), exact colors, layout/alignment, button labels and states, icons/images, spacing/padding, input styles and placeholders, error/success message styling, empty/loading states, RTL correctness (Arabic-only platform).
+   - Responsive behavior: desktop (1920x1080), tablet (768x1024), mobile (375x812).
+   - Cross-browser: Chrome, Firefox, Safari (webkit), Edge.
+5. NEVER use page.waitForTimeout() or any fixed delay. For dynamic waits use: await expect(locator).toBeVisible({timeout:10000}), page.waitForLoadState('networkidle'), or page.waitForSelector().
+6. STRONG assertions ONLY: toHaveText(), toHaveURL(), toContainText(), toHaveValue(), toBeChecked(), toHaveCount(), toHaveCSS() for design assertions.
+7. For design comparison assertions, use toHaveCSS() with exact values extracted from the Figma specs in the test case (e.g. toHaveCSS('background-color', 'rgb(...)'), toHaveCSS('font-size', '16px')).
+
+STRICT PASS/FAIL CRITERIA — treat any of the following as a failure:
+- Broken layout or incorrect alignment vs Figma
+- Incorrect colors, fonts, or spacing vs exact Figma values
+- Missing/incorrect button labels
+- Incorrect placeholder text or field labels
+- Error messages exposing technical info, stack traces, IDs, or HTTP errors
+- Any English or mixed Arabic/English text in the UI (Arabic-only platform)
+- RTL issues: incorrect alignment, chevron/arrow direction, icon mirroring
+- Incorrect navigation or unexpected redirects
+- Missing loading indicators
+- Incorrect or missing validation messages
+- Any visual or functional difference between the Figma design and the live implementation
+
+BUG HUNTING MINDSET — in every test, challenge the implementation:
+- What could break? What assumptions is the developer making?
+- Can validation be bypassed? Can permissions be bypassed?
+- Can browser refresh break the flow? Can multiple tabs cause problems?
+- Can empty values cause issues?
+- Can the UI break on mobile or tablet?
+- Can RTL or mixed-direction content break?
+- Can session expiration cause problems?
+- Does the implementation match every element in the Figma design exactly?
+
+TEST CASES TO IMPLEMENT:
+${tcList}
+
+Generate exactly THREE files.
+
+FILE 1 — playwright.config.ts (at project root):
+Multi-browser: chromium, firefox, webkit (Safari), edge (use channel: 'msedge')
+Three viewports as projects: Desktop 1920x1080, Tablet 768x1024, Mobile 375x812
+baseURL: '${pageUrl || 'http://localhost:3000'}'
+reporter: [['html', {open:'never'}]]
+testDir: './${demandName}/tests'
+retries: 1 in CI, 0 locally
+use: { locale: 'ar', timezoneId: 'Asia/Riyadh', trace: 'on-first-retry', screenshot: 'only-on-failure' }
+
+FILE 2 — ${demandName}/pages/${safeSlug}.page.ts:
+Page Object class "${demandName.replace(/\s+/g,'').replace(/[^a-zA-Z0-9]/g,'')}Page"
+Import Page, Locator from @playwright/test
+Define every selector referenced in the test cases as a readonly Locator
+Encapsulate every action (click, fill, navigate, assert) as an async method
+Strict locator priority: getByRole > getByLabel > getByPlaceholder > getByTestId > getByText
+Include a verifyDesignToken(locator: Locator, property: string, expectedValue: string) helper that calls expect(locator).toHaveCSS(property, expectedValue)
+
+FILE 3 — ${demandName}/tests/${safeSlug}.spec.ts:
+Import test, expect from @playwright/test
+Import the Page Object
+test.describe('${demandName}${jiraTicketKey?' — '+jiraTicketKey:''}', () => { ... })
+One test() per test case. Title = TC-ID + test title.
+beforeEach: instantiate page object, navigate to page
+For EVERY test:
+  - Assert the page loaded with a meaningful assertion (NOT just toBeVisible)
+  - Validate functional behavior step by step following the test case steps
+  - Validate at least ONE design property from the test case using toHaveCSS() or toHaveText()
+  - Final assertion MUST directly validate the exact expected result from the test case
+
+Return ONLY valid JSON (no markdown wrapper, no extra text):
+{
+  "config": "<full playwright.config.ts content>",
+  "page": "<full ${demandName}/pages/${safeSlug}.page.ts content>",
+  "spec": "<full ${demandName}/tests/${safeSlug}.spec.ts content>",
+  "demandSlug": "${safeSlug}",
+  "demandName": "${demandName}"
+}`;
+
+          console.log('[UID] Generating Playwright scripts for', demandName, '(', testCases.length, 'test cases)');
+          const text = await callClaudeWithImages(prompt, []);
+          const jsonMatch = text.match(/\{[\s\S]*\}/);
+          if (!jsonMatch) throw new Error('AI returned invalid format');
+          const result = JSON.parse(jsonMatch[0]);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(result));
+        } catch (e) {
+          console.error('[UID] Script gen error:', e.message);
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: e.message }));
+        }
       return;
     }
 
