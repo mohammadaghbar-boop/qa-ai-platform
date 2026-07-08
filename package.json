@@ -5,5 +5,8 @@
   "scripts": {
     "start": "node server.js",
     "test": "node tests/qa-platform.test.js"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.61.1"
   }
 }

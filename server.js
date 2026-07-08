@@ -103,6 +103,17 @@ function isValidJiraUrl(s) {
     return true;
   } catch { return false; }
 }
+// SSRF guard for git remotes: public HTTPS only — blocks file://, ext::, ssh:// tricks and internal IPs
+function isValidGitUrl(s) {
+  try {
+    const u = new URL(s);
+    if (u.protocol !== 'https:') return false;
+    const h = u.hostname.toLowerCase();
+    if (/^(localhost|127\.|10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|0\.0\.0\.0|::1|169\.254\.)/.test(h)) return false;
+    if (s.startsWith('-')) return false;
+    return true;
+  } catch { return false; }
+}
 
 /* ── File-based data store (admin dashboard sync) ───────────────────────── */
 const DATA_DIR  = path.join(__dirname, 'data');
@@ -219,18 +230,115 @@ setInterval(() => {
   }
 }, 30 * 60 * 1000);
 
+/* ── Attached-project repo cache (frontend/backend Git URLs) ─────────────── */
+const REPO_CACHE_DIR = path.join(os.tmpdir(), 'qa-platform-repo-cache');
+if (!fs.existsSync(REPO_CACHE_DIR)) fs.mkdirSync(REPO_CACHE_DIR, { recursive: true });
+const REPO_CONTEXT_MAX_CHARS = 60000; // cap combined source dump fed to the AI prompt
+const REPO_CODE_EXT = new Set(['.js', '.jsx', '.ts', '.tsx', '.vue', '.html']);
+const REPO_SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.next', 'coverage', 'out']);
+
+function repoCacheDirFor(url) {
+  return path.join(REPO_CACHE_DIR, crypto.createHash('sha1').update(url).digest('hex'));
+}
+// git's stderr mixes progress noise ("Cloning into '...'", "remote: Enumerating objects...")
+// with the actual problem, and the real fatal/error/warning line is not reliably the last one
+// — e.g. "warning: Clone succeeded, but checkout failed" is followed by a "and retry with
+// 'git restore ...'" hint line. Prefer lines that actually say fatal:/error:/warning:; only
+// fall back to "last non-empty line" if none of those are present. A spawn-level error (a
+// real timeout, git missing) always takes priority — it means there is no useful git output.
+function extractGitError(r) {
+  if (r.error) return r.error.code === 'ETIMEDOUT' ? 'git operation timed out' : r.error.code === 'ENOENT' ? 'git is not installed on the server' : r.error.message;
+  const lines = (r.stderr || Buffer.from('')).toString('utf8').trim().split('\n').map(l => l.trim()).filter(Boolean);
+  const problemLines = lines.filter(l => /^(fatal|error|warning):/i.test(l));
+  if (problemLines.length) return problemLines.join(' ');
+  return lines[lines.length - 1] || 'unknown error';
+}
+// Fast reachability check without a full clone. GIT_TERMINAL_PROMPT=0 stops git from
+// hanging on an interactive credential prompt for private/unreachable repos.
+function checkGitReachable(url) {
+  const { spawnSync } = require('child_process');
+  const r = spawnSync('git', ['ls-remote', '--exit-code', url, 'HEAD'], {
+    timeout: 12000,
+    env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
+  });
+  if (r.error || r.status !== 0) return { ok: false, error: extractGitError(r) };
+  return { ok: true };
+}
+function syncRepoCache(url) {
+  const { spawnSync } = require('child_process');
+  const dir = repoCacheDirFor(url);
+  const env = { ...process.env, GIT_TERMINAL_PROMPT: '0' };
+  // Always re-clone fresh rather than `git pull` an existing shallow clone — shallow history
+  // has no common ancestor to merge against and reliably produces "refusing to merge unrelated
+  // histories" on a second pull, even against the exact same unchanged remote.
+  try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
+  fs.mkdirSync(dir, { recursive: true });
+  // core.longpaths=true: without it, Windows' 260-char MAX_PATH silently breaks checkout on
+  // repos with deeply nested paths ("unable to create file ...: Filename too long"), even
+  // though an interactive shell's git may succeed due to a different resolved gitconfig.
+  const r = spawnSync('git', ['-c', 'core.longpaths=true', 'clone', '--depth', '1', url, dir], { timeout: 120000, env });
+  if (r.error || r.status !== 0) {
+    try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
+    return { ok: false, error: 'Failed to clone repo: ' + extractGitError(r) };
+  }
+  return { ok: true, dir };
+}
+// Walk the cloned repo and build a size-capped text bundle for the AI prompt.
+function collectRepoContext(dir) {
+  const parts = [];
+  let total = 0, truncated = false;
+  const pkgFile = path.join(dir, 'package.json');
+  if (fs.existsSync(pkgFile)) {
+    const pkg = fs.readFileSync(pkgFile, 'utf8').slice(0, 2000);
+    parts.push(`--- package.json ---\n${pkg}`);
+    total += pkg.length;
+  }
+  const walk = (d) => {
+    if (truncated) return;
+    let entries;
+    try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (truncated) return;
+      if (e.name.startsWith('.') || REPO_SKIP_DIRS.has(e.name)) continue;
+      const full = path.join(d, e.name);
+      if (e.isDirectory()) { walk(full); continue; }
+      if (!REPO_CODE_EXT.has(path.extname(e.name))) continue;
+      let content;
+      try { content = fs.readFileSync(full, 'utf8'); } catch { continue; }
+      const rel = path.relative(dir, full);
+      const chunk = `--- ${rel} ---\n${content}\n`;
+      if (total + chunk.length > REPO_CONTEXT_MAX_CHARS) { truncated = true; return; }
+      parts.push(chunk); total += chunk.length;
+    }
+  };
+  walk(dir);
+  return { context: parts.join('\n'), truncated };
+}
+
 /* ── Claude AI (via Claude CLI — no API key required) ───────────────────── */
 function callClaude(messages, system, maxTokens=4000) {
   return new Promise((resolve, reject) => {
-    const conversation = messages.map(m =>
+    const fullPrompt = messages.map(m =>
       (m.role === 'user' ? 'Human' : 'Assistant') + ': ' + m.content
     ).join('\n\n');
-    const fullPrompt = system ? `[System: ${system}]\n\n${conversation}` : conversation;
     const isWin = process.platform === 'win32';
     const claudeCmd = isWin ? 'cmd' : 'claude';
+    // --allowedTools "" disables every built-in tool (Write/Edit/Bash/Read/...) — without it, the
+    // CLI can decide on its own to try editing a file in its cwd, hit a permission gate it can't
+    // resolve headlessly, and dump the resulting "I need permission to write it..." dialogue into
+    // what should have been pure generated text. This call must never be agentic, only text-in/text-out.
+    //
+    // The system role is passed via the CLI's own --system-prompt flag, NOT concatenated as a fake
+    // "[System: ...]" text block in front of the conversation — that shape is textbook prompt
+    // injection (an untrusted-looking system directive embedded in user content), and the model can
+    // correctly refuse the entire request on sight when it spots that pattern, especially once
+    // real repo source is also in the prompt (from the attached-project feature) making the whole
+    // thing look like an injection test case rather than a legitimate instruction.
+    const baseArgs = ['-p', '--output-format', 'text', '--effort', 'low', '--strict-mcp-config', '--mcp-config', EMPTY_MCP, '--allowedTools', ''];
+    if (system) baseArgs.push('--system-prompt', system);
     const claudeArgs = isWin
-      ? ['/c', process.env.APPDATA + '\\npm\\claude.cmd', '-p', '--output-format', 'text', '--effort', 'low', '--strict-mcp-config', '--mcp-config', EMPTY_MCP]
-      : ['-p', '--output-format', 'text', '--effort', 'low', '--strict-mcp-config', '--mcp-config', EMPTY_MCP];
+      ? ['/c', process.env.APPDATA + '\\npm\\claude.cmd', ...baseArgs]
+      : baseArgs;
     const proc = spawn(claudeCmd, claudeArgs, { shell: false, env: process.env });
     let output = '', error = '';
     proc.stdin.write(fullPrompt);
@@ -356,17 +464,40 @@ function attachToJira(jiraUrl, issueKey, auth, files) {
 }
 
 /* ── Playwright Test Runner ─────────────────────────────────────────────── */
-function runPlaywrightTests(files) {
+// Resolve the exact Playwright binary installed in THIS project. Going through `npx`
+// risks resolving a different cached copy of the `playwright` package than the
+// `@playwright/test` the spec files require — two singleton test registries then collide
+// with "Playwright Test did not expect test.describe() to be called here".
+function playwrightCmd(args) {
+  const localBin = path.join(__dirname, 'node_modules', '.bin', process.platform === 'win32' ? 'playwright.cmd' : 'playwright');
+  // These are all spawned with {shell:true} — Node does not auto-quote the command string in
+  // that mode, so a path containing spaces (e.g. ".../QA AI Platform/node_modules/...") gets
+  // split apart by the shell unless quoted here.
+  if (fs.existsSync(localBin)) return { cmd: localBin.includes(' ') ? `"${localBin}"` : localBin, args };
+  return { cmd: 'npx', args: ['playwright', ...args] };
+}
+
+function runPlaywrightTests(files, onLine) {
+  const emit = onLine || (() => {});
   return new Promise((resolve) => {
     const runId  = crypto.randomBytes(16).toString('hex');
     const tmpDir = path.join(os.tmpdir(), 'qa_pw_' + runId);
+    const resultJsonPath = path.join(tmpDir, 'pw-result.json');
     const cleanup = () => { try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {} };
 
     try {
       fs.mkdirSync(tmpDir, { recursive: true });
       fs.writeFileSync(path.join(tmpDir, 'package.json'), JSON.stringify({ name:'qa-run', version:'1.0.0', private:true }));
-      // Playwright config: disable browser download, set testDir, use JSON reporter
-      const pwConfig = `module.exports = { testDir: '.', timeout: 60000, use: { headless: true } };`;
+      // The uploaded test.config.js is never actually read by Playwright (it only auto-loads a file
+      // literally named playwright.config.js/.ts/.mjs), so any baseURL the frontend generated there
+      // was silently ignored — every relative page.goto('/path') then failed with "Cannot navigate
+      // to invalid URL". Pull the baseURL back out of it and put it in the config Playwright actually uses.
+      const uploadedConfig = files?.['test.config.js'] || '';
+      const baseUrlMatch = uploadedConfig.match(/baseURL\s*:\s*["']([^"']+)["']/);
+      const baseURL = baseUrlMatch ? baseUrlMatch[1] : null;
+      // 'list' reporter streams live per-test progress to stdout; 'json' reporter writes the
+      // structured result to a file so stdout stays clean for live streaming to the client.
+      const pwConfig = `module.exports = { testDir: '.', timeout: 60000, use: { headless: true${baseURL ? `, baseURL: ${JSON.stringify(baseURL)}` : ''} }, reporter: [['list'], ['json', { outputFile: ${JSON.stringify(resultJsonPath)} }]] };`;
       fs.writeFileSync(path.join(tmpDir, 'playwright.config.js'), pwConfig);
       const safeBase = path.resolve(tmpDir) + path.sep;
       for (const [filePath, content] of Object.entries(files || {})) {
@@ -379,7 +510,17 @@ function runPlaywrightTests(files) {
     } catch (e) { cleanup(); resolve({ lines:['Error writing test files: '+e.message], passed:[], failed:[], error:e.message }); return; }
 
     const lines = [];
-    let jsonOutput = '';
+    // Parsed live from the 'list' reporter's own output as each test finishes — this is the
+    // ONLY reliable source of pass/fail when the run gets killed by our timeout, because the json
+    // reporter only writes resultJsonPath on a clean process exit. Without this, a timeout on a
+    // long suite reports "0 passed" even though most tests genuinely passed before the cutoff.
+    const liveResults = [];
+    const TEST_LINE_RE = /^\s*(ok|x|-)\s+\d+\s+\S+\s+›\s+(.+?)(?:\s+\([\d.]+m?s\))?\s*$/;
+    const pushLine = (l) => {
+      lines.push(l); emit(l);
+      const m = l.match(TEST_LINE_RE);
+      if (m) liveResults.push({ status: m[1], title: m[2].trim() });
+    };
     // CI=1 prevents Playwright from waiting for interactive input.
     // stdio: ignore stdin so npx/playwright never block waiting for keyboard input on Windows.
     const spawnEnv = { ...process.env, CI: '1', PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1', NPM_CONFIG_YES: 'true' };
@@ -396,7 +537,8 @@ function runPlaywrightTests(files) {
     }
     // Pre-check: verify playwright CLI is reachable (fast fail — no download)
     const { spawnSync } = require('child_process');
-    const preCheck = spawnSync('npx', ['playwright', '--version'], {
+    const versionCmd = playwrightCmd(['--version']);
+    const preCheck = spawnSync(versionCmd.cmd, versionCmd.args, {
       cwd: tmpDir, shell: true,
       stdio: ['ignore', 'pipe', 'pipe'],
       env: spawnEnv, timeout: 15000
@@ -407,13 +549,23 @@ function runPlaywrightTests(files) {
       return;
     }
 
-    const proc = spawn('npx', ['playwright', 'test', '--reporter=json'], {
+    emit('▶ Launching Playwright…');
+    const testCmd = playwrightCmd(['test']);
+    const proc = spawn(testCmd.cmd, testCmd.args, {
       cwd: tmpDir, shell: true,
       stdio: ['ignore', 'pipe', 'pipe'],
       env: spawnEnv
     });
-    proc.stdout.on('data', d => jsonOutput += d.toString());
-    proc.stderr.on('data', d => d.toString().split('\n').filter(l=>l.trim()).forEach(l=>lines.push(l)));
+    let stdoutBuf = '', stderrBuf = '';
+    const flush = (bufRef, chunk) => {
+      bufRef.buf += chunk;
+      const parts = bufRef.buf.split('\n');
+      bufRef.buf = parts.pop(); // keep the trailing partial line for the next chunk
+      for (const l of parts) if (l.trim()) pushLine(l.replace(/\x1b\[[0-9;]*m/g, '')); // strip ANSI color codes
+    };
+    const stdoutRef = { buf: '' }, stderrRef = { buf: '' };
+    proc.stdout.on('data', d => flush(stdoutRef, d.toString()));
+    proc.stderr.on('data', d => flush(stderrRef, d.toString()));
 
     const killProc = () => {
       try {
@@ -425,42 +577,54 @@ function runPlaywrightTests(files) {
       } catch {}
     };
 
+    // 20 min — large suites (dozens of real-browser tests) can legitimately take well over 5 min;
+    // the old limit was killing runs mid-way before Playwright even printed its failure details.
     const timer = setTimeout(() => {
       killProc(); cleanup();
-      resolve({ lines:[...lines,'✗ Test run timed out after 5 minutes'], passed:[], failed:[], error:'timeout' });
-    }, 300000);
+      pushLine('✗ Test run timed out after 20 minutes');
+      // The json reporter never got to write its file — fall back to what we parsed live so tests
+      // that genuinely passed before the timeout aren't misreported as failed.
+      const passed = liveResults.filter(r => r.status === 'ok').map(r => r.title);
+      const failed = liveResults.filter(r => r.status === 'x').map(r => ({ title: r.title, error: 'Run timed out before full details were captured — see execution log' }));
+      resolve({ lines, passed, failed, error: 'timeout' });
+    }, 1200000);
 
     proc.on('close', (code) => {
-      clearTimeout(timer); cleanup();
+      clearTimeout(timer);
+      if (stdoutRef.buf.trim()) pushLine(stdoutRef.buf.replace(/\x1b\[[0-9;]*m/g, ''));
+      if (stderrRef.buf.trim()) pushLine(stderrRef.buf.replace(/\x1b\[[0-9;]*m/g, ''));
       let passed = [], failed = [];
       const globalErrors = [];
       try {
-        const s = jsonOutput.indexOf('{'), e = jsonOutput.lastIndexOf('}');
-        if (s >= 0 && e > s) {
-          const results = JSON.parse(jsonOutput.slice(s, e + 1));
-          const walk = (suites) => {
-            for (const suite of suites || []) {
-              for (const spec of suite.specs || []) {
-                const title = [suite.title, spec.title].filter(Boolean).join(' › ');
-                if (spec.ok) passed.push(title);
-                else failed.push({ title, error: (spec.tests?.[0]?.results?.[0]?.errors?.[0]?.message||'Failed').slice(0,300) });
-              }
-              walk(suite.suites);
+        const results = JSON.parse(fs.readFileSync(resultJsonPath, 'utf8'));
+        const walk = (suites) => {
+          for (const suite of suites || []) {
+            for (const spec of suite.specs || []) {
+              const title = [suite.title, spec.title].filter(Boolean).join(' › ');
+              if (spec.ok) passed.push(title);
+              else failed.push({ title, error: (spec.tests?.[0]?.results?.[0]?.errors?.[0]?.message||'Failed').slice(0,300) });
             }
-          };
-          walk(results.suites);
-          // Collect global errors — e.g. test file failed to load (import errors go here, not suites)
-          for (const err of results.errors || []) {
-            globalErrors.push((err.message || String(err)).slice(0, 400));
+            walk(suite.suites);
           }
+        };
+        walk(results.suites);
+        // Collect global errors — e.g. test file failed to load (import errors go here, not suites)
+        for (const err of results.errors || []) {
+          globalErrors.push((err.message || String(err)).slice(0, 400));
         }
       } catch {}
+      // json reporter file was missing/unparseable despite a clean process exit — fall back to
+      // what was parsed live rather than silently reporting everything as failed.
+      if (passed.length === 0 && failed.length === 0 && liveResults.length > 0) {
+        passed = liveResults.filter(r => r.status === 'ok').map(r => r.title);
+        failed = liveResults.filter(r => r.status === 'x').map(r => ({ title: r.title, error: 'See execution log for details' }));
+      }
+      cleanup();
 
       // Surface global errors so the user knows WHY 0 tests ran
       if (globalErrors.length > 0) {
-        lines.unshift('');
-        globalErrors.forEach(e => lines.unshift('✗ ' + e));
-        lines.unshift('Playwright reported global errors:');
+        globalErrors.forEach(e => pushLine('✗ ' + e));
+        pushLine('Playwright reported global errors:');
         // Detect @playwright/test module not found — treat as not_installed
         const errText = globalErrors.join('\n').toLowerCase();
         if (errText.includes("cannot find module") && errText.includes('playwright')) {
@@ -469,7 +633,7 @@ function runPlaywrightTests(files) {
         }
       }
 
-      lines.push(''); lines.push('Results: '+passed.length+' passed, '+failed.length+' failed');
+      pushLine(''); pushLine('Results: '+passed.length+' passed, '+failed.length+' failed');
       resolve({ lines, passed, failed, error: null });
     });
 
@@ -704,7 +868,8 @@ const server = http.createServer((req, res) => {
         }
         const sessionId  = crypto.randomBytes(16).toString('hex');
         const outputFile = path.join(os.tmpdir(), `qa_codegen_${sessionId}.js`);
-        const proc = spawn('npx', ['playwright', 'codegen', url, '--output', outputFile], { shell: true });
+        const codegenCmd = playwrightCmd(['codegen', url, '--output', outputFile]);
+        const proc = spawn(codegenCmd.cmd, codegenCmd.args, { shell: true });
         const session = { proc, outputFile, status: 'running', script: null, startedAt: Date.now() };
         codegenSessions.set(sessionId, session);
         proc.on('close', () => {
@@ -744,17 +909,55 @@ const server = http.createServer((req, res) => {
       res.end(JSON.stringify({ ok: true })); return;
     }
 
-    /* ── /api/playwright/run (requires session) ── */
+    /* ── /api/playwright/run (requires session) ──
+       Streams newline-delimited JSON: {type:'line', line} as tests execute, then a
+       single {type:'done', ...result} once the run finishes. */
     if (req.method === 'POST' && req.url === '/api/playwright/run') {
       if (!getSession(req)) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Authentication required' })); return; }
+      res.writeHead(200, { 'Content-Type': 'application/x-ndjson', 'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no' });
       try {
         const parsed = JSON.parse(body);
-        const result = await runPlaywrightTests(parsed.files || {});
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(result));
+        const result = await runPlaywrightTests(parsed.files || {}, (line) => {
+          res.write(JSON.stringify({ type: 'line', line }) + '\n');
+        });
+        res.write(JSON.stringify({ type: 'done', ...result }) + '\n');
       } catch (e) {
-        res.writeHead(500, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: e.message, lines: [], passed: [], failed: [] }));
+        res.write(JSON.stringify({ type: 'done', error: e.message, lines: [], passed: [], failed: [] }) + '\n');
+      }
+      res.end();
+      return;
+    }
+
+    /* ── /api/project/check-attachment (requires member session OR admin token) ──
+       Checks whether the frontend/backend repo URLs configured on a project are
+       reachable, and if so clones/refreshes a shallow cache and returns a
+       size-capped source bundle to ground automated script generation. Used both by
+       the QA workspace flow and the admin Projects page's "Test Connection" button. */
+    if (req.method === 'POST' && req.url === '/api/project/check-attachment') {
+      const adminToken = req.headers['x-admin-token'];
+      const isAdmin = adminToken && adminSessions.has(adminToken);
+      if (!isAdmin && !getSession(req)) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Authentication required' })); return; }
+      try {
+        const { frontendRepoUrl, backendRepoUrl } = JSON.parse(body);
+        const checkOne = (url) => {
+          if (!url || !String(url).trim()) return null;
+          const trimmed = String(url).trim();
+          const name = trimmed.replace(/\.git$/, '').split('/').filter(Boolean).pop() || trimmed;
+          if (!isValidGitUrl(trimmed)) return { url: trimmed, name, attached: true, reachable: false, error: 'Invalid or disallowed repository URL — must be a public https:// Git URL' };
+          const reach = checkGitReachable(trimmed);
+          if (!reach.ok) return { url: trimmed, name, attached: true, reachable: false, error: reach.error };
+          const sync = syncRepoCache(trimmed);
+          if (!sync.ok) return { url: trimmed, name, attached: true, reachable: false, error: sync.error };
+          const { context, truncated } = collectRepoContext(sync.dir);
+          return { url: trimmed, name, attached: true, reachable: true, context, truncated };
+        };
+        const frontend = checkOne(frontendRepoUrl);
+        const backend  = checkOne(backendRepoUrl);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ frontend, backend }));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: e.message }));
       }
       return;
     }
