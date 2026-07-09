@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline'; connect-src 'self' https://unpkg.com https://cdnjs.cloudflare.com; img-src 'self' data: blob:; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self';"/>
 
-<title>QA AI Platform</title>
+<title>QA AI Platform Advance</title>
 <script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js" crossorigin="anonymous"></script>
 <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js" crossorigin="anonymous"></script>
 <script src="https://unpkg.com/@babel/standalone@7.26.5/babel.min.js" crossorigin="anonymous"></script>
@@ -347,6 +347,106 @@ function parseCSVUsers(text) {
   }).filter(u => u.username);
   if (users.length === 0) return { error: "No valid rows found in the CSV." };
   return { users };
+}
+
+// A saved story "belongs" to a project either via a Jira-ticket-prefixed sid
+// (functional tests) or an explicit projectId (ui-design / non-functional
+// tests, which have no sid). Functional-test stories never carry a projectId,
+// so if the project has no Jira key there is no reliable signal either way —
+// fall back to visible (matching the pre-existing behavior of showing
+// everything in that case) rather than silently hiding the user's own data.
+function storyMatchesProject(s, jiraProjKey, projectId) {
+  if (s.projectId) return s.projectId === projectId;
+  if (s.sid && jiraProjKey) return s.sid.startsWith(jiraProjKey + "-");
+  return !jiraProjKey;
+}
+
+function tokenizeShellCommand(str) {
+  const tokens = [];
+  let i = 0, cur = '', inSingle = false, inDouble = false, sawAny = false;
+  while (i < str.length) {
+    const c = str[i];
+    if (inSingle) {
+      if (c === "'") { inSingle = false; } else { cur += c; }
+    } else if (inDouble) {
+      if (c === '"') { inDouble = false; }
+      else if (c === '\\' && i + 1 < str.length && '"\\$`'.includes(str[i + 1])) { cur += str[i + 1]; i++; }
+      else { cur += c; }
+    } else {
+      if (c === "'") { inSingle = true; sawAny = true; }
+      else if (c === '"') { inDouble = true; sawAny = true; }
+      else if (/\s/.test(c)) { if (sawAny || cur) { tokens.push(cur); cur = ''; sawAny = false; } }
+      else if (c === '\\' && i + 1 < str.length) { cur += str[i + 1]; i++; sawAny = true; }
+      else { cur += c; sawAny = true; }
+    }
+    i++;
+  }
+  if (cur || sawAny) tokens.push(cur);
+  return tokens;
+}
+
+// Parses a pasted cURL command (from browser DevTools / Postman "Copy as cURL")
+// into { url, method, body, bearer, basicUser, basicPass }. Unknown flags are ignored.
+function parseCurlCommand(raw) {
+  if (!raw || !raw.trim()) return null;
+  // Normalize line continuations: bash "\", cmd "^", PowerShell "`", each followed by a newline.
+  const normalized = raw.replace(/[\\^`]\s*\r?\n/g, ' ').replace(/\r?\n/g, ' ');
+  const tokens = tokenizeShellCommand(normalized.trim());
+  if (!tokens.length) return null;
+  let i = 0;
+  if (/^curl(\.exe)?$/i.test(tokens[0])) i = 1;
+
+  let url = '', method = '', body = '', bearer = '', basicUser = '', basicPass = '';
+  let hasData = false;
+  const headers = [];
+
+  for (; i < tokens.length; i++) {
+    const t = tokens[i];
+    if (t === '-X' || t === '--request') { method = (tokens[++i] || '').toUpperCase(); }
+    else if (t === '-H' || t === '--header') { headers.push(tokens[++i] || ''); }
+    else if (t === '-d' || t === '--data' || t === '--data-raw' || t === '--data-binary' || t === '--data-ascii') { body = tokens[++i] || ''; hasData = true; }
+    else if (t === '--data-urlencode') { const v = tokens[++i] || ''; body = body ? body + '&' + v : v; hasData = true; }
+    else if (t === '-u' || t === '--user') {
+      const up = tokens[++i] || '';
+      const idx = up.indexOf(':');
+      basicUser = idx >= 0 ? up.slice(0, idx) : up;
+      basicPass = idx >= 0 ? up.slice(idx + 1) : '';
+    }
+    else if (t === '--url') { url = tokens[++i] || ''; }
+    else if (!url && /^https?:\/\//i.test(t)) { url = t; }
+    // everything else (-k, -s, -L, --compressed, -i, -v, ...) is silently ignored
+  }
+
+  // Any header that isn't Authorization (handled above) or Content-Type/Accept
+  // (already sent by every test) is likely a custom auth mechanism — e.g. an
+  // API key header — so surface it as an importable custom header.
+  const otherHeaders = [];
+  headers.forEach(h => {
+    const idx = h.indexOf(':');
+    if (idx === -1) return;
+    const rawName = h.slice(0, idx).trim();
+    const name = rawName.toLowerCase();
+    const value = h.slice(idx + 1).trim();
+    if (name === 'authorization') {
+      if (/^bearer\s+/i.test(value)) bearer = value.replace(/^bearer\s+/i, '');
+      else if (/^basic\s+/i.test(value)) {
+        try {
+          const decoded = atob(value.replace(/^basic\s+/i, ''));
+          const idx2 = decoded.indexOf(':');
+          basicUser = idx2 >= 0 ? decoded.slice(0, idx2) : decoded;
+          basicPass = idx2 >= 0 ? decoded.slice(idx2 + 1) : '';
+        } catch {}
+      }
+    } else if (name !== 'content-type' && name !== 'accept') {
+      otherHeaders.push({ name: rawName, value });
+    }
+  });
+
+  if (!method) method = hasData ? 'POST' : 'GET';
+  const ALLOWED_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'];
+  if (!ALLOWED_METHODS.includes(method)) method = hasData ? 'POST' : 'GET';
+
+  return { url, method, body, bearer, basicUser, basicPass, otherHeaders };
 }
 
 /* ─── Styles ─────────────────────────────────────────────────────────────── */
@@ -851,10 +951,23 @@ function MembersPage() {
 
 function ProjectsPage() {
   const [list,setList]=useState([...DB.projects]);
-  const [f,setF]=useState({name:"",jiraProjKey:"",platform:"web"});
+  const EMPTY_F={name:"",jiraProjKey:"",platform:"web",frontendRepoUrl:"",backendRepoUrl:""};
+  const [f,setF]=useState({...EMPTY_F});
   const [editing,setEditing]=useState(null);
-  const save=()=>{ if(!f.name) return; if(editing){Object.assign(DB.projects.find(x=>x.id===editing),{name:f.name,jiraProjKey:f.jiraProjKey,platform:f.platform});setEditing(null);}else DB.projects.push({id:uid(),...f}); saveDB(); setList([...DB.projects]); setF({name:"",jiraProjKey:"",platform:"web"}); };
-  const edit=p=>{ setEditing(p.id); setF({name:p.name,jiraProjKey:p.jiraProjKey||"",platform:p.platform||"web"}); };
+  const [testResult,setTestResult]=useState(null); const [testing,setTesting]=useState(false);
+  const save=()=>{ if(!f.name) return; if(editing){Object.assign(DB.projects.find(x=>x.id===editing),f);setEditing(null);}else DB.projects.push({id:uid(),...f}); saveDB(); setList([...DB.projects]); setF({...EMPTY_F}); setTestResult(null); };
+  const edit=p=>{ setEditing(p.id); setF({name:p.name,jiraProjKey:p.jiraProjKey||"",platform:p.platform||"web",frontendRepoUrl:p.frontendRepoUrl||"",backendRepoUrl:p.backendRepoUrl||""}); setTestResult(null); };
+  const testConnection=async()=>{
+    if(!f.frontendRepoUrl.trim()&&!f.backendRepoUrl.trim()){ setTestResult({clientError:"Enter at least one repo URL first."}); return; }
+    setTesting(true); setTestResult(null);
+    try{
+      const r=await fetch(API_BASE+"/api/project/check-attachment",{method:"POST",headers:{"Content-Type":"application/json","X-Admin-Token":sessionStorage.getItem(ADMIN_TOKEN_KEY)||""},body:JSON.stringify({frontendRepoUrl:f.frontendRepoUrl,backendRepoUrl:f.backendRepoUrl})});
+      const d=await r.json();
+      if(!r.ok) throw new Error(d.error||"Check failed");
+      setTestResult(d);
+    }catch(e){ setTestResult({clientError:e.message}); }
+    setTesting(false);
+  };
   const del=id=>{ DB.projects=DB.projects.filter(p=>p.id!==id); DB.assignments=DB.assignments.filter(a=>a.projectId!==id); saveDB(); setList([...DB.projects]); };
   const th={textAlign:"left",padding:"8px 12px",borderBottom:"1px solid var(--color-border-tertiary)",fontSize:12,fontWeight:500,color:"var(--color-text-secondary)"};
   const td={padding:"10px 12px",borderBottom:"1px solid var(--color-border-tertiary)"};
@@ -869,14 +982,33 @@ function ProjectsPage() {
         <div><Lbl>Platform</Lbl><select style={sel} value={f.platform} onChange={e=>setF(p=>({...p,platform:e.target.value}))}><option value="web">Web</option><option value="mobile">Mobile</option><option value="both">Both</option></select></div>
         <div><Lbl>Jira Project Key</Lbl><input style={inp} value={f.jiraProjKey} onChange={e=>setF(p=>({...p,jiraProjKey:e.target.value}))} placeholder="PROJ"/></div>
       </div>
-      <div style={{display:"flex",gap:8}}><Btn v="primary" onClick={save}>{editing?"Save":"Add"}</Btn>{editing&&<button onClick={()=>{setEditing(null);setF({name:"",jiraProjKey:"",platform:"web"});}} style={{padding:"8px 18px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:14,color:"var(--color-text-secondary)"}}>Cancel</button>}</div>
+      <div style={{fontSize:12,fontWeight:500,color:"var(--color-text-secondary)",marginBottom:8}}>Attached repos (optional) — enables automatic script generation &amp; execution, skipping manual Codegen recording</div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
+        <div><Lbl>Frontend repo URL</Lbl><input style={inp} value={f.frontendRepoUrl} onChange={e=>{setF(p=>({...p,frontendRepoUrl:e.target.value}));setTestResult(null);}} placeholder="https://github.com/org/app-frontend"/></div>
+        <div><Lbl>Backend repo URL</Lbl><input style={inp} value={f.backendRepoUrl} onChange={e=>{setF(p=>({...p,backendRepoUrl:e.target.value}));setTestResult(null);}} placeholder="https://github.com/org/app-backend"/></div>
+      </div>
+      <div style={{marginBottom:12}}>
+        <button onClick={testConnection} disabled={testing||(!f.frontendRepoUrl.trim()&&!f.backendRepoUrl.trim())} style={{padding:"8px 18px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:testing?"not-allowed":"pointer",fontSize:14,fontWeight:500,color:"var(--color-text-secondary)",opacity:(!f.frontendRepoUrl.trim()&&!f.backendRepoUrl.trim())?0.5:1}}>{testing?"Testing…":"🔌 Test Connection"}</button>
+        {testResult&&<div style={{marginTop:10,padding:"10px 14px",borderRadius:8,fontSize:13,lineHeight:1.7,background:testResult.clientError?"var(--color-background-danger)":"var(--color-background-tertiary)",border:"1px solid "+(testResult.clientError?"rgba(153,27,27,0.2)":"var(--color-border-secondary)")}}>
+          {testResult.clientError
+            ?<span style={{color:"var(--color-text-danger)"}}>✗ {testResult.clientError}</span>
+            :[["frontend","Frontend"],["backend","Backend"]].map(([key,label])=>{
+              const r=testResult[key];
+              if(!r) return null;
+              return <div key={key}>{r.reachable?<span style={{color:"var(--color-text-success)"}}>✓ {label} ({r.name}) — reachable{r.truncated?" · source truncated to fit context limit":""}</span>:<span style={{color:"var(--color-text-danger)"}}>✗ {label} ({r.name}) — {r.error}</span>}</div>;
+            })}
+        </div>}
+      </div>
+      <div style={{display:"flex",gap:8}}><Btn v="primary" onClick={save}>{editing?"Save":"Add"}</Btn>{editing&&<button onClick={()=>{setEditing(null);setF({...EMPTY_F});setTestResult(null);}} style={{padding:"8px 18px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:14,color:"var(--color-text-secondary)"}}>Cancel</button>}</div>
     </div>
     <div style={card}>{list.length===0?<div style={{color:"var(--color-text-tertiary)",fontSize:14}}>No projects.</div>:
       <table style={{width:"100%",borderCollapse:"collapse",fontSize:14}}>
-        <thead><tr><th style={th}>Name</th><th style={th}>Jira Key</th><th style={th}>Platform</th><th style={th}>Members</th><th style={th}></th></tr></thead>
+        <thead><tr><th style={th}>Name</th><th style={th}>Jira Key</th><th style={th}>Platform</th><th style={th}>Attached</th><th style={th}>Members</th><th style={th}></th></tr></thead>
         <tbody>{list.map(p=>{
           const memberCount=DB.assignments.filter(a=>a.projectId===p.id).length;
+          const attachedCount=[p.frontendRepoUrl,p.backendRepoUrl].filter(Boolean).length;
           return <tr key={p.id}><td style={td}><b>{p.name}</b></td><td style={td}><Tag c="blue">{p.jiraProjKey||"—"}</Tag></td><td style={td}><Tag c={p.platform==="mobile"?"amber":"blue"}>{p.platform}</Tag></td>
+            <td style={td}>{attachedCount>0?<Tag c="green">{attachedCount===2?"Frontend + Backend":p.frontendRepoUrl?"Frontend only":"Backend only"}</Tag>:<Tag>None</Tag>}</td>
             <td style={td}><span style={{fontSize:13,color:"var(--color-text-secondary)"}}>{memberCount} assigned</span></td>
             <td style={td}><div style={{display:"flex",gap:8}}><Btn v="ghost" onClick={()=>edit(p)}>Edit</Btn><Btn v="danger" onClick={()=>del(p.id)}>Remove</Btn></div></td>
           </tr>;
@@ -1266,6 +1398,8 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
   const [platform,setPlatform]=useState("web"); const [ctypes,setCtypes]=useState([]);
   const [readyFilter,setReadyFilter]=useState("all");
   const [gapText,setGapText]=useState(""); const [cases,setCases]=useState([]);
+  const [needsClarification,setNeedsClarification]=useState([]);
+  const [coverageSummary,setCoverageSummary]=useState("");
   const [editOn,setEditOn]=useState(false); const [scripts,setScripts]=useState({web:"",ios:"",android:""});
   const [projFiles,setProjFiles]=useState(null); const [tab,setTab]=useState("web");
   const [execLines,setExecLines]=useState([]); const [result,setResult]=useState(null);
@@ -1276,6 +1410,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
   const [showAddCase,setShowAddCase]=useState(false); const [newCase,setNewCase]=useState({title:"",type:"happy",platform:"web",preconditions:"",steps:[""],expected:"",automatable:true}); const [newCaseErr,setNewCaseErr]=useState("");
   const [selectedForScripts,setSelectedForScripts]=useState([]); const [coverageText,setCoverageText]=useState(""); const [sessionBugs,setSessionBugs]=useState([]); const [appUrl,setAppUrl]=useState("");
   const [codegenSessionId,setCodegenSessionId]=useState(null); const [codegenScript,setCodegenScript]=useState(""); const [codegenStatus,setCodegenStatus]=useState("idle");
+  const [attachCheck,setAttachCheck]=useState(null); const [attachStatus,setAttachStatus]=useState("idle"); const [autoExecute,setAutoExecute]=useState(false); const [forceManual,setForceManual]=useState(false);
   const [scriptCache,setScriptCache]=useState({});
   const [showFullStory,setShowFullStory]=useState(false);
   const [editingBugId,setEditingBugId]=useState(null); const [editBugForm,setEditBugForm]=useState({});
@@ -1283,12 +1418,14 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
   const showToast=(msg)=>{setToast(msg);setTimeout(()=>setToast(null),3000);};
 
   // ── Non-functional / performance test state ──────────────────────────────
-  const PERF_FORM_DEFAULT={testType:"load",testName:"",method:"GET",apiUrl:"",expectedStatus:200,authType:"none",token:"",basicUsername:"",basicPassword:"",requestBody:"",vus:100,duration:"60s",ramp:"10s",p95Threshold:2000,csvUsers:null,csvFileName:"",csvError:""};
+  const PERF_FORM_DEFAULT={testType:"load",testName:"",method:"GET",apiUrl:"",expectedStatus:200,authType:"none",token:"",basicUsername:"",basicPassword:"",requestBody:"",vus:100,duration:"60s",ramp:"10s",p95Threshold:2000,csvUsers:null,csvFileName:"",csvError:"",variables:[],customHeaders:[]};
   const [testKind,setTestKind]=useState("functional");
   const [perfForm,setPerfForm]=useState(PERF_FORM_DEFAULT);
   const [perfResult,setPerfResult]=useState(null);
   const [perfLoading,setPerfLoading]=useState(false);
   const [perfChat,setPerfChat]=useState(false);
+  const [curlDraft,setCurlDraft]=useState("");
+  const [curlErr,setCurlErr]=useState("");
 
   // ── UI Design Testing state ───────────────────────────────────────────────
   const [uidForm,setUidForm]=useState({pageUrl:"",figmaUrl:"",figmaToken:"",selectedNodeId:""});
@@ -1304,6 +1441,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
   const [uidJiraTicketKey,setUidJiraTicketKey]=useState("");
   const [uidAiotestStatus,setUidAiotestStatus]=useState({importing:false,done:false,error:""});
   const [uidStoryId,setUidStoryId]=useState(null);
+  const [perfStoryId,setPerfStoryId]=useState(null);
   const [uidTicketSearch,setUidTicketSearch]=useState("");
   const [uidTicketResults,setUidTicketResults]=useState([]);
   const [uidTicketSearching,setUidTicketSearching]=useState(false);
@@ -1335,8 +1473,8 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
   const WS_IDX = {
     project:0, testType:1,
     input:2, mode:3, gap:3, ctype:4, ready:4,
-    review:5, jira:6, urlPrompt:7, scriptSelect:7, autoReady:7,
-    runAsk:8, running:8, result:8, bugReport:9, coverage:10,
+    review:5, jira:6, urlPrompt:7, checkingAttachment:7, attachError:7, codegenRecording:7, scriptSelect:7, autoReady:7,
+    runAsk:8, running:8, result:8, manualExec:8, bugReport:9, coverage:10,
     perfTest:2, perfResult:3,
     uidJiraTicket:2, uidSetup:3, uidCases:4, uidRun:5, uidResults:6, uidBugs:7, uidReport:8
   };
@@ -1407,7 +1545,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
     if(phase==="input"||phase==="testType"){localStorage.removeItem(WS_SNAP);return;}
     try{localStorage.setItem(WS_SNAP,JSON.stringify({phase,testKind,sid,sdata,platform,ctypes,gapText,cases,scripts,tab,result,execLines,coverageText,sessionBugs,selectedForScripts,appUrl,uidForm,uidCases,uidVisualResult,uidFigmaImg,uidManualFigmaImg,uidJiraTicketKey,uidStoryId,uidScript,uidDemandName,uidSelectedForScript,uidJiraMode,uidStoryRequirements,uidStoryFiles,uidSvgFiles}));}catch{}
     // Also keep per-story cache up to date
-    if(sid&&sdata)saveStoryToCache(sid,{phase,sdata,platform,ctypes,gapText,cases,scripts,result,sessionBugs,coverageText,appUrl});
+    if(sid&&sdata)saveStoryToCache(sid,{phase,sdata,platform,ctypes,gapText,cases,needsClarification,scripts,result,sessionBugs,coverageText,appUrl});
   },[phase,sid,sdata,platform,ctypes,gapText,cases,scripts,tab,result,execLines,coverageText,sessionBugs,selectedForScripts,appUrl,uidCases,uidVisualResult,uidJiraTicketKey,uidStoryId,uidScript,uidDemandName,uidSelectedForScript,uidJiraMode,uidStoryRequirements,uidStoryFiles,uidSvgFiles]);
 
   // Poll codegen session status while recording
@@ -1439,6 +1577,25 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
     if(codegenSessionId)fetch(API_BASE+"/api/codegen/"+codegenSessionId,{method:"DELETE",headers:{"X-Session-Token":sessionStorage.getItem(SESSION_TOKEN_KEY)||""}}).catch(()=>{});
     setCodegenSessionId(null);setCodegenStatus("idle");setPhase("urlPrompt");
   };
+  // Re-checked fresh every time the user submits the Application URL — never cached across visits,
+  // so switching URLs or re-attaching a repo in Projects is always reflected.
+  const checkAttachment=async()=>{
+    if(forceManual||(!proj?.frontendRepoUrl&&!proj?.backendRepoUrl)){ setAttachCheck(null); setAutoExecute(false); setPhase("scriptSelect"); return; }
+    setAttachStatus("checking"); setPhase("checkingAttachment");
+    try{
+      const r=await fetch(API_BASE+"/api/project/check-attachment",{method:"POST",headers:{"Content-Type":"application/json","X-Session-Token":sessionStorage.getItem(SESSION_TOKEN_KEY)||""},body:JSON.stringify({frontendRepoUrl:proj.frontendRepoUrl||"",backendRepoUrl:proj.backendRepoUrl||""})});
+      const d=await r.json();
+      if(!r.ok) throw new Error(d.error||"Attachment check failed");
+      const anyAttached=(d.frontend?.attached)||(d.backend?.attached);
+      const anyReachable=(d.frontend?.reachable)||(d.backend?.reachable);
+      setAttachCheck(d);
+      if(anyAttached&&anyReachable){ setAutoExecute(true); setAttachStatus("attached"); setPhase("scriptSelect"); }
+      else if(anyAttached&&!anyReachable){ setAutoExecute(false); setAttachStatus("error"); setPhase("attachError"); }
+      else { setAutoExecute(false); setAttachStatus("none"); setPhase("scriptSelect"); }
+    }catch(e){
+      setAttachCheck(null); setAutoExecute(false); setAttachStatus("error"); setPhase("attachError");
+    }
+  };
 
   const SYS=`You are an expert QA engineer. All story data is already provided in the user message — do NOT use any external tools, do NOT access Jira, Atlassian, or any other service. Work only with the text provided. Project:"${proj?.name}" Platform:${proj?.platform||"web"}.`;
   const jiraConfigured=!!sessionStorage.getItem(SESSION_TOKEN_KEY);
@@ -1449,7 +1606,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
 
   if (!proj) return <div style={card}><div style={{color:"var(--color-text-warning)",fontWeight:500}}>No project assigned. Contact your QA lead.</div></div>;
   const [switchTarget,setSwitchTarget]=React.useState(null);
-  const doSwitchProj=(id)=>{setSelectedProjId(id);setPhase("testType");setTestKind("functional");setPerfResult(null);setSid("");setSdata(null);setCases([]);setResult(null);setExecLines([]);setScripts({web:"",ios:"",android:""});setHasSaved(false);setUidForm({pageUrl:"",figmaUrl:"",figmaToken:"",selectedNodeId:""});setUidCases([]);setUidVisualResult(null);setUidFigmaImg(null);setUidScreenshotImg(null);setUidFigmaFrames([]);setUidJiraStatus({});setUidManualFigmaImg(null);setUidJiraTicketKey("");setUidAiotestStatus({importing:false,done:false,error:""});setUidTicketSearch("");setUidTicketResults([]);setUidTicketSearching(false);};
+  const doSwitchProj=(id)=>{setSelectedProjId(id);setPhase("testType");setTestKind("functional");setPerfForm(PERF_FORM_DEFAULT);setPerfResult(null);setPerfStoryId(null);setSid("");setSdata(null);setCases([]);setNeedsClarification([]);setCoverageSummary("");setResult(null);setExecLines([]);setScripts({web:"",ios:"",android:""});setHasSaved(false);setUidForm({pageUrl:"",figmaUrl:"",figmaToken:"",selectedNodeId:""});setUidCases([]);setUidVisualResult(null);setUidFigmaImg(null);setUidScreenshotImg(null);setUidFigmaFrames([]);setUidJiraStatus({});setUidManualFigmaImg(null);setUidJiraTicketKey("");setUidStoryId(null);setUidAiotestStatus({importing:false,done:false,error:""});setUidTicketSearch("");setUidTicketResults([]);setUidTicketSearching(false);};
   const switchProj=(id)=>{
     if(id===selectedProjId)return;
     if(sid){setSwitchTarget(id);return;}
@@ -1498,7 +1655,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
   const doFetch=async()=>{
     // Save current story state before switching to a new one
     if(sdata?.key && sdata.key!==sid){
-      saveStoryToCache(sdata.key,{phase,sdata,platform,ctypes,gapText,cases,scripts,result,sessionBugs,coverageText,appUrl});
+      saveStoryToCache(sdata.key,{phase,sdata,platform,ctypes,gapText,cases,needsClarification,scripts,result,sessionBugs,coverageText,appUrl});
     }
     setLoading(true); setLmsg("Fetching story from Jira…"); setFetchError(""); setShowFullStory(false);
     // Check per-story cache first — if we have state for this story, restore it immediately
@@ -1508,6 +1665,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
       setPlatform(cached.platform||proj?.platform||"web");
       setGapText(cached.gapText||"");
       setCases(cached.cases||[]);
+      setNeedsClarification(cached.needsClarification||[]);
       setCtypes(cached.ctypes||[]);
       setScripts(cached.scripts||{web:"",ios:"",android:""});
       setResult(cached.result||null);
@@ -1534,7 +1692,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
       const {flds,desc}=extractDesc(d);
       const sd={key:d.key,summary:flds.summary||sid,description:desc,labels:flds.labels||[],type:flds.issuetype?.name||"Story",status:flds.status?.name||"",assignee:flds.assignee?.displayName||"—",priority:flds.priority?.name||"Medium",comments};
       setSdata(sd); const pp=proj.platform||"web"; setPlatform(pp==="both"?"web":pp);
-      setGapText(""); setCases([]); setCtypes([]); setResult(null); setSessionBugs([]); setCoverageText(""); setAppUrl("");
+      setGapText(""); setCases([]); setCtypes([]); setNeedsClarification([]); setCoverageSummary(""); setResult(null); setSessionBugs([]); setCoverageText(""); setAppUrl("");
       setPhase("mode"); setLoading(false);
     } catch(e) {
       if(jiraConfigured){
@@ -1546,7 +1704,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
       }
       setSdata({key:sid,summary:"Story "+sid,description:"",labels:[],type:"Story",status:"In Progress",assignee:"—",priority:"Medium",sim:true});
       const pp=proj?.platform||"web"; setPlatform(pp==="both"?"web":pp);
-      setGapText(""); setCases([]); setCtypes([]); setResult(null); setSessionBugs([]); setCoverageText(""); setAppUrl("");
+      setGapText(""); setCases([]); setCtypes([]); setNeedsClarification([]); setCoverageSummary(""); setResult(null); setSessionBugs([]); setCoverageText(""); setAppUrl("");
       setPhase("mode"); setLoading(false);
     }
   };
@@ -1574,7 +1732,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
       ?`Story ID: ${sid} | Platform: ${platform} | Type: ${sdata.type||"N/A"} | Priority: ${sdata.priority||"N/A"} | Status: ${sdata.status||"N/A"}${(sdata.labels||[]).length>0?" | Labels: "+sdata.labels.join(", "):""}`
       :`Story ID: ${sid} | Platform: ${platform} | [AI simulation — no real Jira content]`;
     const storyBlock=sdata&&!sdata.sim
-      ?`STORY TITLE: ${sdata.summary}\nDESCRIPTION (${descLen} characters):\n${desc.slice(0,8000)}${commentsCtx}`
+      ?`STORY TITLE: ${sdata.summary}\nDESCRIPTION (${descLen} characters):\n${desc.slice(0,20000)}${commentsCtx}`
       :`STORY TITLE: Simulated ${platform} feature\nDESCRIPTION:\nAs a user I want to perform a core action so that I gain value.\nAcceptance Criteria:\n1. The feature works on valid input.\n2. Errors are shown for invalid input.\n3. The UI is responsive.`;
 
     const GAP_PROMPT=`You are a QA Gap Analysis Agent specialized in analyzing user stories that have already been fetched from Jira by the application.
@@ -1732,6 +1890,8 @@ OVERALL STORY READINESS FOR QA:
     setLoading(false);
   };
 
+  // Shared by doGen and doFindGaps — apply before finalizing any generated test case list.
+  const dedupRules=`\nDEDUPLICATION RULES — apply before finalizing the list:\n1. SEMANTIC DEDUP, NOT JUST TEXT DEDUP. Before adding a case, check if it asserts the SAME underlying (trigger + expected outcome) pair as an existing/kept case, even if worded differently. "Verify X is visible only when status is Y", "Verify X is not available when status is not Y", and "Verify X cannot happen when status is Z (Z != Y)" are the SAME test — generate ONE case with the positive assertion. Only add a separate negative case if the negative path has a genuinely different mechanism (different error message, different response code, different UI treatment) — not just the logical inverse of the same check.\n2. ONE CANONICAL CASE PER RULE. For each AC/business rule/exception, generate exactly ONE case unless it has genuinely distinct sub-behaviors (3 different named error messages for 3 different triggers = 3 cases; 1 trigger and 1 outcome restated 4 ways = 1 case).\n3. Before adding a case, check it against every case already in the list (including the KEPT CASES below): does an existing case test the same (component, trigger, expected result)? If yes, does the new one exercise a genuinely distinct boundary/data variant/failure mode? If it only restates the same tuple with different phrasing or a trivial variation, DISCARD it.\n4. MERGE PARAMETERIZED CHECKS. If several candidates differ only in input value (min length, max length, special chars, empty, whitespace-only, etc. all testing the same field-rendering/validation behavior), do NOT generate separate cases — generate ONE case whose testData/steps describe the full set of input variants to try.\n5. FLAG, DON'T GUESS, undefined requirements. If a candidate case would assert behavior not explicitly stated in the story (list sort order, max attachment count, exact timing of a status change, etc.), do NOT generate it as a normal case — instead add it to needsClarification with the assumption it's making, so a human confirms the requirement exists first.\n6. Before finalizing, do an internal pass: group drafts by (component + trigger + expected-outcome-category) and collapse each group to its single best-worded canonical case.`;
   const doGen=async()=>{
     setLoading(true);
     const selectedTypes=ctypes.includes("all")?["happy","edge","negative"]:ctypes;
@@ -1740,32 +1900,97 @@ OVERALL STORY READINESS FOR QA:
     const keptCases=cases.filter(c=>selectedTypes.includes(c.type));
     if(newTypes.length===0){setCases(keptCases);setPhase("ready");setReadyFilter("all");setLoading(false);return;}
     setLmsg("Generating "+newTypes.map(t=>t+" flow").join(", ")+" in parallel…");
-    const ctx=sdata&&!sdata.sim?`Story ID: ${sid}\nSummary: "${sdata.summary}"\n\nFull Description / Acceptance Criteria:\n${sdata.description?.slice(0,6000)||"No description provided."}`:"Simulate a realistic feature story with 5 clear, distinct acceptance criteria covering different aspects of the feature.";
+    const ctx=sdata&&!sdata.sim?`Story ID: ${sid}\nSummary: "${sdata.summary}"\n\nFull Description / Acceptance Criteria:\n${sdata.description?.slice(0,20000)||"No description provided."}`:"Simulate a realistic feature story with 5 clear, distinct acceptance criteria covering different aspects of the feature.";
     const typeGuide={
       happy:"MAIN SUCCESS paths — valid inputs, correct credentials, expected user journeys, normal operations where everything works as designed.",
       edge:"BOUNDARY and LIMIT conditions only — min/max field lengths, zero/empty values, very long strings, special characters, date boundaries, maximum file sizes. Do NOT duplicate negative error scenarios.",
       negative:"INVALID inputs and ERROR conditions only — wrong passwords, unauthorized access, missing required fields, incorrect data formats, network errors, permission denied. Do NOT duplicate edge/boundary cases."
     };
     try {
-      const rawNew=[];
+      const rawNew=[]; const rawClar=[];
       for(let i=0;i<newTypes.length;i++){
         const type=newTypes[i];
         setLmsg(`Generating ${type} flow… (${i+1} of ${newTypes.length})`);
-        const r=await callAI([{role:"user",content:`You are a senior QA engineer. Your task is to generate comprehensive ${type} test cases for the story below.\n\nPlatform: ${platform}\n${ctx}\n\nTYPE: ${type.toUpperCase()} — ${typeGuide[type]||""}\n\nSTEP 1 — Extract ALL Acceptance Criteria:\nRead the full description above and number every acceptance criterion you find (AC-1, AC-2, AC-3, …). Do not skip any.\n\nSTEP 2 — Generate test cases:\nFor EACH AC you identified, generate at least 2-3 ${type} test cases that specifically verify that AC.\nRules:\n- Every title must start with "Verify".\n- No duplicate test case titles.\n- Every AC must have at least one test case — missing an AC is a defect.\n- No limit on total number of cases — completeness is required.\n- automatable:false only for offline/camera/biometrics/hardware-dependent tests.\n- priority: one of "Critical", "High", "Medium", "Low" based on risk and importance.\n- description: one sentence describing what this test case validates.\n- testData: specific values, credentials, or inputs needed (empty string if none).\n- preconditions: system state required before executing (e.g. "User is logged in as admin").\n- steps: array of action strings (what the tester does).\n- stepResults: array of expected results — SAME LENGTH as steps, one per step describing what should happen after that step.\n- expected: the overall final expected outcome of the test case.\n\nReturn ONLY a valid JSON array with no markdown or explanation:\n[{"id":"TC-001","title":"Verify ...","description":"...","type":"${type}","platform":"${platform}","priority":"High","preconditions":"...","testData":"...","steps":["Step 1","Step 2","Step 3"],"stepResults":["Expected after step 1","Expected after step 2","Expected after step 3"],"expected":"...","automatable":true}]`}],SYS,8000,proj.anthropicKey||"");
-        const match=r.replace(/```json|```/g,"").trim().match(/\[[\s\S]*\]/);
+        const keptCtx=keptCases.length>0?`\n\nKEPT CASES ALREADY IN THE LIST (do not duplicate these — see dedup rule 3):\n${keptCases.map(c=>`- [${c.type}] ${c.title}`).join("\n")}`:"";
+        const r=await callAI([{role:"user",content:`You are a senior QA engineer. Your task is to generate comprehensive, DEDUPLICATED ${type} test cases for the story below.\n\nPlatform: ${platform}\n${ctx}${keptCtx}\n\nTYPE: ${type.toUpperCase()} — ${typeGuide[type]||""}\n\nSTEP 1 — Extract ALL Acceptance Criteria:\nRead the full description above and number every acceptance criterion you find (AC-1, AC-2, AC-3, …). Do not skip any.\n\nSTEP 2 — Generate test cases:\nFor EACH AC you identified, draft candidate ${type} test cases that verify that AC, then apply the deduplication rules below before finalizing.\n${dedupRules}\n\nOther rules:\n- Every title must start with "Verify".\n- No duplicate test case titles.\n- Every AC must have at least one surviving test case — missing an AC is a defect, but a bloated near-duplicate list is also a defect.\n- automatable:false only for offline/camera/biometrics/hardware-dependent tests.\n- priority: one of "Critical", "High", "Medium", "Low" based on risk and importance.\n- description: one sentence describing what this test case validates.\n- testData: specific values, credentials, inputs, or (for merged parameterized checks) the full list of input variants needed (empty string if none).\n- preconditions: system state required before executing (e.g. "User is logged in as admin").\n- steps: array of action strings (what the tester does).\n- stepResults: array of expected results — SAME LENGTH as steps, one per step describing what should happen after that step.\n- expected: the overall final expected outcome of the test case.\n\nReturn ONLY valid JSON with no markdown or explanation, in this exact shape:\n{"cases":[{"id":"TC-001","title":"Verify ...","description":"...","type":"${type}","platform":"${platform}","priority":"High","preconditions":"...","testData":"...","steps":["Step 1","Step 2","Step 3"],"stepResults":["Expected after step 1","Expected after step 2","Expected after step 3"],"expected":"...","automatable":true}],"needsClarification":[{"item":"Short description of the untestable assumption","assumption":"What would have to be true for this to be testable"}]}`}],SYS,8000,proj.anthropicKey||"");
+        const cleaned=r.replace(/```json|```/g,"").trim();
+        const match=cleaned.match(/\{[\s\S]*\}/);
         if(!match) throw new Error("Invalid response for "+type+" cases. Make sure server.js is running.");
-        rawNew.push(...JSON.parse(match[0]).map(c=>({...c,type,status:"pending"})));
+        const parsed=JSON.parse(match[0]);
+        rawNew.push(...(parsed.cases||[]).map(c=>({...c,type,status:"pending"})));
+        rawClar.push(...(parsed.needsClarification||[]).map(x=>({...x,type})));
       }
       const norm=t=>t.toLowerCase().replace(/[^a-z0-9]/g," ").replace(/\s+/g," ").trim();
       const seen=new Set(keptCases.map(c=>norm(c.title)));
       const newDeduped=rawNew.filter(c=>{const k=norm(c.title);if(seen.has(k))return false;seen.add(k);return true;});
       const finalCases=[...keptCases,...newDeduped].map((c,i)=>({...c,id:"TC-"+String(i+1).padStart(3,"0")}));
       setCases(finalCases);
+      const clarSeen=new Set(needsClarification.map(x=>norm(x.item)));
+      const clarDeduped=rawClar.filter(x=>{const k=norm(x.item);if(clarSeen.has(k))return false;clarSeen.add(k);return true;});
+      if(clarDeduped.length>0)setNeedsClarification(nc=>[...nc,...clarDeduped]);
     } catch(e){setLoading(false);alert("Failed to generate test cases:\n\n"+e.message);return;}
     setPhase("ready");setReadyFilter("all");setLoading(false);
   };
 
-  const stripMd=s=>s.replace(/^```(?:javascript|js|typescript|ts)?\n?/i,'').replace(/\n?```\s*$/,'').trim();
+  // Gap-fill mode: given the story + the FULL existing case list (any type, any origin —
+  // generated, manually added, imported), add ONLY new cases that close real coverage gaps.
+  // Never rewrites/merges/duplicates existing cases, even if worded differently.
+  const doFindGaps=async()=>{
+    if(cases.length===0){alert("Generate or add test cases first — gap analysis compares against your existing list.");return;}
+    setLoading(true); setLmsg("Analyzing story for coverage gaps…");
+    const ctx=sdata&&!sdata.sim?`Story ID: ${sid}\nSummary: "${sdata.summary}"\n\nFull Description / Acceptance Criteria / Comments:\n${sdata.description?.slice(0,20000)||"No description provided."}`:"Simulate a realistic feature story with 5 clear, distinct acceptance criteria covering different aspects of the feature.";
+    const existingList=cases.map(c=>`${c.id} | ${c.type} | ${c.title}`).join("\n");
+    const nextIdNum=cases.reduce((max,c)=>{const n=parseInt((c.id||"").replace(/\D/g,""),10);return isNaN(n)?max:Math.max(max,n);},0)+1;
+    try{
+      const r=await callAI([{role:"user",content:`You are a senior QA engineer. I already have an existing set of test cases for the Jira story below. Your job is to ADD NEW test cases that close coverage gaps — do NOT rewrite, rephrase, merge, or duplicate any existing case in intent, even if your wording would differ from mine.\n\nPlatform: ${platform}\n${ctx}\n\nEXISTING TEST CASES (already covered — do not duplicate these scenarios):\n${existingList}\n\nYOUR TASK:\n1. Read the full story: statement, preconditions, UX/UI notes, all main-flow and sub-flow sections, business rules, exceptions, acceptance criteria, outputs, and any comments that clarify or narrow scope.\n2. Cross-check every explicit requirement, flow step, business rule, and exception against the existing test case list above.\n3. Identify what is NOT covered, including: any main/sub-flow with no dedicated case; any AC with only partial/implied coverage; any alternate entry point or actor path not exercised; timing/boundary conditions stated in the story but not tested at their boundaries; state-transition edge cases (action attempted twice, attempted after state already changed, race conditions between two valid trigger points); failure/rollback behavior for anything described as transactional; scope narrowed or confirmed by ticket comments.\n4. Generate NEW test cases ONLY for confirmed gaps.\n${dedupRules}\n\nRULES:\n- Never assert a specific numeric limit, format, or threshold (max length, file size, timeout, retry count) unless the story explicitly states it — if implied but undefined, put it in needsClarification instead of guessing.\n- Never generate cases for functionality explicitly marked out of scope in the story or its comments.\n- If the story is ambiguous on a specific behavior (e.g. hidden vs. masked, when a timer starts), add it to needsClarification rather than assuming an interpretation.\n- Prefer atomic test cases (one behavior per new case) even if some existing cases are bundled.\n- Do NOT repeat or restate any existing case — output only genuinely new ones.\n- Every title must start with "Verify".\n- automatable:false only for offline/camera/biometrics/hardware-dependent tests.\n- priority: one of "Critical","High","Medium","Low".\n- IDs must continue the existing sequence starting at TC-${String(nextIdNum).padStart(3,"0")}.\n\nReturn ONLY valid JSON with no markdown or explanation, in this exact shape:\n{"cases":[{"id":"TC-${String(nextIdNum).padStart(3,"0")}","title":"Verify ...","description":"...","type":"happy|edge|negative","platform":"${platform}","priority":"High","preconditions":"...","testData":"...","steps":["Step 1","Step 2"],"stepResults":["Expected after step 1","Expected after step 2"],"expected":"...","automatable":true}],"needsClarification":[{"item":"...","assumption":"...","type":"happy|edge|negative"}],"coverageSummary":"Brief note: which flows/ACs are now fully covered, and what still depends on clarification before it can be considered done."}`}],SYS,8000,proj.anthropicKey||"");
+      const cleaned=r.replace(/```json|```/g,"").trim();
+      const match=cleaned.match(/\{[\s\S]*\}/);
+      if(!match) throw new Error("Invalid response. Make sure server.js is running.");
+      const parsed=JSON.parse(match[0]);
+      const norm=t=>t.toLowerCase().replace(/[^a-z0-9]/g," ").replace(/\s+/g," ").trim();
+      const seen=new Set(cases.map(c=>norm(c.title)));
+      const newCases=(parsed.cases||[]).filter(c=>{const k=norm(c.title);if(seen.has(k))return false;seen.add(k);return true;}).map((c,i)=>({...c,id:"TC-"+String(nextIdNum+i).padStart(3,"0"),status:"pending"}));
+      if(newCases.length>0)setCases(cs=>[...cs,...newCases]);
+      const clarSeen=new Set(needsClarification.map(x=>norm(x.item)));
+      const newClar=(parsed.needsClarification||[]).filter(x=>{const k=norm(x.item);if(clarSeen.has(k))return false;clarSeen.add(k);return true;}).map(x=>({...x,type:x.type||"edge"}));
+      if(newClar.length>0)setNeedsClarification(nc=>[...nc,...newClar]);
+      setCoverageSummary(parsed.coverageSummary||"");
+      if(newCases.length===0&&newClar.length===0){alert("No coverage gaps found — the story's flows, ACs, and exceptions all appear to have a corresponding test case already.");}
+      else{setPhase("ready");setReadyFilter("all");}
+    }catch(e){alert("Gap analysis failed:\n\n"+e.message);}
+    setLoading(false);
+  };
+
+  // Turn a flagged assumption into a real pending case so it goes through the normal
+  // Review approve/reject flow instead of staying a dismiss-only note. The assumption text
+  // is kept front-and-center (in preconditions and expected) so the reviewer sees exactly what
+  // still needs BA/PM confirmation before approving it as a real test case.
+  const approveClarification=(x,i)=>{
+    const nextIdNum=cases.reduce((max,c)=>{const n=parseInt((c.id||"").replace(/\D/g,""),10);return isNaN(n)?max:Math.max(max,n);},0)+1;
+    const title=/^verify/i.test(x.item)?x.item:"Verify "+x.item;
+    const newCase={
+      id:"TC-"+String(nextIdNum).padStart(3,"0"),
+      title, description:x.item, type:x.type||"edge", platform,
+      priority:"Medium",
+      preconditions:"⚠ Unconfirmed assumption — confirm with BA/PM before executing: "+x.assumption,
+      testData:"",
+      steps:["To be defined once the assumption above is confirmed"],
+      stepResults:[""],
+      expected:x.assumption,
+      automatable:true, status:"pending"
+    };
+    setCases(cs=>[...cs,newCase]);
+    setNeedsClarification(nc=>nc.filter((_,j)=>j!==i));
+  };
+
+  // Extract the fenced code block wherever it appears — the model sometimes prepends a
+  // conversational line ("Here's the file content — you can save it as...") before the fence,
+  // which a start-anchored strip would miss entirely and leave prose sitting in the script file.
+  const stripMd=s=>{
+    const m=s.match(/```(?:javascript|js|typescript|ts)?\n([\s\S]*?)```/i);
+    if(m) return m[1].trim();
+    return s.replace(/^```(?:javascript|js|typescript|ts)?\n?/i,'').replace(/\n?```\s*$/,'').trim();
+  };
   const doScripts=async()=>{
     const selCases=cases.filter(c=>selectedForScripts.includes(c.id));
     // Cache key includes case content so edits to steps/expected invalidate the cache
@@ -1776,7 +2001,7 @@ OVERALL STORY READINESS FOR QA:
       setScripts(hit.scripts); setTab(hit.tab); setProjFiles(hit.projFiles); setFixed(false); setPhase("autoReady");
       return;
     }
-    const assertionRules=`\nCRITICAL RULES — breaking any rule produces a broken or useless test:\n1. Follow test case steps IN ORDER — every numbered step must map to exactly one page interaction.\n2. NEVER use page.waitForTimeout(), driver.pause(), or any fixed delay. For dynamic waits use: await expect(locator).toBeVisible({timeout:10000}), page.waitForLoadState('networkidle'), or page.waitForSelector().\n3. STRONG ASSERTIONS ONLY — use toHaveText(), toHaveURL(), toContainText(), toHaveValue(), toBeChecked(), toHaveCount(). Using toBeVisible() as the ONLY assertion is forbidden — it does not validate content or behavior.\n4. The FINAL assertion in each test MUST directly validate the exact Expected Result text.\n5. For every step that has "After this step:" guidance, add that assertion immediately after the step's interaction code.\n6. NAMING: every test()/it() title MUST start with the exact TC ID (e.g., test('TC-001: Verify login', ...)).\n7. NO Page Object Model class — write all interactions inline for reliability.\n8. Output must be syntactically complete JavaScript: every open brace, bracket, and parenthesis must be closed. Do not truncate.`;
+    const assertionRules=`\nCRITICAL RULES — breaking any rule produces a broken or useless test:\n1. Follow test case steps IN ORDER — every numbered step must map to exactly one page interaction.\n2. NEVER use page.waitForTimeout(), driver.pause(), or any fixed delay. For dynamic waits use: await expect(locator).toBeVisible({timeout:10000}), page.waitForLoadState('networkidle'), or page.waitForSelector().\n3. STRONG ASSERTIONS ONLY — use toHaveText(), toHaveURL(), toContainText(), toHaveValue(), toBeChecked(), toHaveCount(). Using toBeVisible() as the ONLY assertion is forbidden — it does not validate content or behavior.\n4. The FINAL assertion in each test MUST directly validate the exact Expected Result text.\n5. For every step that has "After this step:" guidance, add that assertion immediately after the step's interaction code.\n6. NAMING: every test()/it() title MUST start with the exact TC ID (e.g., test('TC-001: Verify login', ...)).\n7. NO Page Object Model class — write all interactions inline for reliability.\n8. Output must be syntactically complete JavaScript: every open brace, bracket, and parenthesis must be closed. Do not truncate.\n9. NEVER use page.waitForURL() in ANY form — not with a function predicate, not with a string glob, not with a regex, with or without a waitUntil option. On SPA apps (Angular/React/Vue) client-side route changes do not fire the navigation lifecycle events waitForURL depends on, so it hangs until timeout even when the URL genuinely changed. ALWAYS use await expect(page).toHaveURL(/pattern/, {timeout:15000}) for any post-navigation URL check instead — no exceptions.\n10. NEVER use a CSS class, attribute, or role guess (e.g. '.error', '[class*=\"error\"]', '[role=\"alert\"]', '.p-toast-message') as the base locator for a validation/error message, even combined with .filter({hasText}) — if the base selector matches zero real elements the filter never gets a chance to work. The ONLY correct way to find a message by its wording is page.getByText(/expected wording/i) with no other locator combined.\n11. If a submit/login button is expected to be disabled when required fields are empty, assert await expect(button).toBeDisabled() directly — do NOT click it and wait for an error message; clicking a disabled button hangs until timeout.\n12. Only test scenarios that use data or accounts explicitly given in the test case's preconditions/steps. If a scenario requires a specific fixture (an inactive account, a role-restricted user, a lockout state) that isn't provided, assert the reachable/verifiable part of the flow only — do not invent placeholder credentials like 'inactive.user@x.com' that are not known to exist.`;
     const makeCl=tcList=>tcList.map(c=>[
       `${c.id}: ${c.title} [${c.type}]`,
       c.preconditions?`  Preconditions: ${c.preconditions}`:'',
@@ -1802,7 +2027,9 @@ OVERALL STORY READINESS FOR QA:
       } else {
         const baseUrl=appUrl.trim()||"http://localhost:3000";
         const codegenCtx=codegenScript.trim()?`\n\nMANDATORY — Recorded Playwright Codegen (use these exact locators, do not invent or substitute selectors):\n\`\`\`javascript\n${codegenScript}\n\`\`\`\nEvery selector that appears in the codegen recording MUST be reused in the generated tests. Do not replace recorded locators with generic alternatives.`:"";
-        const webPrompt=(tcl,isFirst=true)=>`You are a senior QA automation engineer. Generate a ${isFirst?"COMPLETE runnable Playwright test file":"Playwright test.describe() block (NO require/import lines)"} for story ${sid}.\nBase URL: ${baseUrl}\nOutput ONLY valid JavaScript — no markdown, no explanations, no extra text.\n${assertionRules}\nTest cases:\n${makeCl(tcl)}\n${isFirst?`File structure:\n- Line 1: const { test, expect } = require('@playwright/test');\n- test.describe('${sid}', () => { ... })\n- beforeEach: await page.goto('${baseUrl}');\n- Selectors priority: getByRole() > getByLabel() > getByPlaceholder() > getByTestId() > getByText()\n- Use await expect(locator).toBeVisible({timeout:10000}) before interacting with elements\n- Start file directly with the require statement.`:`Output ONLY the test.describe(...) {...} block. Start directly with: test.describe(`}${codegenCtx}`;
+        const repoCtxParts=[attachCheck?.frontend?.reachable&&attachCheck.frontend.context?`FRONTEND SOURCE (${attachCheck.frontend.name}):\n${attachCheck.frontend.context}`:"",attachCheck?.backend?.reachable&&attachCheck.backend.context?`BACKEND SOURCE (${attachCheck.backend.name}):\n${attachCheck.backend.context}`:""].filter(Boolean);
+        const repoCtx=autoExecute&&repoCtxParts.length?`\n\nMANDATORY — Attached project source (ground selectors and routes in this real code, do not invent structure that isn't there):\n\`\`\`\n${repoCtxParts.join('\n\n')}\n\`\`\``:"";
+        const webPrompt=(tcl,isFirst=true)=>`You are a senior QA automation engineer. Generate a ${isFirst?"COMPLETE runnable Playwright test file":"Playwright test.describe() block (NO require/import lines)"} for story ${sid}.\nBase URL: ${baseUrl}\nOutput ONLY valid JavaScript — no markdown, no explanations, no extra text.\n${assertionRules}\nTest cases:\n${makeCl(tcl)}\n${isFirst?`File structure:\n- Line 1: const { test, expect } = require('@playwright/test');\n- test.describe('${sid}', () => { ... })\n- beforeEach: await page.goto('${baseUrl}');\n- Selectors priority: getByRole() > getByLabel() > getByPlaceholder() > getByTestId() > getByText()\n- Use await expect(locator).toBeVisible({timeout:10000}) before interacting with elements\n- Start file directly with the require statement.`:`Output ONLY the test.describe(...) {...} block. Start directly with: test.describe(`}${codegenCtx}${repoCtx}`;
         if(selCases.length<=BATCH_SIZE){
           setLmsg(`Generating Playwright scripts for ${selCases.length} test case${selCases.length===1?'':'s'}…`);
           const r=stripMd(await callAI([{role:"user",content:webPrompt(selCases)}],SYS,8000,""));
@@ -1826,7 +2053,9 @@ OVERALL STORY READINESS FOR QA:
       }
       setScripts(newScripts); setTab(newTab); setProjFiles(newFiles);
       setScriptCache(prev=>({...prev,[selKey]:{scripts:newScripts,tab:newTab,projFiles:newFiles}}));
-      setFixed(false); setPhase("autoReady");
+      setFixed(false);
+      if(autoExecute&&platform!=="mobile"){ setLoading(false); await doRun(newFiles); return; }
+      setPhase("autoReady");
     } catch(e){alert(e.message);}
     setLoading(false);
   };
@@ -1837,7 +2066,7 @@ OVERALL STORY READINESS FOR QA:
     const cur=platform==="mobile"?(tab==="ios"?scripts.ios:scripts.android):scripts.web;
     try {
       const failedCl=failed.map(c=>`${c.id}: ${c.title}\n  Steps:\n${(c.steps||[]).map((s,i)=>`    ${i+1}. ${s}${(c.stepResults||[])[i]?`\n       → After this step: ${c.stepResults[i]}`:''}`).join('\n')}\n  Expected Result (must be asserted): ${c.expected}\n  Failure error: ${c._pwError||"TimeoutError"}`).join("\n\n");
-      const r=stripMd(await callAI([{role:"user",content:`Fix the failing Playwright tests below. Return the COMPLETE fixed script — no markdown, no explanations.\n\nFailed test cases with errors:\n${failedCl}\n\nCurrent script:\n${cur}\n\nFix instructions:\n1. Replace every page.waitForTimeout() with await expect(locator).toBeVisible({timeout:10000}) or page.waitForLoadState('networkidle').\n2. Fix locators that timed out — use getByRole(), getByLabel(), getByPlaceholder(), getByText() alternatives.\n3. Every failing test MUST end with an assertion that validates its exact Expected Result using toHaveText(), toHaveURL(), toContainText(), or toHaveValue().\n4. Fix all syntax errors — ensure all braces/brackets are closed.\n5. Keep passing tests unchanged.`}],SYS,8000,""));
+      const r=stripMd(await callAI([{role:"user",content:`Fix the failing Playwright tests below. Return the COMPLETE fixed script — no markdown, no explanations.\n\nFailed test cases with errors:\n${failedCl}\n\nCurrent script:\n${cur}\n\nFix instructions:\n1. Replace every page.waitForTimeout() with await expect(locator).toBeVisible({timeout:10000}) or page.waitForLoadState('networkidle').\n2. Fix locators that timed out — use getByRole(), getByLabel(), getByPlaceholder(), getByText() alternatives.\n3. Every failing test MUST end with an assertion that validates its exact Expected Result using toHaveText(), toHaveURL(), toContainText(), or toHaveValue().\n4. Fix all syntax errors — ensure all braces/brackets are closed.\n5. Keep passing tests unchanged.\n6. If a failure is "page.waitForURL: Timeout exceeded" — replace page.waitForURL(...) entirely (function predicate, string glob, or regex form) with await expect(page).toHaveURL(/pattern/, {timeout:15000}). This SPA's client-side route changes never fire the navigation event waitForURL waits for, so it always times out even when the URL genuinely changed — there are no exceptions to this replacement.\n7. If a failure is a missing validation/error message ("element(s) not found" on a locator guessing a CSS class like '.error', '[class*=\"error\"]', '[role=\"alert\"]', '.p-toast-message'), replace the ENTIRE locator with page.getByText(/expected wording/i) alone — do not keep the CSS-class base selector even combined with .filter(), it matches zero real elements on this app.`}],SYS,8000,""));
       if(platform==="mobile"){
         if(tab==="ios"){setScripts(s=>({...s,ios:r}));setProjFiles(f=>({...f,[`tests/ios/${sid}.spec.js`]:r}));}
         else{setScripts(s=>({...s,android:r}));setProjFiles(f=>({...f,[`tests/android/${sid}.spec.js`]:r}));}
@@ -1875,13 +2104,13 @@ OVERALL STORY READINESS FOR QA:
     syncToServer("bug",{memberId:member.id,memberName:member.name,projectId:proj?.id||"",projectName:proj?.name||"",bid:bug.bid,sid,summary:bug.summary,severity:bug.sev,jiraKey:bug.jKey||null,status:"Open"});
   };
 
-  const doRun=async()=>{
+  const doRun=async(filesOverride)=>{
     setPhase("running"); setExecLines([]);
     const pool=cases.filter(c=>selectedForScripts.includes(c.id));
     const addLine=l=>setExecLines(ls=>[...ls,l]);
 
     // Reconstruct projFiles from saved script if not in memory (e.g. after session restore)
-    let effectiveProjFiles=projFiles;
+    let effectiveProjFiles=filesOverride||projFiles;
     if(!effectiveProjFiles&&platform==="web"&&scripts.web){
       const baseURL=appUrl||"http://localhost:3000";
       effectiveProjFiles={"test.config.js":`module.exports={testDir:"./tests",use:{baseURL:"${baseURL}"}};`,[`tests/${sid}.spec.js`]:scripts.web,"README.md":`# Web Tests — ${sid}\n\nnpm install && npm test`};
@@ -1892,10 +2121,27 @@ OVERALL STORY READINESS FOR QA:
       addLine("→ Uploading "+Object.keys(effectiveProjFiles).filter(f=>!f.endsWith(".md")).length+" test file(s) to server…");
       try{
         const abortCtrl=new AbortController();
-        const fetchTimeout=setTimeout(()=>abortCtrl.abort(),360000); // 6-min safety net
+        const fetchTimeout=setTimeout(()=>abortCtrl.abort(),1260000); // 21-min safety net — must exceed the server's own 20-min run timeout
         const r=await fetch(API_BASE+"/api/playwright/run",{method:"POST",headers:{"Content-Type":"application/json","X-Session-Token":sessionStorage.getItem(SESSION_TOKEN_KEY)||""},body:JSON.stringify({files:effectiveProjFiles}),signal:abortCtrl.signal});
+        // Server streams newline-delimited JSON — one {type:'line'} per live test output line,
+        // then a single {type:'done', ...result} once the run finishes.
+        const reader=r.body.getReader(); const decoder=new TextDecoder(); let buf="";
+        let data=null;
+        while(true){
+          const {value,done}=await reader.read();
+          if(done)break;
+          buf+=decoder.decode(value,{stream:true});
+          let idx;
+          while((idx=buf.indexOf("\n"))>=0){
+            const chunk=buf.slice(0,idx); buf=buf.slice(idx+1);
+            if(!chunk.trim())continue;
+            let msg; try{msg=JSON.parse(chunk);}catch{continue;}
+            if(msg.type==="line")addLine(msg.line);
+            else if(msg.type==="done")data=msg;
+          }
+        }
         clearTimeout(fetchTimeout);
-        const data=await r.json();
+        data=data||{error:"Test runner closed the connection unexpectedly",lines:[],passed:[],failed:[]};
         if(data.error==="not_installed"){
           addLine(""); addLine("✗ Playwright is not installed on the server.");
           addLine("  Run these commands in the server terminal to install:");
@@ -1904,7 +2150,6 @@ OVERALL STORY READINESS FOR QA:
           addLine("  Then restart the server and try again.");
           setResult({pass:[],fail:pool,failedCases:pool,total:pool.length}); setPhase("result"); return;
         }
-        (data.lines||[]).forEach(l=>addLine(l));
         const passedSet=new Set(data.passed||[]);
         const failedMap=new Map((data.failed||[]).map(f=>[f.title,f.error]));
         const totalReported=passedSet.size+failedMap.size;
@@ -1954,8 +2199,8 @@ OVERALL STORY READINESS FOR QA:
   const editS=(id,si,v)=>setCases(cs=>cs.map(c=>{if(c.id!==id)return c;const s=[...c.steps];s[si]=v;return{...c,steps:s};}));
   const addStep=id=>setCases(cs=>cs.map(c=>c.id===id?{...c,steps:[...(c.steps||[]),"New step"]}:c));
   const delStep=(id,si)=>setCases(cs=>cs.map(c=>c.id===id?{...c,steps:(c.steps||[]).filter((_,i)=>i!==si)}:c));
-  const reset=()=>{localStorage.removeItem(WS_SNAP);setPhase("project");setTestKind("functional");setPerfResult(null);setPerfForm(PERF_FORM_DEFAULT);setPerfChat(false);setSid("");setSdata(null);setPlatform("web");setCtypes([]);setReadyFilter("all");setGapText("");setCases([]);setEditOn(false);setScripts({web:"",ios:"",android:""});setProjFiles(null);setExecLines([]);setResult(null);setJKey(null);setBugDone(null);setShowBugForm(false);setFixed(false);setChat(false);setShowAddCase(false);setSelectedForScripts([]);setCoverageText("");setSessionBugs([]);setHasSaved(false);setAppUrl("");setScriptCache({});setUidForm({pageUrl:"",figmaUrl:"",figmaToken:"",selectedNodeId:""});setUidCases([]);setUidVisualResult(null);setUidFigmaImg(null);setUidManualFigmaImg(null);setUidJiraTicketKey("");setUidStoryId(null);setUidJiraStatus({});setUidAiotestStatus({importing:false,done:false,error:""});setUidReportComment("");setUidCommentStatus({sending:false,done:false,error:""});};
-  const resetPerf=()=>{setPerfForm(PERF_FORM_DEFAULT);setPerfResult(null);setPerfChat(false);setHasSaved(false);setPhase("perfTest");};
+  const reset=()=>{localStorage.removeItem(WS_SNAP);setPhase("project");setTestKind("functional");setPerfResult(null);setPerfForm(PERF_FORM_DEFAULT);setPerfChat(false);setSid("");setSdata(null);setPlatform("web");setCtypes([]);setReadyFilter("all");setGapText("");setCases([]);setEditOn(false);setScripts({web:"",ios:"",android:""});setProjFiles(null);setExecLines([]);setResult(null);setJKey(null);setBugDone(null);setShowBugForm(false);setFixed(false);setChat(false);setShowAddCase(false);setSelectedForScripts([]);setCoverageText("");setSessionBugs([]);setHasSaved(false);setAppUrl("");setScriptCache({});setUidForm({pageUrl:"",figmaUrl:"",figmaToken:"",selectedNodeId:""});setUidCases([]);setUidVisualResult(null);setUidFigmaImg(null);setUidManualFigmaImg(null);setUidJiraTicketKey("");setUidStoryId(null);setPerfStoryId(null);setUidJiraStatus({});setUidAiotestStatus({importing:false,done:false,error:""});setUidReportComment("");setUidCommentStatus({sending:false,done:false,error:""});setCurlDraft("");setCurlErr("");};
+  const resetPerf=()=>{setPerfForm(PERF_FORM_DEFAULT);setPerfResult(null);setPerfStoryId(null);setPerfChat(false);setHasSaved(false);setPhase("perfTest");setCurlDraft("");setCurlErr("");};
   const [saveModal,setSaveModal]=useState(null);
   // saveModal: null | {step:1,name:""} | {step:2,name:"",newCat:""}
   const openSaveModal=()=>{
@@ -1967,7 +2212,7 @@ OVERALL STORY READINESS FOR QA:
     }
     if(testKind==="non-functional"){
       const dflt=perfForm.testName||(perfResult?"Perf Test "+new Date().toLocaleDateString():"New Perf Test");
-      const existing=DB.savedStories.find(s=>s.testKind==="non-functional"&&s.perfForm?.testName===perfForm.testName&&perfForm.testName);
+      const existing=perfStoryId?DB.savedStories.find(s=>s.id===perfStoryId):null;
       setSaveModal({step:1,name:existing?.name||dflt});
       return;
     }
@@ -1986,11 +2231,12 @@ OVERALL STORY READINESS FOR QA:
       return;
     }
     if(testKind==="non-functional"){
-      const existing=DB.savedStories.find(s=>s.testKind==="non-functional"&&s.perfForm?.testName===perfForm.testName&&perfForm.testName);
-      const snap={id:existing?.id||uid(),name,testKind:"non-functional",categoryId:categoryId||null,perfForm:{...perfForm},perfResult:perfResult?{...perfResult}:null,savedAt:Date.now()};
+      const existing=perfStoryId?DB.savedStories.find(s=>s.id===perfStoryId):null;
+      const newId=existing?.id||uid();
+      const snap={id:newId,name,testKind:"non-functional",categoryId:categoryId||null,perfForm:{...perfForm},perfResult:perfResult?{...perfResult}:null,projectId:proj?.id||"",savedAt:Date.now()};
       if(existing){DB.savedStories=DB.savedStories.map(s=>s.id===existing.id?snap:s);}
       else{DB.savedStories.unshift(snap);}
-      saveDB();if(refreshSaved)refreshSaved();setHasSaved(true);setSaveModal(null);showToast("Session saved successfully");
+      saveDB();if(refreshSaved)refreshSaved();setPerfStoryId(newId);setHasSaved(true);setSaveModal(null);showToast("Session saved successfully");
       return;
     }
     const existing=DB.savedStories.find(s=>s.sid===sid);
@@ -2032,6 +2278,16 @@ OVERALL STORY READINESS FOR QA:
       setPhase(lastPhase);
       return;
     }
+    if(snap.testKind==="non-functional"){
+      setTestKind("non-functional");
+      setPerfForm(snap.perfForm||PERF_FORM_DEFAULT);
+      setPerfResult(snap.perfResult||null);
+      setPerfStoryId(snap.id);
+      setHasSaved(true);
+      setPhase(snap.perfResult?"perfResult":"perfTest");
+      return;
+    }
+    setTestKind("functional");
     setSid(snap.sid);setSdata(snap.sdata);setPlatform(snap.platform);setCtypes(snap.ctypes||[]);setGapText(snap.gapText||"");setCases(snap.cases||[]);setScripts(snap.scripts||{web:"",ios:"",android:""});setResult(snap.result||null);setSessionBugs(snap.sessionBugs||[]);setCoverageText(snap.coverageText||"");setSelectedForScripts(snap.selectedForScripts||[]);setAppUrl(snap.appUrl||"");setExecLines([]);setJKey(null);setBugDone(null);setShowBugForm(false);setFixed(false);setEditOn(false);setChat(false);setShowAddCase(false);
     const lastPhase=snap.phase||(snap.coverageText?"coverage":snap.result?"result":snap.cases?.some(c=>c.status==="approved")?"review":"ctype");
     setPhase(lastPhase);
@@ -2039,9 +2295,10 @@ OVERALL STORY READINESS FOR QA:
   React.useEffect(()=>{
     if(onActiveSid){
       if(testKind==="ui-design")onActiveSid(uidStoryId?"uid:"+uidStoryId:null);
+      else if(testKind==="non-functional")onActiveSid(perfStoryId?"perf:"+perfStoryId:null);
       else onActiveSid(sid);
     }
-  },[sid,testKind,uidStoryId]);
+  },[sid,testKind,uidStoryId,perfStoryId]);
   React.useEffect(()=>{if(onProjChange)onProjChange(proj);},[selectedProjId]);
   React.useEffect(()=>{if(restoreTarget){restoreStory(restoreTarget);if(clearRestore)clearRestore();}}, [restoreTarget]);
   React.useEffect(()=>{if(resetTrigger>0)reset();},[resetTrigger]);
@@ -2176,7 +2433,7 @@ OVERALL STORY READINESS FOR QA:
           <H2 style={{marginBottom:16}}>Choose a project to start</H2>
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))",gap:16}}>
             {memberProjects.map(p=>{
-              const projStories=DB.savedStories.filter(s=>s.sid&&s.sid.startsWith(p.jiraProjKey+"-"));
+              const projStories=DB.savedStories.filter(s=>storyMatchesProject(s,p.jiraProjKey,p.id));
               return <div key={p.id} className="qa-card-hover" style={{...card,cursor:"pointer",border:selectedProjId===p.id?"2px solid var(--accent)":"1px solid var(--color-border-tertiary)",marginBottom:0,boxShadow:selectedProjId===p.id?"0 0 0 3px rgba(79,70,229,0.1), var(--shadow-sm)":"var(--shadow-sm)"}} onClick={()=>{if(p.id===selectedProjId){setPhase("testType");}else{switchProj(p.id);}}}>
                 <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10}}>
                   <div style={{width:40,height:40,borderRadius:10,background:"var(--color-background-info)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:20}}>📁</div>
@@ -2185,7 +2442,7 @@ OVERALL STORY READINESS FOR QA:
                 <div style={{fontSize:12,color:"var(--color-text-secondary)",marginBottom:projStories.length>0?10:0}}>{projStories.length} saved session{projStories.length!==1?"s":""}</div>
                 {projStories.length>0&&<div style={{borderTop:"1px solid var(--color-border-tertiary)",paddingTop:8,display:"flex",flexDirection:"column",gap:4}}>
                   {projStories.slice(0,3).map(s=><div key={s.id} style={{display:"flex",alignItems:"center",gap:6,fontSize:12}}>
-                    <Tag c="blue" style={{flexShrink:0}}>{s.sid}</Tag>
+                    <Tag c="blue" style={{flexShrink:0}}>{s.sid||(s.testKind==="non-functional"?"PERF":s.testKind==="ui-design"?"UI":"")}</Tag>
                     <span style={{color:"var(--color-text-secondary)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flex:1}}>{s.name||s.sid}</span>
                   </div>)}
                   {projStories.length>3&&<div style={{fontSize:11,color:"var(--color-text-tertiary)"}}>+{projStories.length-3} more</div>}
@@ -3094,9 +3351,31 @@ OVERALL STORY READINESS FOR QA:
           const totalSec=isStress?durSecs[perfForm.duration]*4+rampSecs[perfForm.ramp]*5:(durSecs[perfForm.duration]||60)+(rampSecs[perfForm.ramp]||10)*2;
           const s_=v=>setPerfForm(f=>({...f,...v}));
           const inpN={...inp,maxWidth:130};
+          const applyCurl=()=>{
+            const parsed=parseCurlCommand(curlDraft);
+            if(!parsed||!parsed.url){setCurlErr("Couldn't find a URL in that command.");return;}
+            const updates={apiUrl:parsed.url,method:parsed.method};
+            if(parsed.body)updates.requestBody=parsed.body;
+            if(parsed.bearer){updates.authType="bearer";updates.token=parsed.bearer;}
+            else if(parsed.basicUser){updates.authType="basic";updates.basicUsername=parsed.basicUser;updates.basicPassword=parsed.basicPass;}
+            if(parsed.otherHeaders&&parsed.otherHeaders.length)updates.customHeaders=[...(perfForm.customHeaders||[]),...parsed.otherHeaders];
+            s_(updates);
+            setCurlErr("");
+          };
           return <div style={{display:"flex",gap:20,alignItems:"flex-start"}}>
             {/* ── LEFT: form ── */}
             <div style={{flex:1,minWidth:0,display:"flex",flexDirection:"column",gap:0}}>
+
+              {/* Import from cURL */}
+              <div style={card}>
+                <H2 style={{marginBottom:8}}>Import from cURL</H2>
+                <div style={{fontSize:12,color:"var(--color-text-tertiary)",marginBottom:10}}>Paste a cURL command (from browser DevTools' "Copy as cURL", Postman, etc.) to auto-fill the method, URL, body, and auth below.</div>
+                <textarea style={{...inp,height:70,fontFamily:"monospace",fontSize:12,resize:"vertical"}} value={curlDraft} onChange={e=>{setCurlDraft(e.target.value);setCurlErr("");}} placeholder={'curl -X POST https://api.example.com/items \\\n  -H "Authorization: Bearer eyJ..." \\\n  -d \'{"key":"value"}\''}/>
+                <div style={{display:"flex",gap:10,alignItems:"center",marginTop:8}}>
+                  <button onClick={applyCurl} disabled={!curlDraft.trim()} style={{...ghostBtn,opacity:curlDraft.trim()?1:0.5,cursor:curlDraft.trim()?"pointer":"not-allowed"}}>⬇ Import</button>
+                  {curlErr&&<span style={{fontSize:12,color:"var(--color-text-danger)"}}>{curlErr}</span>}
+                </div>
+              </div>
 
               {/* Test type */}
               <div style={card}>
@@ -3124,7 +3403,22 @@ OVERALL STORY READINESS FOR QA:
                         {["GET","POST","PUT","PATCH","DELETE"].map(m=><option key={m}>{m}</option>)}
                       </select>
                     </div>
-                    <div style={{flex:1}}><Lbl>API Endpoint URL *</Lbl><input style={inp} value={perfForm.apiUrl} onChange={e=>s_({apiUrl:e.target.value})} placeholder="https://api.example.com/endpoint"/></div>
+                    <div style={{flex:1}}><Lbl>API Endpoint URL *</Lbl><input style={inp} value={perfForm.apiUrl} onChange={e=>s_({apiUrl:e.target.value})} placeholder="https://api.example.com/endpoint or .../items/{{itemId}}"/></div>
+                  </div>
+                  <div>
+                    <Lbl>Configurable Variables <span style={{fontWeight:400,color:"var(--color-text-tertiary)"}}>— reference as {"{{name}}"} anywhere in the URL above; each becomes overridable per run</span></Lbl>
+                    {(perfForm.variables||[]).map((v,i)=>(
+                      <div key={i} style={{display:"flex",gap:8,marginTop:6}}>
+                        <input style={{...inp,flex:1}} value={v.name} placeholder="e.g. auctionItemId" onChange={e=>{
+                          const next=[...perfForm.variables]; next[i]={...next[i],name:e.target.value}; s_({variables:next});
+                        }}/>
+                        <input style={{...inp,flex:1}} value={v.value} placeholder="default value" onChange={e=>{
+                          const next=[...perfForm.variables]; next[i]={...next[i],value:e.target.value}; s_({variables:next});
+                        }}/>
+                        <button onClick={()=>s_({variables:perfForm.variables.filter((_,j)=>j!==i)})} style={{...ghostBtn,padding:"0 10px"}} title="Remove">✕</button>
+                      </div>
+                    ))}
+                    <button onClick={()=>s_({variables:[...(perfForm.variables||[]),{name:"",value:""}]})} style={{...ghostBtn,fontSize:12,marginTop:8}}>+ Add Variable</button>
                   </div>
                   <div style={{maxWidth:200}}><Lbl>Expected Status Code</Lbl><input style={inpN} type="number" value={perfForm.expectedStatus} onChange={e=>s_({expectedStatus:parseInt(e.target.value)||200})}/></div>
                   <div>
@@ -3170,7 +3464,22 @@ OVERALL STORY READINESS FOR QA:
                       </div>
                     </div>}
                   </div>}
-                  {["POST","PUT","PATCH"].includes(perfForm.method)&&<div><Lbl>Request Body (JSON)</Lbl><textarea style={{...inp,height:76,fontFamily:"monospace",resize:"vertical"}} value={perfForm.requestBody} onChange={e=>s_({requestBody:e.target.value})} placeholder='{"key":"value"}'/></div>}
+                  <div>
+                    <Lbl>Custom Headers <span style={{fontWeight:400,color:"var(--color-text-tertiary)"}}>— for auth your API expects in its own header, e.g. X-Api-Key. Values can reference {"{{variables}}"} too.</span></Lbl>
+                    {(perfForm.customHeaders||[]).map((h,i)=>(
+                      <div key={i} style={{display:"flex",gap:8,marginTop:6}}>
+                        <input style={{...inp,flex:1}} value={h.name} placeholder="e.g. X-Api-Key" onChange={e=>{
+                          const next=[...perfForm.customHeaders]; next[i]={...next[i],name:e.target.value}; s_({customHeaders:next});
+                        }}/>
+                        <input style={{...inp,flex:1}} value={h.value} placeholder="header value" onChange={e=>{
+                          const next=[...perfForm.customHeaders]; next[i]={...next[i],value:e.target.value}; s_({customHeaders:next});
+                        }}/>
+                        <button onClick={()=>s_({customHeaders:perfForm.customHeaders.filter((_,j)=>j!==i)})} style={{...ghostBtn,padding:"0 10px"}} title="Remove">✕</button>
+                      </div>
+                    ))}
+                    <button onClick={()=>s_({customHeaders:[...(perfForm.customHeaders||[]),{name:"",value:""}]})} style={{...ghostBtn,fontSize:12,marginTop:8}}>+ Add Header</button>
+                  </div>
+                  {["POST","PUT","PATCH"].includes(perfForm.method)&&<div><Lbl>Request Body (JSON) <span style={{fontWeight:400,color:"var(--color-text-tertiary)"}}>— can reference {"{{variables}}"} too</span></Lbl><textarea style={{...inp,height:76,fontFamily:"monospace",resize:"vertical"}} value={perfForm.requestBody} onChange={e=>s_({requestBody:e.target.value})} placeholder='{"key":"{{value}}"}'/></div>}
                 </div>
               </div>
 
@@ -3214,11 +3523,16 @@ OVERALL STORY READINESS FOR QA:
             <div style={{width:230,flexShrink:0}}>
               <div style={{...card,position:"sticky",top:0}}>
                 <H2 style={{marginBottom:12}}>Test Summary</H2>
-                {[
+                {(()=>{
+                  const namedVars=(perfForm.variables||[]).filter(v=>v.name.trim());
+                  const namedHeaders=(perfForm.customHeaders||[]).filter(h=>h.name.trim());
+                  return [
                   {label:"Type",val:<Tag c={isStress?"red":"blue"}>{isStress?"Stress":"Load"}</Tag>},
                   {label:"Name",val:perfForm.testName||"—"},
                   {label:"Method",val:<Tag c="blue">{perfForm.method}</Tag>},
                   {label:"URL",val:<span style={{fontSize:11,wordBreak:"break-all"}}>{perfForm.apiUrl||"—"}</span>},
+                  {label:"Variables",val:namedVars.length?namedVars.map(v=>v.name).join(", "):"—"},
+                  {label:"Custom Headers",val:namedHeaders.length?namedHeaders.map(h=>h.name).join(", "):"—"},
                   {label:"Auth",val:perfForm.authType==="bearer"?"🔑 Bearer":perfForm.authType==="basic"?"👤 Basic":perfForm.authType==="csv"?("🔄 Dynamic ("+(perfForm.csvUsers?.length||0)+" users)"):"🔓 None"},
                   null,
                   {label:"Virtual Users",val:isStress?perfForm.vus+" (max)":String(perfForm.vus)},
@@ -3231,7 +3545,8 @@ OVERALL STORY READINESS FOR QA:
                     <span style={{fontSize:12,color:"var(--color-text-tertiary)",flexShrink:0}}>{row.label}</span>
                     <span style={{fontSize:12,fontWeight:500,textAlign:"right"}}>{row.val}</span>
                   </div>
-                )}
+                  );
+                })()}
                 {isStress&&<div style={{marginTop:8,fontSize:12,color:"var(--color-text-secondary)",background:"var(--color-background-warning)",padding:"8px 10px",borderRadius:8}}>
                   🔥 Steps: {Math.ceil(perfForm.vus*.25)} → {Math.ceil(perfForm.vus*.5)} → {Math.ceil(perfForm.vus*.75)} → {perfForm.vus} VUs
                 </div>}
@@ -3351,9 +3666,32 @@ OVERALL STORY READINESS FOR QA:
               <option value="all">All types ({cases.length})</option>
               {[...new Set(cases.map(c=>c.type))].map(t=><option key={t} value={t}>{t[0].toUpperCase()+t.slice(1)} flow ({cases.filter(c=>c.type===t).length})</option>)}
             </select>
-            <button onClick={()=>{const et=[...new Set(cases.map(c=>c.type))];setCtypes(et.length>0?et:[]);setPhase("ctype");}} style={{...ghostBtn,fontSize:13,marginLeft:"auto"}}>← Add more types</button>
+            <button onClick={doFindGaps} style={{...ghostBtn,fontSize:13,marginLeft:"auto"}}>🔍 Find Coverage Gaps</button>
+            <button onClick={()=>{const et=[...new Set(cases.map(c=>c.type))];setCtypes(et.length>0?et:[]);setPhase("ctype");}} style={{...ghostBtn,fontSize:13}}>← Add more types</button>
           </div>
+          {coverageSummary&&<div style={{...card,background:"var(--color-background-info)",border:"1px solid var(--color-border-secondary)",display:"flex",justifyContent:"space-between",gap:10,alignItems:"flex-start"}}>
+            <div><div style={{fontWeight:500,fontSize:13,marginBottom:4}}>📊 Coverage summary</div><div style={{fontSize:13,color:"var(--color-text-secondary)",lineHeight:1.6}}>{coverageSummary}</div></div>
+            <button onClick={()=>setCoverageSummary("")} style={{background:"none",border:"none",cursor:"pointer",color:"var(--color-text-tertiary)",fontSize:13,flexShrink:0}}>✕</button>
+          </div>}
           <div style={card}>{(readyFilter==="all"?cases:cases.filter(c=>c.type===readyFilter)).map(c=><div key={c.id} style={{padding:"9px 0",borderBottom:"1px solid var(--color-border-tertiary)",display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}><Tag c="blue">{c.id}</Tag><Tag c={tcol(c.type)}>{c.type}</Tag>{c.automatable===false&&<Tag>manual only</Tag>}<span style={{fontSize:14}}>{c.title}</span></div>)}</div>
+          {needsClarification.length>0&&<div style={{...card,background:"var(--color-background-warning)",border:"1px solid var(--color-border-warning)"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+              <H2>⚠️ Needs clarification before testing ({needsClarification.length})</H2>
+              <button onClick={()=>setNeedsClarification([])} style={{...ghostBtn,fontSize:12,padding:"3px 10px"}}>Dismiss all</button>
+            </div>
+            <div style={{fontSize:12,color:"var(--color-text-secondary)",marginBottom:10}}>These were skipped instead of guessed — confirm the requirement exists with the BA/PM before treating them as testable.</div>
+            {needsClarification.map((x,i)=><div key={i} style={{padding:"8px 0",borderBottom:i<needsClarification.length-1?"1px solid var(--color-border-tertiary)":"none"}}>
+              <div style={{display:"flex",gap:8,alignItems:"flex-start"}}>
+                <Tag c={tcol(x.type||"edge")}>{x.type||"edge"}</Tag>
+                <div style={{flex:1}}>
+                  <div style={{fontSize:13,fontWeight:500}}>{x.item}</div>
+                  <div style={{fontSize:12,color:"var(--color-text-secondary)",marginTop:2}}>Assumption: {x.assumption}</div>
+                </div>
+                <button onClick={()=>approveClarification(x,i)} style={{...ghostBtn,padding:"4px 10px",fontSize:12,flexShrink:0}}>✓ Approve as test case</button>
+                <button onClick={()=>setNeedsClarification(nc=>nc.filter((_,j)=>j!==i))} style={{background:"none",border:"none",cursor:"pointer",color:"var(--color-text-tertiary)",fontSize:13,padding:"0 4px"}}>✕</button>
+              </div>
+            </div>)}
+          </div>}
           <Confirm icon="🔍" title="Would you like to review and edit the test cases?" desc="Approve, reject, and modify each case before proceeding." onYes={()=>{setEditOn(true);setPhase("review");}} onNo={()=>{setCases(cs=>cs.map(c=>({...c,status:"approved"})));setPhase("jira");}} yesLabel="Yes, review" noLabel="Approve all"/>
         </div>}
 
@@ -3431,29 +3769,48 @@ OVERALL STORY READINESS FOR QA:
           </div>
         </div>}
 
-        {!loading&&phase==="urlPrompt"&&<div>
+        {!loading&&phase==="urlPrompt"&&(()=>{
+          const attachedConfigured=!forceManual&&!!(proj?.frontendRepoUrl?.trim()||proj?.backendRepoUrl?.trim());
+          return <div>
           <div style={card}>
             <div style={{display:"flex",gap:8,marginBottom:14,alignItems:"center"}}><span style={{fontSize:20}}>🔗</span><span style={{fontWeight:500,fontSize:16}}>Application URL</span></div>
             <div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:16,lineHeight:1.6}}>Enter the URL of the application under test.</div>
             <Lbl>Application URL <span style={{color:"var(--color-text-danger)"}}>*</span></Lbl>
-            <input autoFocus style={{...inp,marginBottom:16,fontSize:14}} value={appUrl} onChange={e=>setAppUrl(e.target.value)} placeholder="https://example.com" onKeyDown={e=>e.key==="Enter"&&appUrl.trim()&&setPhase("scriptSelect")}/>
-            {codegenScript&&<div style={{...card,marginBottom:16,background:"var(--color-background-success)",border:"1px solid var(--color-text-success)"}}>
+            <input autoFocus style={{...inp,marginBottom:16,fontSize:14}} value={appUrl} onChange={e=>{setAppUrl(e.target.value);setForceManual(false);}} placeholder="https://example.com" onKeyDown={e=>e.key==="Enter"&&appUrl.trim()&&checkAttachment()}/>
+            {attachedConfigured&&<div style={{...card,marginBottom:16,background:"var(--color-background-info)",border:"1px solid var(--color-border-secondary)"}}>
+              <div style={{fontSize:13,fontWeight:500,color:"var(--color-text-info)"}}>🔗 Attached: {[proj.frontendRepoUrl?.trim()&&"Frontend",proj.backendRepoUrl?.trim()&&"Backend"].filter(Boolean).join(" + ")}</div>
+              <div style={{fontSize:12,color:"var(--color-text-secondary)",marginTop:4}}>Continue will verify the repo is reachable, then generate and run scripts automatically — no manual recording needed.</div>
+            </div>}
+            {forceManual&&<div style={{...card,marginBottom:16,background:"var(--color-background-warning)",border:"1px solid var(--color-border-warning)"}}>
+              <div style={{fontSize:13,fontWeight:500,color:"var(--color-text-warning)"}}>⚠️ Falling back to manual recording — the attached repo was unreachable.</div>
+            </div>}
+            {!attachedConfigured&&codegenScript&&<div style={{...card,marginBottom:16,background:"var(--color-background-success)",border:"1px solid var(--color-text-success)"}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
                 <div style={{fontSize:13,fontWeight:500,color:"var(--color-text-success)"}}>✅ Codegen recording ready — locators will be used in script generation</div>
                 <button onClick={()=>{setCodegenScript("");setCodegenStatus("idle");}} style={{background:"none",border:"none",cursor:"pointer",fontSize:12,color:"var(--color-text-tertiary)"}}>✕ Clear</button>
               </div>
             </div>}
             <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
-              <Btn v="primary" onClick={()=>appUrl.trim()&&setPhase("scriptSelect")} disabled={!appUrl.trim()}>
-                {codegenScript?"Generate Scripts with Recorded Locators →":"Continue to Script Generation →"}
+              <Btn v="primary" onClick={()=>appUrl.trim()&&checkAttachment()} disabled={!appUrl.trim()}>
+                {attachedConfigured?"Continue →":codegenScript?"Generate Scripts with Recorded Locators →":"Continue to Script Generation →"}
               </Btn>
-              {platform!=="mobile"&&<button onClick={()=>appUrl.trim()&&startCodegen()} disabled={!appUrl.trim()||codegenStatus==="launching"} style={{padding:"8px 18px",borderRadius:8,border:"1px solid #0052CC",background:appUrl.trim()?"#0052CC":"var(--color-background-tertiary)",color:appUrl.trim()?"#fff":"var(--color-text-tertiary)",cursor:appUrl.trim()?"pointer":"not-allowed",fontSize:14,fontWeight:500,display:"flex",alignItems:"center",gap:8}}>
+              {!attachedConfigured&&platform!=="mobile"&&<button onClick={()=>appUrl.trim()&&startCodegen()} disabled={!appUrl.trim()||codegenStatus==="launching"} style={{padding:"8px 18px",borderRadius:8,border:"1px solid #0052CC",background:appUrl.trim()?"#0052CC":"var(--color-background-tertiary)",color:appUrl.trim()?"#fff":"var(--color-text-tertiary)",cursor:appUrl.trim()?"pointer":"not-allowed",fontSize:14,fontWeight:500,display:"flex",alignItems:"center",gap:8}}>
                 {codegenStatus==="launching"?"Launching…":"🎭 Record with Playwright Codegen"}
               </button>}
             </div>
-            {platform!=="mobile"&&<div style={{marginTop:12,padding:"10px 14px",borderRadius:8,background:"var(--color-background-tertiary)",fontSize:12,color:"var(--color-text-secondary)",lineHeight:1.6}}>
+            {!attachedConfigured&&platform!=="mobile"&&<div style={{marginTop:12,padding:"10px 14px",borderRadius:8,background:"var(--color-background-tertiary)",fontSize:12,color:"var(--color-text-secondary)",lineHeight:1.6}}>
               <b>💡 Playwright Codegen</b> opens a live browser at your URL. Perform your test actions manually — clicks, form fills, navigation — and the platform captures the exact locators to use in the generated scripts. Close the browser when done.
             </div>}
+          </div>
+        </div>;})()}
+
+        {phase==="checkingAttachment"&&<Loader msg="Checking attached project…" sub="Verifying repo access and pulling latest source"/>}
+
+        {!loading&&phase==="attachError"&&<div>
+          <Banner icon="⚠️" title="Attached project unreachable" sub={[attachCheck?.frontend?.attached&&!attachCheck.frontend.reachable&&`Frontend (${attachCheck.frontend.name}): ${attachCheck.frontend.error}`,attachCheck?.backend?.attached&&!attachCheck.backend.reachable&&`Backend (${attachCheck.backend.name}): ${attachCheck.backend.error}`].filter(Boolean).join(" · ")||"Could not verify the attached repository."} color="danger"/>
+          <div style={{display:"flex",gap:10,marginTop:12}}>
+            <Btn v="primary" onClick={checkAttachment}>🔄 Retry Check</Btn>
+            <button onClick={()=>{setAutoExecute(false);setAttachStatus("none");setForceManual(true);setPhase("urlPrompt");}} style={{padding:"8px 18px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:14,color:"var(--color-text-secondary)"}}>Fall back to Playwright Codegen instead</button>
           </div>
         </div>}
 
@@ -3503,8 +3860,16 @@ OVERALL STORY READINESS FOR QA:
         </div>}
 
         {!loading&&phase==="scriptSelect"&&<div>
-          <Banner icon="🤖" title="Select cases to automate" sub={autoable.length+" automatable cases available · "+manOnly.length+" manual-only (excluded)"} color="info"/>
-          <div style={card}>
+          {autoExecute&&attachCheck&&<Banner icon="🔗" title={"Attached: "+[attachCheck.frontend?.reachable&&attachCheck.frontend.name,attachCheck.backend?.reachable&&attachCheck.backend.name].filter(Boolean).join(" + ")} sub={[attachCheck.frontend&&!attachCheck.frontend.reachable&&"⚠ Frontend not reachable — proceeding with backend only",attachCheck.backend&&!attachCheck.backend.reachable&&"⚠ Backend not reachable — proceeding with frontend only",!attachCheck.frontend&&"No frontend attached",!attachCheck.backend&&"No backend attached"].filter(Boolean).join(" · ")+" — scripts will be generated and executed automatically after selection."} color="success"/>}
+          <Banner icon="🤖" title="Select cases to automate" sub={autoable.length+" automatable cases available · "+manOnly.length+" manual-only"} color="info"/>
+          {manOnly.length>0&&<div style={{...card,background:"var(--color-background-tertiary)",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+            <div>
+              <div style={{fontWeight:500,fontSize:14}}>📋 {manOnly.length} case{manOnly.length!==1?"s":""} can't be automated — needs manual testing</div>
+              <div style={{fontSize:12,color:"var(--color-text-secondary)",marginTop:2}}>{manOnly.filter(c=>c.manualStatus).length} of {manOnly.length} already tested</div>
+            </div>
+            <Btn onClick={()=>setPhase("manualExec")}>Execute Manual Tests →</Btn>
+          </div>}
+          {autoable.length>0&&<div style={card}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
               <H2>Choose cases for script generation</H2>
               <div style={{display:"flex",gap:8}}>
@@ -3516,15 +3881,44 @@ OVERALL STORY READINESS FOR QA:
               <input type="checkbox" checked={selectedForScripts.includes(c.id)} onChange={()=>setSelectedForScripts(p=>p.includes(c.id)?p.filter(x=>x!==c.id):[...p,c.id])}/>
               <Tag c="blue">{c.id}</Tag><Tag c={tcol(c.type)}>{c.type}</Tag><span style={{fontSize:14,flex:1}}>{c.title}</span>
             </label>)}
-            {autoable.length===0&&<div style={{color:"var(--color-text-tertiary)",fontSize:14}}>No automatable cases.</div>}
-          </div>
+          </div>}
           <div style={{display:"flex",gap:10}}>
-            <Btn v="primary" onClick={()=>selectedForScripts.length>0&&doScripts()} disabled={selectedForScripts.length===0}>Generate Scripts ({selectedForScripts.length} cases)</Btn>
+            {autoable.length>0
+              ?<Btn v="primary" onClick={()=>selectedForScripts.length>0&&doScripts()} disabled={selectedForScripts.length===0}>{autoExecute?`Generate & Run Automatically (${selectedForScripts.length} cases)`:`Generate Scripts (${selectedForScripts.length} cases)`}</Btn>
+              :<Btn v="primary" onClick={()=>setPhase("bugReport")}>Skip to Bug Report →</Btn>}
           </div>
         </div>}
 
+        {!loading&&phase==="manualExec"&&(()=>{
+          const done=manOnly.filter(c=>c.manualStatus).length;
+          const setManual=(id,field,val)=>setCases(cs=>cs.map(c=>c.id===id?{...c,[field]:val}:c));
+          return <div>
+            <Banner icon="📋" title="Manual test execution" sub={done+" of "+manOnly.length+" cases tested"} color="info"/>
+            {manOnly.map(c=><div key={c.id} style={{...card,borderLeft:"3px solid "+(c.manualStatus==="pass"?"var(--color-text-success)":c.manualStatus==="fail"?"var(--color-text-danger)":c.manualStatus==="blocked"?"var(--color-text-warning)":"var(--color-border-secondary)")}}>
+              <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:8,flexWrap:"wrap"}}>
+                <Tag c="blue">{c.id}</Tag><Tag c={tcol(c.type)}>{c.type}</Tag><span style={{fontWeight:500,fontSize:14,flex:1}}>{c.title}</span>
+              </div>
+              {c.preconditions&&<div style={{fontSize:12,color:"var(--color-text-secondary)",marginBottom:6}}><b>Preconditions:</b> {c.preconditions}</div>}
+              <div style={{fontSize:13,marginBottom:6}}><b>Steps:</b>
+                <ol style={{margin:"4px 0 0 18px",padding:0}}>{(c.steps||[]).map((s,i)=><li key={i} style={{marginBottom:2}}>{s}</li>)}</ol>
+              </div>
+              <div style={{fontSize:13,marginBottom:10}}><b>Expected:</b> {c.expected}</div>
+              <textarea style={{...ta,marginBottom:10}} rows={2} value={c.manualActual||""} onChange={e=>setManual(c.id,"manualActual",e.target.value)} placeholder="Actual result observed while testing…"/>
+              <div style={{display:"flex",gap:8}}>
+                {[["pass","✓ Pass","success"],["fail","✗ Fail","danger"],["blocked","⛔ Blocked","warning"]].map(([v,label,color])=>
+                  <button key={v} onClick={()=>setManual(c.id,"manualStatus",v)} style={{padding:"6px 14px",borderRadius:8,border:"1px solid "+(c.manualStatus===v?`var(--color-text-${color})`:"var(--color-border-secondary)"),background:c.manualStatus===v?`var(--color-background-${color})`:"transparent",color:c.manualStatus===v?`var(--color-text-${color})`:"var(--color-text-secondary)",cursor:"pointer",fontSize:13,fontWeight:500}}>{label}</button>
+                )}
+              </div>
+            </div>)}
+            <div style={{display:"flex",gap:10}}>
+              <Btn v="primary" onClick={()=>setPhase(autoable.length>0?"scriptSelect":"bugReport")}>{done<manOnly.length?`Continue (${manOnly.length-done} untested) →`:"Continue →"}</Btn>
+            </div>
+          </div>;
+        })()}
+
         {!loading&&phase==="autoReady"&&<div>
           {fixed&&<Banner icon="🔧" title="Scripts fixed" sub="Failures addressed." color="info"/>}
+          {!autoExecute&&<Banner icon="📥" title="No project attached — download these scripts and run them locally against your own environment" sub="Auto-execution is only available when a frontend or backend repo is attached to this project." color="warning"/>}
           <div style={card}>
             <div style={{display:"flex",justifyContent:"space-between",marginBottom:12,alignItems:"center"}}><div style={{fontWeight:500}}>Automation scripts</div><Tag c={platform==="mobile"?"amber":"blue"}>{fwName(platform)}</Tag></div>
             {platform==="mobile"?<Tabs tabs={[{id:"ios",label:"iOS (Appium)"},{id:"android",label:"Android (Appium)"}]} active={tab} onChange={setTab}/>:<Tabs tabs={[{id:"web",label:"Web automation script"}]} active={tab} onChange={setTab}/>}
@@ -3536,7 +3930,7 @@ OVERALL STORY READINESS FOR QA:
           </div>
         </div>}
 
-        {!loading&&phase==="runAsk"&&<Confirm icon="▶️" title="Start test execution?" desc={"Live terminal output for "+selectedForScripts.length+" selected scripts."} onYes={doRun} yesLabel="Yes, run scripts"/>}
+        {!loading&&phase==="runAsk"&&<Confirm icon="▶️" title="Start test execution?" desc={"Live terminal output for "+selectedForScripts.length+" selected scripts."} onYes={()=>doRun()} yesLabel="Yes, run scripts"/>}
         {phase==="running"&&<div style={card}><div style={{fontWeight:500,marginBottom:12}}>▶ Running tests…</div><Terminal lines={execLines}/></div>}
 
         {phase==="result"&&result&&<div>
@@ -3546,7 +3940,7 @@ OVERALL STORY READINESS FOR QA:
           <div style={card}><div style={{fontWeight:500,marginBottom:10}}>Execution log</div><Terminal lines={execLines}/></div>
           {result.fail.length>0&&<Btn v="primary" onClick={doFix}>🔧 Fix scripts</Btn>}
           <div style={{display:"flex",gap:10,marginTop:12}}>
-            {result.fail.length>0
+            {(result.fail.length>0||manOnly.some(c=>c.manualStatus==="fail"||c.manualStatus==="blocked"))
               ?<Btn v="primary" onClick={()=>setPhase("bugReport")}>Bug Report →</Btn>
               :<Btn v="primary" onClick={()=>{setCoverageText(t=>t||"1");setPhase("coverage");syncToServer("coverage",{memberId:member.id,memberName:member.name,projectId:proj?.id||"",projectName:proj?.name||"",sid,summary:sdata?.summary||sid,platform,approvedCases:approved.length,passed:result?.pass?.length||0,failed:result?.fail?.length||0,bugs:sessionBugs.length});}}>Coverage Report →</Btn>}
           </div>
@@ -3557,10 +3951,17 @@ OVERALL STORY READINESS FOR QA:
             <div style={{flex:1,fontSize:14}}>Story: <b>{sid}</b> · {result?<><Tag c={result.fail.length>0?"red":"green"}>{result.pass.length} passed</Tag> <Tag c={result.fail.length>0?"red":"green"}>{result.fail.length} failed</Tag></>:<Tag>No execution</Tag>}</div>
           </div>
           {result?.fail?.filter(c=>!sessionBugs.some(b=>b.tcId===c.id)).length>0&&<div style={card}>
-            <H2>Failed cases</H2>
+            <H2>Failed cases (automated)</H2>
             {result.fail.filter(c=>!sessionBugs.some(b=>b.tcId===c.id)).map(c=><div key={c.id} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 0",borderBottom:"1px solid var(--color-border-tertiary)"}}>
               <Tag c="red">{c.id}</Tag><span style={{flex:1,fontSize:13}}>{c.title}</span>
               <button onClick={()=>{setBf({tcId:c.id,summary:c.title+" is not working as expected",sev:"High",steps:(c.steps||[]).length>0?[...c.steps]:["Reproduce the issue"],expected:c.expected||"The feature works as designed",actual:c._pwError||"Test execution failed",testData:c.testData||"",attachments:[],_err:false});setShowBugForm(true);}} style={{...ghostBtn,padding:"4px 10px",fontSize:12}}>🐛 File Bug</button>
+            </div>)}
+          </div>}
+          {manOnly.filter(c=>(c.manualStatus==="fail"||c.manualStatus==="blocked")&&!sessionBugs.some(b=>b.tcId===c.id)).length>0&&<div style={card}>
+            <H2>Failed / blocked cases (manual)</H2>
+            {manOnly.filter(c=>(c.manualStatus==="fail"||c.manualStatus==="blocked")&&!sessionBugs.some(b=>b.tcId===c.id)).map(c=><div key={c.id} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 0",borderBottom:"1px solid var(--color-border-tertiary)"}}>
+              <Tag c={c.manualStatus==="fail"?"red":"amber"}>{c.id}</Tag><span style={{flex:1,fontSize:13}}>{c.title}</span>
+              <button onClick={()=>{setBf({tcId:c.id,summary:c.title+" is not working as expected",sev:"High",steps:(c.steps||[]).length>0?[...c.steps]:["Reproduce the issue"],expected:c.expected||"The feature works as designed",actual:c.manualActual||"Manual test "+(c.manualStatus==="blocked"?"was blocked":"failed"),testData:c.testData||"",attachments:[],_err:false});setShowBugForm(true);}} style={{...ghostBtn,padding:"4px 10px",fontSize:12}}>🐛 File Bug</button>
             </div>)}
           </div>}
           <div style={card}>
@@ -3757,20 +4158,26 @@ OVERALL STORY READINESS FOR QA:
             {label:"Edge cases",value:approved.filter(c=>c.type==="edge").length,color:"#f59e0b"},
             {label:"Negative",value:approved.filter(c=>c.type==="negative").length,color:"#3b82f6"},
           ].filter(d=>d.value>0);
-          const execData=result?[
-            {label:"Passed",value:result.pass.length,color:"#4caf50"},
-            {label:"Failed",value:result.fail.length,color:"#ef4444"},
-          ].filter(d=>d.value>0):[];
+          const manPass=manOnly.filter(c=>c.manualStatus==="pass").length;
+          const manFail=manOnly.filter(c=>c.manualStatus==="fail").length;
+          const manBlocked=manOnly.filter(c=>c.manualStatus==="blocked").length;
+          const manTested=manPass+manFail+manBlocked;
+          const execData=[
+            {label:"Passed",value:(result?.pass.length||0)+manPass,color:"#4caf50"},
+            {label:"Failed",value:(result?.fail.length||0)+manFail,color:"#ef4444"},
+            {label:"Blocked",value:manBlocked,color:"#f59e0b"},
+          ].filter(d=>d.value>0);
           const autoData=[
             {label:"Automatable",value:autoable.length,color:"#6366f1"},
             {label:"Manual only",value:manOnly.length,color:"#9ca3af"},
           ].filter(d=>d.value>0);
+          const execDone=!!result||manOnly.length===0||manTested===manOnly.length;
           const stlc=[
             {label:"Requirements Analysis",value:sdata?100:0,color:"#4caf50"},
             {label:"Test Design",value:cases.length>0?100:0,color:"#3b82f6"},
             {label:"Test Review",value:cases.length>0?Math.round(approved.length/cases.length*100):0,color:"#f59e0b"},
-            {label:"Test Execution",value:result?100:0,color:"#8b5cf6"},
-            {label:"Defect Management",value:(sessionBugs.length>0||(result&&result.fail.length===0))?100:0,color:"#ef4444"},
+            {label:"Test Execution",value:execDone?100:Math.round(manTested/Math.max(manOnly.length,1)*100),color:"#8b5cf6"},
+            {label:"Defect Management",value:(sessionBugs.length>0||((result?.fail.length||0)===0&&manFail===0&&manBlocked===0))?100:0,color:"#ef4444"},
           ];
           const overall=Math.round(stlc.reduce((s,p)=>s+p.value,0)/stlc.length);
           const scoreColor=overall>=80?"var(--color-text-success)":overall>=60?"var(--color-text-warning)":"var(--color-text-danger)";
@@ -3794,7 +4201,7 @@ OVERALL STORY READINESS FOR QA:
                   </div>
                   <div style={{fontSize:12,color:"var(--color-text-secondary)",display:"flex",gap:16,flexWrap:"wrap"}}>
                     <span><b>{approved.length}</b> approved cases</span>
-                    {result?<span><b>{result.pass.length}</b> passed · <b>{result.fail.length}</b> failed</span>:<span>No execution</span>}
+                    {(result||manTested>0)?<span><b>{(result?.pass.length||0)+manPass}</b> passed · <b>{(result?.fail.length||0)+manFail}</b> failed{manBlocked>0?<> · <b>{manBlocked}</b> blocked</>:null}</span>:<span>No execution</span>}
                     <span><b>{sessionBugs.length}</b> bug{sessionBugs.length!==1?"s":""} filed</span>
                   </div>
                 </div>
@@ -4131,9 +4538,9 @@ function App() {
             </div>;})}
         </div>)}
         {user.role==="member"&&savedStories.length>0&&(()=>{
-          const visibleStories=activeProj?.jiraProjKey?savedStories.filter(s=>(s.sid&&s.sid.startsWith(activeProj.jiraProjKey+"-"))||(s.testKind==="ui-design"&&s.projectId===activeProj.id)):savedStories;
+          const visibleStories=activeProj?savedStories.filter(s=>storyMatchesProject(s,activeProj.jiraProjKey,activeProj.id)):savedStories;
           if(visibleStories.length===0)return null;
-          const isActive=s=>s.testKind==="ui-design"?activeSid===("uid:"+s.id)&&page==="workspace":s.sid===activeSid&&page==="workspace";
+          const isActive=s=>s.testKind==="ui-design"?activeSid===("uid:"+s.id)&&page==="workspace":s.testKind==="non-functional"?activeSid===("perf:"+s.id)&&page==="workspace":s.sid===activeSid&&page==="workspace";
           const StoryCard=({s})=>(
             <div key={s.id} style={{borderRadius:7,padding:"8px 9px",background:isActive(s)?"var(--color-background-info)":"var(--color-background-primary)",border:isActive(s)?"1px solid var(--color-text-info)":"1px solid var(--color-border-tertiary)",cursor:renamingId===s.id?"default":"pointer",transition:"border-color 0.15s",borderLeft:isActive(s)?"3px solid var(--color-text-info)":"1px solid var(--color-border-tertiary)"}}
               onMouseEnter={e=>{if(renamingId!==s.id&&!isActive(s))e.currentTarget.style.borderColor="var(--color-border-primary)";}}
@@ -4155,6 +4562,8 @@ function App() {
                     <div style={{display:"flex",gap:3,flexWrap:"wrap"}}>
                       {s.testKind==="ui-design"
                         ?<><Tag c="purple">UI</Tag>{s.uidJiraTicketKey&&<Tag c="blue">{s.uidJiraTicketKey}</Tag>}{(s.uidCases?.length||0)>0&&<Tag c="green">{s.uidCases.length} TC</Tag>}{s.uidVisualResult&&<Tag c="green">✓</Tag>}</>
+                        :s.testKind==="non-functional"
+                        ?<><Tag c="amber">PERF</Tag><Tag c="blue">{s.perfForm?.method||"GET"}</Tag>{s.perfResult&&<Tag c={s.perfResult.passed?"green":"red"}>{s.perfResult.passed?"✓ Pass":"✗ Fail"}</Tag>}</>
                         :<><Tag c="blue">{s.sid}</Tag>{(s.cases?.filter(c=>c.status==="approved")?.length||0)>0&&<Tag c="green">{s.cases.filter(c=>c.status==="approved").length} TC</Tag>}{s.coverageText&&<Tag c="green">✓</Tag>}</>}
                     </div>
                   </div>}
