@@ -349,6 +349,106 @@ function parseCSVUsers(text) {
   return { users };
 }
 
+// A saved story "belongs" to a project either via a Jira-ticket-prefixed sid
+// (functional tests) or an explicit projectId (ui-design / non-functional
+// tests, which have no sid). Functional-test stories never carry a projectId,
+// so if the project has no Jira key there is no reliable signal either way —
+// fall back to visible (matching the pre-existing behavior of showing
+// everything in that case) rather than silently hiding the user's own data.
+function storyMatchesProject(s, jiraProjKey, projectId) {
+  if (s.projectId) return s.projectId === projectId;
+  if (s.sid && jiraProjKey) return s.sid.startsWith(jiraProjKey + "-");
+  return !jiraProjKey;
+}
+
+function tokenizeShellCommand(str) {
+  const tokens = [];
+  let i = 0, cur = '', inSingle = false, inDouble = false, sawAny = false;
+  while (i < str.length) {
+    const c = str[i];
+    if (inSingle) {
+      if (c === "'") { inSingle = false; } else { cur += c; }
+    } else if (inDouble) {
+      if (c === '"') { inDouble = false; }
+      else if (c === '\\' && i + 1 < str.length && '"\\$`'.includes(str[i + 1])) { cur += str[i + 1]; i++; }
+      else { cur += c; }
+    } else {
+      if (c === "'") { inSingle = true; sawAny = true; }
+      else if (c === '"') { inDouble = true; sawAny = true; }
+      else if (/\s/.test(c)) { if (sawAny || cur) { tokens.push(cur); cur = ''; sawAny = false; } }
+      else if (c === '\\' && i + 1 < str.length) { cur += str[i + 1]; i++; sawAny = true; }
+      else { cur += c; sawAny = true; }
+    }
+    i++;
+  }
+  if (cur || sawAny) tokens.push(cur);
+  return tokens;
+}
+
+// Parses a pasted cURL command (from browser DevTools / Postman "Copy as cURL")
+// into { url, method, body, bearer, basicUser, basicPass }. Unknown flags are ignored.
+function parseCurlCommand(raw) {
+  if (!raw || !raw.trim()) return null;
+  // Normalize line continuations: bash "\", cmd "^", PowerShell "`", each followed by a newline.
+  const normalized = raw.replace(/[\\^`]\s*\r?\n/g, ' ').replace(/\r?\n/g, ' ');
+  const tokens = tokenizeShellCommand(normalized.trim());
+  if (!tokens.length) return null;
+  let i = 0;
+  if (/^curl(\.exe)?$/i.test(tokens[0])) i = 1;
+
+  let url = '', method = '', body = '', bearer = '', basicUser = '', basicPass = '';
+  let hasData = false;
+  const headers = [];
+
+  for (; i < tokens.length; i++) {
+    const t = tokens[i];
+    if (t === '-X' || t === '--request') { method = (tokens[++i] || '').toUpperCase(); }
+    else if (t === '-H' || t === '--header') { headers.push(tokens[++i] || ''); }
+    else if (t === '-d' || t === '--data' || t === '--data-raw' || t === '--data-binary' || t === '--data-ascii') { body = tokens[++i] || ''; hasData = true; }
+    else if (t === '--data-urlencode') { const v = tokens[++i] || ''; body = body ? body + '&' + v : v; hasData = true; }
+    else if (t === '-u' || t === '--user') {
+      const up = tokens[++i] || '';
+      const idx = up.indexOf(':');
+      basicUser = idx >= 0 ? up.slice(0, idx) : up;
+      basicPass = idx >= 0 ? up.slice(idx + 1) : '';
+    }
+    else if (t === '--url') { url = tokens[++i] || ''; }
+    else if (!url && /^https?:\/\//i.test(t)) { url = t; }
+    // everything else (-k, -s, -L, --compressed, -i, -v, ...) is silently ignored
+  }
+
+  // Any header that isn't Authorization (handled above) or Content-Type/Accept
+  // (already sent by every test) is likely a custom auth mechanism — e.g. an
+  // API key header — so surface it as an importable custom header.
+  const otherHeaders = [];
+  headers.forEach(h => {
+    const idx = h.indexOf(':');
+    if (idx === -1) return;
+    const rawName = h.slice(0, idx).trim();
+    const name = rawName.toLowerCase();
+    const value = h.slice(idx + 1).trim();
+    if (name === 'authorization') {
+      if (/^bearer\s+/i.test(value)) bearer = value.replace(/^bearer\s+/i, '');
+      else if (/^basic\s+/i.test(value)) {
+        try {
+          const decoded = atob(value.replace(/^basic\s+/i, ''));
+          const idx2 = decoded.indexOf(':');
+          basicUser = idx2 >= 0 ? decoded.slice(0, idx2) : decoded;
+          basicPass = idx2 >= 0 ? decoded.slice(idx2 + 1) : '';
+        } catch {}
+      }
+    } else if (name !== 'content-type' && name !== 'accept') {
+      otherHeaders.push({ name: rawName, value });
+    }
+  });
+
+  if (!method) method = hasData ? 'POST' : 'GET';
+  const ALLOWED_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'];
+  if (!ALLOWED_METHODS.includes(method)) method = hasData ? 'POST' : 'GET';
+
+  return { url, method, body, bearer, basicUser, basicPass, otherHeaders };
+}
+
 /* ─── Styles ─────────────────────────────────────────────────────────────── */
 const card = { background:"var(--color-background-primary)", border:"1px solid var(--color-border-tertiary)", borderRadius:14, padding:20, marginBottom:16, boxShadow:"var(--shadow-sm)", animation:"qa-fade-up 0.28s ease both" };
 const inp  = { width:"100%", padding:"9px 13px", borderRadius:10, border:"1px solid var(--color-border-secondary)", background:"var(--color-background-primary)", color:"var(--color-text-primary)", fontSize:14, boxSizing:"border-box" };
@@ -1318,23 +1418,65 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
   const showToast=(msg)=>{setToast(msg);setTimeout(()=>setToast(null),3000);};
 
   // ── Non-functional / performance test state ──────────────────────────────
-  const PERF_FORM_DEFAULT={testType:"load",testName:"",method:"GET",apiUrl:"",expectedStatus:200,authType:"none",token:"",basicUsername:"",basicPassword:"",requestBody:"",vus:100,duration:"60s",ramp:"10s",p95Threshold:2000,csvUsers:null,csvFileName:"",csvError:""};
+  const PERF_FORM_DEFAULT={testType:"load",testName:"",method:"GET",apiUrl:"",expectedStatus:200,authType:"none",token:"",basicUsername:"",basicPassword:"",requestBody:"",vus:100,duration:"60s",ramp:"10s",p95Threshold:2000,csvUsers:null,csvFileName:"",csvError:"",variables:[],customHeaders:[]};
   const [testKind,setTestKind]=useState("functional");
   const [perfForm,setPerfForm]=useState(PERF_FORM_DEFAULT);
   const [perfResult,setPerfResult]=useState(null);
   const [perfLoading,setPerfLoading]=useState(false);
   const [perfChat,setPerfChat]=useState(false);
+  const [curlDraft,setCurlDraft]=useState("");
+  const [curlErr,setCurlErr]=useState("");
+
+  // ── UI Design Testing state ───────────────────────────────────────────────
+  const [uidForm,setUidForm]=useState({pageUrl:"",figmaUrl:"",figmaToken:"",selectedNodeId:""});
+  const [uidLoading,setUidLoading]=useState(false);
+  const [uidLoadMsg,setUidLoadMsg]=useState("");
+  const [uidCases,setUidCases]=useState([]);
+  const [uidVisualResult,setUidVisualResult]=useState(null);
+  const [uidFigmaImg,setUidFigmaImg]=useState(null);
+  const [uidScreenshotImg,setUidScreenshotImg]=useState(null);
+  const [uidFigmaFrames,setUidFigmaFrames]=useState([]);
+  const [uidJiraStatus,setUidJiraStatus]=useState({});
+  const [uidManualFigmaImg,setUidManualFigmaImg]=useState(null);
+  const [uidJiraTicketKey,setUidJiraTicketKey]=useState("");
+  const [uidAiotestStatus,setUidAiotestStatus]=useState({importing:false,done:false,error:""});
+  const [uidStoryId,setUidStoryId]=useState(null);
+  const [perfStoryId,setPerfStoryId]=useState(null);
+  const [uidTicketSearch,setUidTicketSearch]=useState("");
+  const [uidTicketResults,setUidTicketResults]=useState([]);
+  const [uidTicketSearching,setUidTicketSearching]=useState(false);
+  const [uidJiraMode,setUidJiraMode]=useState("jira");
+  const [uidStoryRequirements,setUidStoryRequirements]=useState("");
+  const [uidStoryFiles,setUidStoryFiles]=useState([]);
+  const [uidStoryFileDrag,setUidStoryFileDrag]=useState(false);
+  const [uidSvgFiles,setUidSvgFiles]=useState([]);
+  const [uidSvgLoading,setUidSvgLoading]=useState(false);
+  const [uidEditingBugId,setUidEditingBugId]=useState(null);
+  const [uidEditBugForm,setUidEditBugForm]=useState({});
+  const [uidShowAddBug,setUidShowAddBug]=useState(false);
+  const [uidAddBugForm,setUidAddBugForm]=useState({title:"",severity:"High",area:"UI",description:"",expected:"",actual:"",recommendation:""});
+  const [uidReportComment,setUidReportComment]=useState("");
+  const [uidCommentStatus,setUidCommentStatus]=useState({sending:false,done:false,error:""});
+  const [uidScript,setUidScript]=useState({config:"",page:"",spec:""});
+  const [uidScriptTab,setUidScriptTab]=useState("spec");
+  const [uidScriptLoading,setUidScriptLoading]=useState(false);
+  const [uidScriptError,setUidScriptError]=useState("");
+  const [uidDemandName,setUidDemandName]=useState("");
+  const [uidSelectedForScript,setUidSelectedForScript]=useState([]);
 
   // ── Step definitions (reactive: perf path gets its own shorter bar) ───────
   const WS_STEPS = testKind==="non-functional"
     ? ["Project","Test Type","Run Test","Results"]
-    : ["Project","Test Type","User Story","Analysis","Generate","Review","Export","Scripts","Execute","Bug Report","Coverage"];
+    : testKind==="ui-design"
+      ? ["Project","Test Type","Jira Ticket","Setup","Test Cases","Run Tests","Results","Bugs","Report"]
+      : ["Project","Test Type","User Story","Analysis","Generate","Review","Export","Scripts","Execute","Bug Report","Coverage"];
   const WS_IDX = {
     project:0, testType:1,
     input:2, mode:3, gap:3, ctype:4, ready:4,
     review:5, jira:6, urlPrompt:7, checkingAttachment:7, attachError:7, codegenRecording:7, scriptSelect:7, autoReady:7,
     runAsk:8, running:8, result:8, manualExec:8, bugReport:9, coverage:10,
-    perfTest:2, perfResult:3
+    perfTest:2, perfResult:3,
+    uidJiraTicket:2, uidSetup:3, uidCases:4, uidRun:5, uidResults:6, uidBugs:7, uidReport:8
   };
 
   const doRunPerfTest=async()=>{
@@ -1382,15 +1524,29 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
       setResult(s.result||null);setExecLines(s.execLines||[]);
       setCoverageText(s.coverageText||"");setSessionBugs(s.sessionBugs||[]);
       setSelectedForScripts(s.selectedForScripts||[]);setAppUrl(s.appUrl||"");
+      if(s.uidForm)setUidForm(s.uidForm);
+      if(s.uidCases?.length)setUidCases(s.uidCases);
+      if(s.uidVisualResult)setUidVisualResult(s.uidVisualResult);
+      if(s.uidFigmaImg)setUidFigmaImg(s.uidFigmaImg);
+      if(s.uidManualFigmaImg)setUidManualFigmaImg(s.uidManualFigmaImg);
+      if(s.uidJiraTicketKey)setUidJiraTicketKey(s.uidJiraTicketKey);
+      if(s.uidStoryId)setUidStoryId(s.uidStoryId);
+      if(s.uidScript)setUidScript(s.uidScript);
+      if(s.uidDemandName)setUidDemandName(s.uidDemandName);
+      if(s.uidSelectedForScript?.length)setUidSelectedForScript(s.uidSelectedForScript);
+      if(s.uidJiraMode)setUidJiraMode(s.uidJiraMode);
+      if(s.uidStoryRequirements)setUidStoryRequirements(s.uidStoryRequirements);
+      if(s.uidStoryFiles?.length)setUidStoryFiles(s.uidStoryFiles);
+      if(s.uidSvgFiles?.length)setUidSvgFiles(s.uidSvgFiles);
     }catch{}
   },[]);
   // Save workspace state on every change
   useEffect(()=>{
     if(phase==="input"||phase==="testType"){localStorage.removeItem(WS_SNAP);return;}
-    try{localStorage.setItem(WS_SNAP,JSON.stringify({phase,testKind,sid,sdata,platform,ctypes,gapText,cases,scripts,tab,result,execLines,coverageText,sessionBugs,selectedForScripts,appUrl}));}catch{}
+    try{localStorage.setItem(WS_SNAP,JSON.stringify({phase,testKind,sid,sdata,platform,ctypes,gapText,cases,scripts,tab,result,execLines,coverageText,sessionBugs,selectedForScripts,appUrl,uidForm,uidCases,uidVisualResult,uidFigmaImg,uidManualFigmaImg,uidJiraTicketKey,uidStoryId,uidScript,uidDemandName,uidSelectedForScript,uidJiraMode,uidStoryRequirements,uidStoryFiles,uidSvgFiles}));}catch{}
     // Also keep per-story cache up to date
     if(sid&&sdata)saveStoryToCache(sid,{phase,sdata,platform,ctypes,gapText,cases,needsClarification,scripts,result,sessionBugs,coverageText,appUrl});
-  },[phase,sid,sdata,platform,ctypes,gapText,cases,scripts,tab,result,execLines,coverageText,sessionBugs,selectedForScripts,appUrl]);
+  },[phase,sid,sdata,platform,ctypes,gapText,cases,scripts,tab,result,execLines,coverageText,sessionBugs,selectedForScripts,appUrl,uidCases,uidVisualResult,uidJiraTicketKey,uidStoryId,uidScript,uidDemandName,uidSelectedForScript,uidJiraMode,uidStoryRequirements,uidStoryFiles,uidSvgFiles]);
 
   // Poll codegen session status while recording
   useEffect(()=>{
@@ -1450,7 +1606,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
 
   if (!proj) return <div style={card}><div style={{color:"var(--color-text-warning)",fontWeight:500}}>No project assigned. Contact your QA lead.</div></div>;
   const [switchTarget,setSwitchTarget]=React.useState(null);
-  const doSwitchProj=(id)=>{setSelectedProjId(id);setPhase("testType");setTestKind("functional");setPerfResult(null);setSid("");setSdata(null);setCases([]);setNeedsClarification([]);setCoverageSummary("");setResult(null);setExecLines([]);setScripts({web:"",ios:"",android:""});setHasSaved(false);};
+  const doSwitchProj=(id)=>{setSelectedProjId(id);setPhase("testType");setTestKind("functional");setPerfForm(PERF_FORM_DEFAULT);setPerfResult(null);setPerfStoryId(null);setSid("");setSdata(null);setCases([]);setNeedsClarification([]);setCoverageSummary("");setResult(null);setExecLines([]);setScripts({web:"",ios:"",android:""});setHasSaved(false);setUidForm({pageUrl:"",figmaUrl:"",figmaToken:"",selectedNodeId:""});setUidCases([]);setUidVisualResult(null);setUidFigmaImg(null);setUidScreenshotImg(null);setUidFigmaFrames([]);setUidJiraStatus({});setUidManualFigmaImg(null);setUidJiraTicketKey("");setUidStoryId(null);setUidAiotestStatus({importing:false,done:false,error:""});setUidTicketSearch("");setUidTicketResults([]);setUidTicketSearching(false);};
   const switchProj=(id)=>{
     if(id===selectedProjId)return;
     if(sid){setSwitchTarget(id);return;}
@@ -2043,14 +2199,20 @@ OVERALL STORY READINESS FOR QA:
   const editS=(id,si,v)=>setCases(cs=>cs.map(c=>{if(c.id!==id)return c;const s=[...c.steps];s[si]=v;return{...c,steps:s};}));
   const addStep=id=>setCases(cs=>cs.map(c=>c.id===id?{...c,steps:[...(c.steps||[]),"New step"]}:c));
   const delStep=(id,si)=>setCases(cs=>cs.map(c=>c.id===id?{...c,steps:(c.steps||[]).filter((_,i)=>i!==si)}:c));
-  const reset=()=>{localStorage.removeItem(WS_SNAP);setPhase("project");setTestKind("functional");setPerfResult(null);setPerfForm(PERF_FORM_DEFAULT);setPerfChat(false);setSid("");setSdata(null);setPlatform("web");setCtypes([]);setReadyFilter("all");setGapText("");setCases([]);setEditOn(false);setScripts({web:"",ios:"",android:""});setProjFiles(null);setExecLines([]);setResult(null);setJKey(null);setBugDone(null);setShowBugForm(false);setFixed(false);setChat(false);setShowAddCase(false);setSelectedForScripts([]);setCoverageText("");setSessionBugs([]);setHasSaved(false);setAppUrl("");setScriptCache({});};
-  const resetPerf=()=>{setPerfForm(PERF_FORM_DEFAULT);setPerfResult(null);setPerfChat(false);setHasSaved(false);setPhase("perfTest");};
+  const reset=()=>{localStorage.removeItem(WS_SNAP);setPhase("project");setTestKind("functional");setPerfResult(null);setPerfForm(PERF_FORM_DEFAULT);setPerfChat(false);setSid("");setSdata(null);setPlatform("web");setCtypes([]);setReadyFilter("all");setGapText("");setCases([]);setEditOn(false);setScripts({web:"",ios:"",android:""});setProjFiles(null);setExecLines([]);setResult(null);setJKey(null);setBugDone(null);setShowBugForm(false);setFixed(false);setChat(false);setShowAddCase(false);setSelectedForScripts([]);setCoverageText("");setSessionBugs([]);setHasSaved(false);setAppUrl("");setScriptCache({});setUidForm({pageUrl:"",figmaUrl:"",figmaToken:"",selectedNodeId:""});setUidCases([]);setUidVisualResult(null);setUidFigmaImg(null);setUidManualFigmaImg(null);setUidJiraTicketKey("");setUidStoryId(null);setPerfStoryId(null);setUidJiraStatus({});setUidAiotestStatus({importing:false,done:false,error:""});setUidReportComment("");setUidCommentStatus({sending:false,done:false,error:""});setCurlDraft("");setCurlErr("");};
+  const resetPerf=()=>{setPerfForm(PERF_FORM_DEFAULT);setPerfResult(null);setPerfStoryId(null);setPerfChat(false);setHasSaved(false);setPhase("perfTest");setCurlDraft("");setCurlErr("");};
   const [saveModal,setSaveModal]=useState(null);
   // saveModal: null | {step:1,name:""} | {step:2,name:"",newCat:""}
   const openSaveModal=()=>{
+    if(testKind==="ui-design"){
+      const existing=uidStoryId?DB.savedStories.find(s=>s.id===uidStoryId):null;
+      const dflt=uidJiraTicketKey||("UI Design "+(uidForm?.pageUrl||"").replace(/https?:\/\//,"").slice(0,30)||"UI Design Test");
+      setSaveModal({step:1,name:existing?.name||dflt});
+      return;
+    }
     if(testKind==="non-functional"){
       const dflt=perfForm.testName||(perfResult?"Perf Test "+new Date().toLocaleDateString():"New Perf Test");
-      const existing=DB.savedStories.find(s=>s.testKind==="non-functional"&&s.perfForm?.testName===perfForm.testName&&perfForm.testName);
+      const existing=perfStoryId?DB.savedStories.find(s=>s.id===perfStoryId):null;
       setSaveModal({step:1,name:existing?.name||dflt});
       return;
     }
@@ -2059,12 +2221,22 @@ OVERALL STORY READINESS FOR QA:
     setSaveModal({step:1,name:existing?.name||sid});
   };
   const commitSave=(name,categoryId)=>{
-    if(testKind==="non-functional"){
-      const existing=DB.savedStories.find(s=>s.testKind==="non-functional"&&s.perfForm?.testName===perfForm.testName&&perfForm.testName);
-      const snap={id:existing?.id||uid(),name,testKind:"non-functional",categoryId:categoryId||null,perfForm:{...perfForm},perfResult:perfResult?{...perfResult}:null,savedAt:Date.now()};
+    if(testKind==="ui-design"){
+      const existing=uidStoryId?DB.savedStories.find(s=>s.id===uidStoryId):null;
+      const newId=existing?.id||uid();
+      const snap={id:newId,name,testKind:"ui-design",categoryId:categoryId||null,uidForm:{...uidForm},uidCases:[...uidCases],uidVisualResult:uidVisualResult?{...uidVisualResult}:null,uidFigmaImg,uidManualFigmaImg,uidJiraTicketKey,uidScript:{...uidScript},uidDemandName,uidSelectedForScript:[...uidSelectedForScript],uidJiraMode,uidStoryRequirements,uidStoryFiles:[...uidStoryFiles],uidSvgFiles:[...uidSvgFiles],projectId:proj?.id||"",savedAt:Date.now()};
       if(existing){DB.savedStories=DB.savedStories.map(s=>s.id===existing.id?snap:s);}
       else{DB.savedStories.unshift(snap);}
-      saveDB();if(refreshSaved)refreshSaved();setHasSaved(true);setSaveModal(null);showToast("Session saved successfully");
+      saveDB();if(refreshSaved)refreshSaved();setUidStoryId(newId);setHasSaved(true);setSaveModal(null);showToast("Session saved successfully");
+      return;
+    }
+    if(testKind==="non-functional"){
+      const existing=perfStoryId?DB.savedStories.find(s=>s.id===perfStoryId):null;
+      const newId=existing?.id||uid();
+      const snap={id:newId,name,testKind:"non-functional",categoryId:categoryId||null,perfForm:{...perfForm},perfResult:perfResult?{...perfResult}:null,projectId:proj?.id||"",savedAt:Date.now()};
+      if(existing){DB.savedStories=DB.savedStories.map(s=>s.id===existing.id?snap:s);}
+      else{DB.savedStories.unshift(snap);}
+      saveDB();if(refreshSaved)refreshSaved();setPerfStoryId(newId);setHasSaved(true);setSaveModal(null);showToast("Session saved successfully");
       return;
     }
     const existing=DB.savedStories.find(s=>s.sid===sid);
@@ -2084,11 +2256,49 @@ OVERALL STORY READINESS FOR QA:
     reset();
   };
   const restoreStory=snap=>{
+    if(snap.testKind==="ui-design"){
+      setTestKind("ui-design");
+      setUidForm(snap.uidForm||{pageUrl:"",figmaUrl:"",figmaToken:"",selectedNodeId:""});
+      setUidCases(snap.uidCases||[]);
+      setUidVisualResult(snap.uidVisualResult||null);
+      setUidFigmaImg(snap.uidFigmaImg||null);
+      setUidManualFigmaImg(snap.uidManualFigmaImg||null);
+      setUidJiraTicketKey(snap.uidJiraTicketKey||"");
+      setUidStoryId(snap.id);
+      setUidJiraStatus({});setUidAiotestStatus({importing:false,done:false,error:""});
+      if(snap.uidScript)setUidScript(snap.uidScript);
+      if(snap.uidDemandName)setUidDemandName(snap.uidDemandName);
+      if(snap.uidSelectedForScript?.length)setUidSelectedForScript(snap.uidSelectedForScript);
+      if(snap.uidJiraMode)setUidJiraMode(snap.uidJiraMode);
+      if(snap.uidStoryRequirements)setUidStoryRequirements(snap.uidStoryRequirements);
+      if(snap.uidStoryFiles?.length)setUidStoryFiles(snap.uidStoryFiles);
+      if(snap.uidSvgFiles?.length)setUidSvgFiles(snap.uidSvgFiles);
+      const hasScript=snap.uidScript?.spec||snap.uidScript?.config;
+      const lastPhase=snap.uidVisualResult?"uidResults":hasScript?"uidRun":snap.uidCases?.length?"uidCases":"uidSetup";
+      setPhase(lastPhase);
+      return;
+    }
+    if(snap.testKind==="non-functional"){
+      setTestKind("non-functional");
+      setPerfForm(snap.perfForm||PERF_FORM_DEFAULT);
+      setPerfResult(snap.perfResult||null);
+      setPerfStoryId(snap.id);
+      setHasSaved(true);
+      setPhase(snap.perfResult?"perfResult":"perfTest");
+      return;
+    }
+    setTestKind("functional");
     setSid(snap.sid);setSdata(snap.sdata);setPlatform(snap.platform);setCtypes(snap.ctypes||[]);setGapText(snap.gapText||"");setCases(snap.cases||[]);setScripts(snap.scripts||{web:"",ios:"",android:""});setResult(snap.result||null);setSessionBugs(snap.sessionBugs||[]);setCoverageText(snap.coverageText||"");setSelectedForScripts(snap.selectedForScripts||[]);setAppUrl(snap.appUrl||"");setExecLines([]);setJKey(null);setBugDone(null);setShowBugForm(false);setFixed(false);setEditOn(false);setChat(false);setShowAddCase(false);
     const lastPhase=snap.phase||(snap.coverageText?"coverage":snap.result?"result":snap.cases?.some(c=>c.status==="approved")?"review":"ctype");
     setPhase(lastPhase);
   };
-  React.useEffect(()=>{if(onActiveSid)onActiveSid(sid);},[sid]);
+  React.useEffect(()=>{
+    if(onActiveSid){
+      if(testKind==="ui-design")onActiveSid(uidStoryId?"uid:"+uidStoryId:null);
+      else if(testKind==="non-functional")onActiveSid(perfStoryId?"perf:"+perfStoryId:null);
+      else onActiveSid(sid);
+    }
+  },[sid,testKind,uidStoryId,perfStoryId]);
   React.useEffect(()=>{if(onProjChange)onProjChange(proj);},[selectedProjId]);
   React.useEffect(()=>{if(restoreTarget){restoreStory(restoreTarget);if(clearRestore)clearRestore();}}, [restoreTarget]);
   React.useEffect(()=>{if(resetTrigger>0)reset();},[resetTrigger]);
@@ -2105,6 +2315,16 @@ OVERALL STORY READINESS FOR QA:
     if(i===0){setPhase("project");return;}
     if(i===1){setPhase("testType");return;}
     if(testKind==="non-functional"){if(i===2){setPhase("perfTest");return;}return;}
+    if(testKind==="ui-design"){
+      if(i===2){setPhase("uidJiraTicket");return;}
+      if(i===3){setPhase("uidSetup");return;}
+      if(i===4&&uidCases.length>0){setPhase("uidCases");return;}
+      if(i===5&&uidCases.length>0){setPhase("uidRun");return;}
+      if(i===6&&uidVisualResult){setPhase("uidResults");return;}
+      if(i===7&&uidVisualResult?.bugs?.length>0){setPhase("uidBugs");return;}
+      if(i===8&&uidVisualResult){setPhase("uidReport");return;}
+      return;
+    }
     if(i===2){setPhase("input");return;}
     if(i===3&&sdata){setPhase(gapText?"gap":"mode");return;}
     if(i===4&&sdata){const et=[...new Set(cases.map(c=>c.type))];setCtypes(et.length>0?et:[]);setPhase("ctype");return;}
@@ -2188,6 +2408,7 @@ OVERALL STORY READINESS FOR QA:
           {testKind==="functional"&&phase!=="input"&&<Tag c={platform==="mobile"?"amber":"blue"}>{platform}</Tag>}
           {testKind==="functional"&&sdata&&<Tag c={sdata.sim?"":"green"}>{sdata.sim?"AI simulation":"Jira ✓"}</Tag>}
           {testKind==="non-functional"&&(phase==="perfTest"||phase==="perfResult")&&<Tag c="amber">Performance</Tag>}
+          {testKind==="ui-design"&&<Tag c="blue">UI Design Test</Tag>}
         </div>
       </div>
       <div style={{display:"flex",gap:8}}>
@@ -2197,6 +2418,8 @@ OVERALL STORY READINESS FOR QA:
         {testKind==="non-functional"&&(phase==="perfTest"||phase==="perfResult")&&<button onClick={openSaveModal} disabled={!perfForm.testName.trim()} title="Save this test session to history" style={{...ghostBtn,opacity:perfForm.testName.trim()?1:0.4,cursor:perfForm.testName.trim()?"pointer":"not-allowed"}}>💾 Save</button>}
         {testKind==="non-functional"&&(phase==="perfTest"||phase==="perfResult")&&<button onClick={resetPerf} style={ghostBtn} title="Start a new performance test">↩ New Test</button>}
         {testKind==="non-functional"&&(phase==="perfTest"||phase==="perfResult")&&<button onClick={()=>setPerfChat(o=>!o)} style={ghostBtn}>{perfChat?"Hide chat":"🤖 AI Chat"}</button>}
+        {testKind==="ui-design"&&(phase==="uidSetup"||phase==="uidCases"||phase==="uidRun"||phase==="uidResults"||phase==="uidBugs")&&<button onClick={openSaveModal} style={ghostBtn} title="Save current session to history">💾 Save</button>}
+        {testKind==="ui-design"&&phase!=="uidJiraTicket"&&<button onClick={()=>{setTestKind("ui-design");setPhase("uidJiraTicket");setUidCases([]);setUidVisualResult(null);setUidFigmaImg(null);setUidScreenshotImg(null);setUidJiraStatus({});setUidManualFigmaImg(null);setUidJiraTicketKey("");setUidAiotestStatus({importing:false,done:false,error:""});setUidTicketSearch("");setUidTicketResults([]);setUidTicketSearching(false);setUidStoryId(null);setUidJiraMode("jira");setUidStoryRequirements("");setUidStoryFiles([]);setUidSvgFiles([]);}} style={ghostBtn} title="Start a new UI design test">↩ New Test</button>}
       </div>
     </div>
     <StepBar steps={WS_STEPS} cur={WS_IDX[phase]??0} onStepClick={goToStep}/>
@@ -2210,7 +2433,7 @@ OVERALL STORY READINESS FOR QA:
           <H2 style={{marginBottom:16}}>Choose a project to start</H2>
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))",gap:16}}>
             {memberProjects.map(p=>{
-              const projStories=DB.savedStories.filter(s=>s.sid&&s.sid.startsWith(p.jiraProjKey+"-"));
+              const projStories=DB.savedStories.filter(s=>storyMatchesProject(s,p.jiraProjKey,p.id));
               return <div key={p.id} className="qa-card-hover" style={{...card,cursor:"pointer",border:selectedProjId===p.id?"2px solid var(--accent)":"1px solid var(--color-border-tertiary)",marginBottom:0,boxShadow:selectedProjId===p.id?"0 0 0 3px rgba(79,70,229,0.1), var(--shadow-sm)":"var(--shadow-sm)"}} onClick={()=>{if(p.id===selectedProjId){setPhase("testType");}else{switchProj(p.id);}}}>
                 <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10}}>
                   <div style={{width:40,height:40,borderRadius:10,background:"var(--color-background-info)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:20}}>📁</div>
@@ -2219,7 +2442,7 @@ OVERALL STORY READINESS FOR QA:
                 <div style={{fontSize:12,color:"var(--color-text-secondary)",marginBottom:projStories.length>0?10:0}}>{projStories.length} saved session{projStories.length!==1?"s":""}</div>
                 {projStories.length>0&&<div style={{borderTop:"1px solid var(--color-border-tertiary)",paddingTop:8,display:"flex",flexDirection:"column",gap:4}}>
                   {projStories.slice(0,3).map(s=><div key={s.id} style={{display:"flex",alignItems:"center",gap:6,fontSize:12}}>
-                    <Tag c="blue" style={{flexShrink:0}}>{s.sid}</Tag>
+                    <Tag c="blue" style={{flexShrink:0}}>{s.sid||(s.testKind==="non-functional"?"PERF":s.testKind==="ui-design"?"UI":"")}</Tag>
                     <span style={{color:"var(--color-text-secondary)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flex:1}}>{s.name||s.sid}</span>
                   </div>)}
                   {projStories.length>3&&<div style={{fontSize:11,color:"var(--color-text-tertiary)"}}>+{projStories.length-3} more</div>}
@@ -2232,11 +2455,11 @@ OVERALL STORY READINESS FOR QA:
         {!loading&&phase==="testType"&&<div>
           <H2 style={{marginBottom:16}}>Choose Test Type</H2>
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))",gap:16}}>
-            {[{kind:"functional",icon:"✅",label:"Functional Test",sub:"User stories · Test cases · Execution",desc:"Generate and execute functional test cases from Jira user stories using AI.",bg:"var(--color-background-success)"},{kind:"non-functional",icon:"⚡",label:"Performance Test",sub:"Load · Stress · k6",desc:"Run k6 load and stress tests against your APIs with real-time metrics.",bg:"var(--color-background-warning)"}].map(o=>(
+            {[{kind:"functional",icon:"✅",label:"Functional Test",sub:"User stories · Test cases · Execution",desc:"Generate and execute functional test cases from Jira user stories using AI.",bg:"var(--color-background-success)"},{kind:"non-functional",icon:"⚡",label:"Performance Test",sub:"Load · Stress · k6",desc:"Run k6 load and stress tests against your APIs with real-time metrics.",bg:"var(--color-background-warning)"},{kind:"ui-design",icon:"🎨",label:"UI Design Test",sub:"Figma · Visual compare · Bug export",desc:"Compare Figma designs against the live implementation. Auto-generate visual test cases and file bugs directly to Jira.",bg:"var(--color-background-info)"}].map(o=>(
               <div key={o.kind} className="qa-card-hover" style={{...card,cursor:"pointer",border:"2px solid var(--color-border-tertiary)",marginBottom:0}}
                 onMouseEnter={e=>e.currentTarget.style.borderColor="var(--accent)"}
                 onMouseLeave={e=>e.currentTarget.style.borderColor="var(--color-border-tertiary)"}
-                onClick={()=>{setTestKind(o.kind);setPhase(o.kind==="functional"?"input":"perfTest");}}>
+                onClick={()=>{setTestKind(o.kind);setPhase(o.kind==="functional"?"input":o.kind==="ui-design"?"uidJiraTicket":"perfTest");}}>
                 <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10}}>
                   <div style={{width:44,height:44,borderRadius:10,background:o.bg,display:"flex",alignItems:"center",justifyContent:"center",fontSize:22}}>{o.icon}</div>
                   <div><div style={{fontWeight:600,fontSize:15}}>{o.label}</div><div style={{fontSize:12,color:"var(--color-text-tertiary)",marginTop:2}}>{o.sub}</div></div>
@@ -2262,6 +2485,862 @@ OVERALL STORY READINESS FOR QA:
           </div>
         </div>}
 
+        {uidLoading&&<Loader msg={uidLoadMsg||"Analyzing design…"}/>}
+
+        {/* ── UI Design: Setup ── */}
+        {!uidLoading&&phase==="uidSetup"&&(()=>{
+          const uf=v=>setUidForm(f=>({...f,...v}));
+          // Auto-load saved Figma token on first render
+          const savedFigmaToken=(()=>{try{return localStorage.getItem(FIGMA_TOKEN_KEY(member.id))||"";}catch{return "";}})();
+          const effectiveToken=uidForm.figmaToken||savedFigmaToken;
+          const useManual=!!uidManualFigmaImg;
+          const canProceed=uidForm.pageUrl.trim()&&(useManual||(uidForm.figmaUrl.trim()&&effectiveToken.trim()));
+          const readFileAsBase64=file=>new Promise((res,rej)=>{const r=new FileReader();r.onload=e=>res(e.target.result.split(',')[1]);r.onerror=rej;r.readAsDataURL(file);});
+          const doAnalyze=async()=>{
+            if(!canProceed)return;
+            setUidLoading(true);
+            try{
+              let figmaBase64=null;
+              if(useManual){
+                figmaBase64=uidManualFigmaImg;
+              } else {
+                setUidLoadMsg("Fetching Figma design…");
+                const r=await fetch(API_BASE+"/api/ui-design/figma",{method:"POST",headers:{"Content-Type":"application/json","X-Member-Token":sessionStorage.getItem(MEMBER_TOKEN_KEY)||""},body:JSON.stringify({figmaUrl:uidForm.figmaUrl,figmaToken:effectiveToken,nodeId:uidForm.selectedNodeId||undefined})});
+                const d=await r.json();
+                if(d.error)throw new Error(d.error);
+                setUidFigmaFrames(d.frames||[]);
+                figmaBase64=d.imageBase64||null;
+                setUidForm(f=>({...f,selectedNodeId:d.selectedNodeId||""}));
+                if(!figmaBase64){setUidLoading(false);alert("Could not export Figma frame as image. Try selecting a specific frame.");return;}
+              }
+              setUidFigmaImg(figmaBase64);
+              setUidLoadMsg("Generating UI test cases from design…");
+              const txtFileContents=uidStoryFiles.filter(f=>!f.isImg&&f.textContent).map(f=>`--- ${f.name} ---\n${f.textContent}`).join("\n\n");
+              const combinedReqs=[uidStoryRequirements,txtFileContents].filter(Boolean).join("\n\n");
+              const storyFileImages=uidStoryFiles.filter(f=>f.isImg).map(f=>({name:f.name,base64:f.base64}));
+              const selectedSvgs=uidSvgFiles.filter(f=>f.selected&&f.pngBase64).slice(0,8).map(f=>({name:f.name,base64:f.pngBase64}));
+              const svgAssetNames=uidSvgFiles.filter(f=>f.selected).map(f=>f.name);
+              const r2=await fetch(API_BASE+"/api/ui-design/analyze",{method:"POST",headers:{"Content-Type":"application/json","X-Member-Token":sessionStorage.getItem(MEMBER_TOKEN_KEY)||""},body:JSON.stringify({figmaImageBase64:figmaBase64,pageUrl:uidForm.pageUrl,figmaUrl:uidForm.figmaUrl||"",mode:"generate-cases",jiraTicketKey:uidJiraTicketKey||"",storyRequirements:combinedReqs,storyFileImages:[...storyFileImages,...selectedSvgs],svgAssetNames})});
+              const d2=await r2.json();
+              if(d2.error)throw new Error(d2.error);
+              const cases=(d2.testCases||[]).map((c,i)=>({...c,id:c.id||"TC-"+String(i+1).padStart(3,"0"),status:"pending"}));
+              setUidCases(cases);
+              setPhase("uidCases");
+            }catch(e){alert("Error: "+e.message);}
+            setUidLoading(false);
+          };
+          const svgToPng=(svgContent,size=180)=>new Promise(resolve=>{
+            try{
+              const canvas=document.createElement("canvas");
+              canvas.width=size;canvas.height=size;
+              const ctx=canvas.getContext("2d");
+              ctx.fillStyle="#ffffff";ctx.fillRect(0,0,size,size);
+              const img=new Image();
+              const blob=new Blob([svgContent],{type:"image/svg+xml;charset=utf-8"});
+              const url=URL.createObjectURL(blob);
+              img.onload=()=>{
+                const sc=Math.min(size/Math.max(img.width||size,1),size/Math.max(img.height||size,1))*0.82;
+                const w=(img.width||size)*sc,h=(img.height||size)*sc;
+                ctx.drawImage(img,(size-w)/2,(size-h)/2,w,h);
+                URL.revokeObjectURL(url);
+                resolve(canvas.toDataURL("image/png").split(",")[1]);
+              };
+              img.onerror=()=>{URL.revokeObjectURL(url);resolve(null);};
+              img.src=url;
+            }catch{resolve(null);}
+          });
+          const handleSvgFolder=async files=>{
+            const svgs=Array.from(files).filter(f=>f.name.toLowerCase().endsWith(".svg"));
+            if(!svgs.length){alert("No SVG files found in the selected folder.");return;}
+            setUidSvgLoading(true);
+            const results=[];
+            for(const file of svgs){
+              try{
+                const content=await file.text();
+                const previewDataUrl="data:image/svg+xml;charset=utf-8,"+encodeURIComponent(content);
+                const pngBase64=await svgToPng(content);
+                results.push({id:uid(),name:file.name,path:file.webkitRelativePath||file.name,size:file.size,content,previewDataUrl,pngBase64,selected:true});
+              }catch{/* skip bad svg */}
+            }
+            setUidSvgFiles(prev=>{
+              const existingNames=new Set(prev.map(f=>f.name));
+              return [...prev,...results.filter(r=>!existingNames.has(r.name))];
+            });
+            setUidSvgLoading(false);
+          };
+          const svgSelected=uidSvgFiles.filter(f=>f.selected);
+          const svgForAI=svgSelected.slice(0,8);
+          return <div>
+            <H2 style={{marginBottom:4}}>UI Design Test Setup</H2>
+            <div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:20}}>Enter the live page URL and Figma design link. The platform will generate UI test cases and visually compare the design against the implementation.</div>
+            <div style={card}>
+              <div style={{display:"flex",flexDirection:"column",gap:14}}>
+                <div><Lbl>Live Page URL *</Lbl><input style={inp} value={uidForm.pageUrl} onChange={e=>uf({pageUrl:e.target.value})} placeholder="https://app.example.com/login"/></div>
+                {/* Figma source: API or manual upload */}
+                <div style={{border:"1px solid var(--color-border-secondary)",borderRadius:10,padding:14}}>
+                  <div style={{fontWeight:600,fontSize:13,marginBottom:10,color:"var(--color-text-primary)"}}>Figma Design Source</div>
+                  {/* Tab toggle */}
+                  <div style={{display:"flex",gap:6,marginBottom:14}}>
+                    <button onClick={()=>setUidManualFigmaImg(null)} style={{flex:1,padding:"7px 0",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:!useManual?"var(--color-background-selected)":"transparent",fontWeight:!useManual?600:400,cursor:"pointer",fontSize:13,color:"var(--color-text-primary)"}}>API (Auto-fetch)</button>
+                    <button onClick={()=>setUidManualFigmaImg("__pending__")} style={{flex:1,padding:"7px 0",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:useManual?"var(--color-background-selected)":"transparent",fontWeight:useManual?600:400,cursor:"pointer",fontSize:13,color:"var(--color-text-primary)"}}>Upload Image</button>
+                  </div>
+                  {!useManual
+                    ?<div style={{display:"flex",flexDirection:"column",gap:12}}>
+                        <div><Lbl>Figma Design Link *</Lbl><input style={inp} value={uidForm.figmaUrl} onChange={e=>uf({figmaUrl:e.target.value})} onBlur={e=>{const v=e.target.value.trim();if(v&&!v.startsWith('http'))uf({figmaUrl:'https://'+v});}} placeholder="https://www.figma.com/design/..."/></div>
+                        <div><Lbl>Personal Access Token *</Lbl>
+                          {savedFigmaToken&&!uidForm.figmaToken
+                            ?<div style={{display:"flex",alignItems:"center",gap:10,padding:"9px 13px",borderRadius:10,border:"1px solid rgba(22,101,52,0.3)",background:"var(--color-background-success)",fontSize:13}}>
+                                <span style={{color:"var(--color-text-success)",fontWeight:500}}>✓ Token saved in Settings</span>
+                                <button onClick={()=>uf({figmaToken:" "})} style={{marginLeft:"auto",fontSize:12,padding:"2px 10px",borderRadius:6,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",color:"var(--color-text-secondary)"}}>Change</button>
+                              </div>
+                            :<input style={inp} type="password" value={uidForm.figmaToken.trim()} onChange={e=>uf({figmaToken:e.target.value})} placeholder="figd_..."/>}
+                          <div style={{fontSize:11,color:"var(--color-text-tertiary)",marginTop:4}}>Set once in <b>Settings</b>. Get from Figma → Settings → Security → Personal access tokens (select <b>File content: Read</b> scope).</div>
+                        </div>
+                        {uidFigmaFrames.length>0&&<div><Lbl>Select Frame (optional)</Lbl>
+                          <select style={{...inp,width:"100%"}} value={uidForm.selectedNodeId} onChange={e=>uf({selectedNodeId:e.target.value})}>
+                            <option value="">Auto-select first frame</option>
+                            {uidFigmaFrames.map(f=><option key={f.nodeId} value={f.nodeId}>{f.pageName} › {f.name}</option>)}
+                          </select>
+                        </div>}
+                      </div>
+                    :<div>
+                        <div style={{fontSize:12,color:"var(--color-text-secondary)",marginBottom:10}}>Upload any image of the Figma design. If export is disabled, take a screenshot: <b>Win+Shift+S</b> (Windows Snipping Tool) → select the frame → save as PNG → upload here.</div>
+                        {uidManualFigmaImg&&uidManualFigmaImg!=="__pending__"
+                          ?<div style={{display:"flex",alignItems:"center",gap:10,padding:"9px 13px",borderRadius:10,border:"1px solid rgba(22,101,52,0.3)",background:"var(--color-background-success)",fontSize:13}}>
+                              <span style={{color:"var(--color-text-success)",fontWeight:500}}>✓ Figma image loaded</span>
+                              <button onClick={()=>setUidManualFigmaImg("__pending__")} style={{marginLeft:"auto",fontSize:12,padding:"2px 10px",borderRadius:6,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",color:"var(--color-text-secondary)"}}>Change</button>
+                            </div>
+                          :<label style={{display:"block",padding:"28px 0",textAlign:"center",borderRadius:10,border:"2px dashed var(--color-border-secondary)",cursor:"pointer",fontSize:13,color:"var(--color-text-secondary)"}}>
+                              Click to upload Figma PNG export
+                              <input type="file" accept="image/png,image/jpeg,image/webp" style={{display:"none"}} onChange={async e=>{const f=e.target.files[0];if(!f)return;const b64=await readFileAsBase64(f);setUidManualFigmaImg(b64);}}/>
+                            </label>}
+                      </div>}
+                </div>
+              </div>
+
+              {/* ── SVG Assets Folder ── */}
+              <div style={{marginTop:16,border:"1px solid var(--color-border-secondary)",borderRadius:10,padding:14}}>
+                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10,flexWrap:"wrap",gap:8}}>
+                  <div>
+                    <div style={{fontWeight:600,fontSize:13,color:"var(--color-text-primary)"}}>SVG Assets / Icons Folder <span style={{fontWeight:400,color:"var(--color-text-tertiary)"}}>(Optional)</span></div>
+                    <div style={{fontSize:11,color:"var(--color-text-tertiary)",marginTop:2}}>Upload a folder of SVG icons — the AI will use them as visual reference when generating test cases.</div>
+                  </div>
+                  {uidSvgFiles.length>0&&<div style={{display:"flex",gap:6,alignItems:"center"}}>
+                    <Tag c="blue">{uidSvgFiles.length} SVG{uidSvgFiles.length!==1?"s":""}</Tag>
+                    <Tag c="green">{svgSelected.length} selected · {svgForAI.length} sent to AI</Tag>
+                    <button onClick={()=>setUidSvgFiles([])} style={{...ghostBtn,fontSize:11,padding:"2px 8px",color:"var(--color-text-danger)"}}>Clear all</button>
+                  </div>}
+                </div>
+
+                {/* Upload button */}
+                <label style={{display:"inline-flex",alignItems:"center",gap:8,padding:"8px 16px",borderRadius:8,border:"1px dashed var(--color-border-secondary)",background:"var(--color-background-secondary)",cursor:"pointer",fontSize:13,color:"var(--color-text-primary)",marginBottom:uidSvgFiles.length?12:0}}>
+                  {uidSvgLoading?"⏳ Processing SVGs…":"📁 Select SVG Folder"}
+                  <input
+                    type="file"
+                    multiple
+                    accept=".svg"
+                    style={{display:"none"}}
+                    ref={el=>{if(el){el.setAttribute("webkitdirectory","");el.setAttribute("directory","");}}}
+                    onChange={e=>{if(e.target.files?.length)handleSvgFolder(e.target.files);e.target.value="";}}
+                    disabled={uidSvgLoading}
+                  />
+                </label>
+
+                {/* SVG grid */}
+                {uidSvgFiles.length>0&&<div>
+                  <div style={{display:"flex",gap:6,marginBottom:8,flexWrap:"wrap",alignItems:"center"}}>
+                    <button onClick={()=>setUidSvgFiles(fs=>fs.map(f=>({...f,selected:true})))} style={{...ghostBtn,fontSize:11,padding:"2px 8px"}}>Select All</button>
+                    <button onClick={()=>setUidSvgFiles(fs=>fs.map(f=>({...f,selected:false})))} style={{...ghostBtn,fontSize:11,padding:"2px 8px"}}>Deselect All</button>
+                    {uidSvgFiles.length>8&&<span style={{fontSize:11,color:"var(--color-text-tertiary)"}}>First 8 selected will be sent to AI</span>}
+                  </div>
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(90px,1fr))",gap:8,maxHeight:280,overflowY:"auto"}}>
+                    {uidSvgFiles.map((f,i)=>(
+                      <div key={f.id} style={{position:"relative",borderRadius:8,border:"2px solid "+(f.selected?"var(--color-border-accent)":"var(--color-border-secondary)"),background:f.selected?"rgba(37,99,235,0.04)":"var(--color-background-secondary)",overflow:"hidden",cursor:"pointer"}} onClick={()=>setUidSvgFiles(fs=>fs.map(x=>x.id===f.id?{...x,selected:!x.selected}:x))}>
+                        {/* AI badge for first 8 selected */}
+                        {f.selected&&svgForAI.find(s=>s.name===f.name)&&<div style={{position:"absolute",top:3,left:3,background:"var(--color-accent)",borderRadius:4,padding:"1px 5px",fontSize:9,color:"#fff",fontWeight:600,zIndex:1}}>AI</div>}
+                        {/* Checkbox */}
+                        <div style={{position:"absolute",top:3,right:3,width:16,height:16,borderRadius:"50%",background:f.selected?"var(--color-accent)":"rgba(0,0,0,0.15)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,color:"#fff",zIndex:1}}>{f.selected?"✓":""}</div>
+                        {/* SVG preview */}
+                        <div style={{padding:"10px 8px 4px",display:"flex",alignItems:"center",justifyContent:"center",minHeight:64}}>
+                          <img src={f.previewDataUrl} alt={f.name} style={{maxWidth:60,maxHeight:56,objectFit:"contain"}} onError={e=>{e.target.style.display="none";}}/>
+                        </div>
+                        {/* File name */}
+                        <div style={{fontSize:9,padding:"0 5px 5px",textAlign:"center",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",color:"var(--color-text-secondary)"}} title={f.name}>{f.name.replace(".svg","")}</div>
+                        {/* Remove */}
+                        <button onClick={e=>{e.stopPropagation();setUidSvgFiles(fs=>fs.filter(x=>x.id!==f.id));}} style={{position:"absolute",bottom:2,right:2,background:"none",border:"none",cursor:"pointer",color:"var(--color-text-tertiary)",fontSize:10,padding:"1px 3px",lineHeight:1}}>✕</button>
+                      </div>
+                    ))}
+                  </div>
+                  {svgSelected.length>0&&<div style={{marginTop:10,padding:"8px 12px",borderRadius:6,background:"var(--color-background-info)",border:"1px solid rgba(29,78,216,0.1)",fontSize:12,color:"var(--color-text-info)"}}>
+                    {svgForAI.length} SVG icon{svgForAI.length!==1?"s":""} will be converted to images and sent to the AI as visual reference. All {svgSelected.length} selected icon names will appear in the context for test case generation.
+                  </div>}
+                </div>}
+              </div>
+
+              <div style={{marginTop:20,display:"flex",gap:10,justifyContent:"space-between",alignItems:"center"}}>
+                <button onClick={()=>setPhase("uidJiraTicket")} style={{...ghostBtn,fontSize:13}}>← Back to Jira Ticket</button>
+                <Btn v="primary" disabled={!canProceed||(useManual&&uidManualFigmaImg==="__pending__")} onClick={doAnalyze}>Analyze Design & Generate Cases →</Btn>
+              </div>
+            </div>
+          </div>;
+        })()}
+
+        {/* ── UI Design: Jira Ticket ── */}
+        {!uidLoading&&phase==="uidJiraTicket"&&(()=>{
+          const searchTickets=async()=>{
+            if(!jiraConfigured){alert("Configure Jira credentials in Settings first.");return;}
+            setUidTicketSearching(true);
+            try{
+              const q=uidJiraTicketKey.trim()||"";
+              const jql=q?`project=${proj.jiraProjKey} AND (summary~"${q}" OR issueKey="${q}") ORDER BY updated DESC`:`project=${proj.jiraProjKey} AND status!=Done ORDER BY updated DESC`;
+              const r=await callJira(proj,"POST","/search/jql",{jql,maxResults:10,fields:["summary","status","issuetype","priority"]});
+              setUidTicketResults(r.issues||[]);
+            }catch(e){alert("Search failed: "+e.message);}
+            setUidTicketSearching(false);
+          };
+          const canProceedJira=uidJiraMode==="jira"?(uidJiraTicketKey.trim().length>0||true):true;
+          const canProceedReq=uidJiraMode==="requirements"?uidStoryRequirements.trim().length>10:true;
+          const optionCard=(key,icon,title,desc)=>(
+            <div onClick={()=>setUidJiraMode(key)} style={{flex:1,minWidth:220,padding:"16px 18px",borderRadius:10,border:"2px solid "+(uidJiraMode===key?"var(--color-border-accent)":"var(--color-border-secondary)"),background:uidJiraMode===key?"var(--color-background-selected)":"var(--color-background-secondary)",cursor:"pointer",transition:"all 0.15s"}}>
+              <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:6}}>
+                <span style={{fontSize:22}}>{icon}</span>
+                <span style={{fontWeight:600,fontSize:14,color:"var(--color-text-primary)"}}>{title}</span>
+                {uidJiraMode===key&&<span style={{marginLeft:"auto",width:18,height:18,borderRadius:"50%",background:"var(--color-accent)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,color:"#fff",flexShrink:0}}>✓</span>}
+              </div>
+              <div style={{fontSize:12,color:"var(--color-text-secondary)",lineHeight:1.5}}>{desc}</div>
+            </div>
+          );
+          return <div>
+            <H2 style={{marginBottom:4}}>Story Context</H2>
+            <div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:20}}>Choose how to provide the story context for this UI test session.</div>
+
+            {/* Option selector */}
+            <div style={{display:"flex",gap:12,marginBottom:20,flexWrap:"wrap"}}>
+              {optionCard("jira","🎫","Link Jira Ticket","Search or type a Jira ticket key. Test cases will be imported to AIOTest and bugs will be linked to the ticket.")}
+              {optionCard("requirements","📋","Paste Story Requirements","Paste the user story, acceptance criteria, or feature requirements directly. No Jira connection needed.")}
+            </div>
+
+            {/* Jira ticket panel */}
+            {uidJiraMode==="jira"&&<div style={card}>
+              <div style={{display:"flex",flexDirection:"column",gap:14}}>
+                <div>
+                  <Lbl>Jira Issue Key</Lbl>
+                  <div style={{display:"flex",gap:8}}>
+                    <input style={{...inp,flex:1}} value={uidJiraTicketKey} onChange={e=>setUidJiraTicketKey(e.target.value.toUpperCase())} onKeyDown={e=>e.key==="Enter"&&jiraConfigured&&searchTickets()} placeholder={proj?.jiraProjKey?proj.jiraProjKey+"-123 or search keyword":"ticket key or keyword"}/>
+                    {jiraConfigured&&<Btn v="secondary" onClick={searchTickets} disabled={uidTicketSearching}>{uidTicketSearching?"…":"Search"}</Btn>}
+                  </div>
+                  <div style={{fontSize:11,color:"var(--color-text-tertiary)",marginTop:4}}>Type the ticket key (e.g. {proj?.jiraProjKey||"PROJ"}-42) directly, or type a keyword and Search.</div>
+                </div>
+                {jiraConfigured&&uidTicketResults.length>0&&<div style={{display:"flex",flexDirection:"column",gap:6,maxHeight:220,overflowY:"auto"}}>
+                  {uidTicketResults.map(iss=><div key={iss.key} onClick={()=>setUidJiraTicketKey(iss.key)} style={{padding:"9px 12px",borderRadius:8,border:"1px solid "+(uidJiraTicketKey===iss.key?"var(--color-border-accent)":"var(--color-border-tertiary)"),background:uidJiraTicketKey===iss.key?"var(--color-background-selected)":"var(--color-background-secondary)",cursor:"pointer",display:"flex",gap:10,alignItems:"center"}}>
+                    <Tag c="blue">{iss.key}</Tag>
+                    <span style={{fontSize:13,flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{iss.fields?.summary}</span>
+                    <Tag>{iss.fields?.status?.name}</Tag>
+                  </div>)}
+                </div>}
+                {!jiraConfigured&&<div style={{padding:"10px 14px",borderRadius:8,border:"1px solid rgba(180,130,0,0.3)",background:"var(--color-background-warning)",fontSize:13,color:"var(--color-text-warning)"}}>⚠ Jira not configured — configure in Settings to enable AIOTest import and bug linking. You can still proceed without a ticket key.</div>}
+              </div>
+            </div>}
+
+            {/* Story requirements panel */}
+            {uidJiraMode==="requirements"&&(()=>{
+              const handleStoryFiles=files=>{
+                Array.from(files).forEach(file=>{
+                  const isImg=file.type.startsWith("image/");
+                  const isTxt=file.type==="text/plain"||file.name.endsWith(".md")||file.name.endsWith(".csv")||file.name.endsWith(".txt");
+                  if(!isImg&&!isTxt){alert(`"${file.name}" is not supported. Upload images (PNG/JPG/WebP) or text files (TXT/MD/CSV).`);return;}
+                  const reader=new FileReader();
+                  if(isImg){
+                    reader.readAsDataURL(file);
+                    reader.onload=()=>{
+                      const base64=reader.result.split(",")[1];
+                      setUidStoryFiles(prev=>[...prev,{id:uid(),name:file.name,size:file.size,type:file.type,base64,isImg:true,textContent:null,preview:reader.result}]);
+                    };
+                  }else{
+                    reader.readAsText(file);
+                    reader.onload=()=>{
+                      setUidStoryFiles(prev=>[...prev,{id:uid(),name:file.name,size:file.size,type:file.type,base64:null,isImg:false,textContent:reader.result,preview:null}]);
+                    };
+                  }
+                });
+              };
+              const fmtSize=b=>b>1048576?(b/1048576).toFixed(1)+"MB":b>1024?(b/1024).toFixed(0)+"KB":b+"B";
+              const imgFiles=uidStoryFiles.filter(f=>f.isImg);
+              const txtFiles=uidStoryFiles.filter(f=>!f.isImg);
+              return <div style={card}>
+                <Lbl>Story Requirements / Acceptance Criteria</Lbl>
+                <textarea
+                  style={{...ta,minHeight:180,fontFamily:"inherit",fontSize:13,lineHeight:1.6}}
+                  value={uidStoryRequirements}
+                  onChange={e=>setUidStoryRequirements(e.target.value)}
+                  placeholder={"Paste the user story, acceptance criteria, or feature requirements here.\n\nExample:\nAs a user, I want to see a dashboard...\n\nAC-1: The page must display a header with...\nAC-2: The navigation must be RTL...\nAC-3: Color scheme must match brand guidelines (#1B8354)..."}
+                />
+                {uidStoryRequirements.trim().length>0&&<div style={{marginTop:6,display:"flex",gap:8,alignItems:"center"}}>
+                  <Tag c="green">✓ {uidStoryRequirements.trim().split(/\n/).length} lines · {uidStoryRequirements.trim().length} chars</Tag>
+                  <button onClick={()=>setUidStoryRequirements("")} style={{...ghostBtn,fontSize:11,padding:"2px 8px"}}>Clear</button>
+                </div>}
+
+                {/* File upload zone */}
+                <div style={{marginTop:14}}>
+                  <Lbl>Attach Reference Files (Optional)</Lbl>
+                  <div
+                    onDragOver={e=>{e.preventDefault();setUidStoryFileDrag(true);}}
+                    onDragLeave={()=>setUidStoryFileDrag(false)}
+                    onDrop={e=>{e.preventDefault();setUidStoryFileDrag(false);handleStoryFiles(e.dataTransfer.files);}}
+                    onClick={()=>document.getElementById("uidStoryFileInput").click()}
+                    style={{border:"2px dashed "+(uidStoryFileDrag?"var(--color-accent)":"var(--color-border-secondary)"),borderRadius:8,padding:"18px 16px",textAlign:"center",cursor:"pointer",background:uidStoryFileDrag?"rgba(37,99,235,0.04)":"var(--color-background-secondary)",transition:"all 0.15s",marginBottom:8}}>
+                    <div style={{fontSize:22,marginBottom:6}}>📎</div>
+                    <div style={{fontSize:13,fontWeight:500,color:"var(--color-text-primary)"}}>Click or drag & drop files here</div>
+                    <div style={{fontSize:11,color:"var(--color-text-tertiary)",marginTop:4}}>Images (PNG, JPG, WebP, GIF) · Text files (TXT, MD, CSV)</div>
+                    <input id="uidStoryFileInput" type="file" multiple accept="image/*,.txt,.md,.csv" style={{display:"none"}} onChange={e=>{handleStoryFiles(e.target.files);e.target.value="";}}/>
+                  </div>
+
+                  {/* Image previews */}
+                  {imgFiles.length>0&&<div style={{marginBottom:10}}>
+                    <div style={{fontSize:12,fontWeight:500,color:"var(--color-text-secondary)",marginBottom:6}}>Reference Images ({imgFiles.length})</div>
+                    <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+                      {imgFiles.map(f=>(
+                        <div key={f.id} style={{position:"relative",borderRadius:8,overflow:"hidden",border:"1px solid var(--color-border-secondary)",flexShrink:0}}>
+                          <img src={f.preview} alt={f.name} style={{width:100,height:80,objectFit:"cover",display:"block"}}/>
+                          <div style={{position:"absolute",bottom:0,left:0,right:0,background:"rgba(0,0,0,0.55)",padding:"3px 6px",fontSize:10,color:"#fff",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{f.name}</div>
+                          <button onClick={()=>setUidStoryFiles(prev=>prev.filter(x=>x.id!==f.id))} style={{position:"absolute",top:3,right:3,width:18,height:18,borderRadius:"50%",background:"rgba(0,0,0,0.6)",border:"none",cursor:"pointer",color:"#fff",fontSize:11,display:"flex",alignItems:"center",justifyContent:"center",lineHeight:1}}>✕</button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>}
+
+                  {/* Text file list */}
+                  {txtFiles.length>0&&<div>
+                    <div style={{fontSize:12,fontWeight:500,color:"var(--color-text-secondary)",marginBottom:6}}>Text Files ({txtFiles.length})</div>
+                    <div style={{display:"flex",flexDirection:"column",gap:4}}>
+                      {txtFiles.map(f=>(
+                        <div key={f.id} style={{display:"flex",alignItems:"center",gap:10,padding:"7px 10px",borderRadius:6,border:"1px solid var(--color-border-tertiary)",background:"var(--color-background-secondary)"}}>
+                          <span style={{fontSize:16}}>📄</span>
+                          <div style={{flex:1,minWidth:0}}>
+                            <div style={{fontSize:12,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{f.name}</div>
+                            <div style={{fontSize:11,color:"var(--color-text-tertiary)"}}>{fmtSize(f.size)} · {f.textContent?.split("\n").length||0} lines</div>
+                          </div>
+                          <button onClick={()=>setUidStoryFiles(prev=>prev.filter(x=>x.id!==f.id))} style={{background:"none",border:"none",cursor:"pointer",color:"var(--color-text-tertiary)",fontSize:14,padding:"2px 6px"}}>✕</button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>}
+
+                  {uidStoryFiles.length>0&&<div style={{marginTop:8,padding:"8px 12px",borderRadius:6,background:"var(--color-background-info)",border:"1px solid rgba(29,78,216,0.1)",fontSize:12,color:"var(--color-text-info)"}}>
+                    {imgFiles.length>0&&<span>{imgFiles.length} image{imgFiles.length>1?"s":""} will be sent to the AI as reference visuals alongside the Figma design. </span>}
+                    {txtFiles.length>0&&<span>{txtFiles.length} text file{txtFiles.length>1?"s":""} will be appended to the requirements context.</span>}
+                  </div>}
+                </div>
+              </div>;
+            })()}
+
+            <div style={{marginTop:20,display:"flex",gap:10,justifyContent:"space-between",alignItems:"center"}}>
+              <button onClick={()=>setPhase("testType")} style={{...ghostBtn,fontSize:13}}>← Back</button>
+              <div style={{display:"flex",gap:10,alignItems:"center"}}>
+                {uidJiraMode==="jira"&&uidJiraTicketKey&&<Tag c="green">Ticket: {uidJiraTicketKey}</Tag>}
+                {uidJiraMode==="requirements"&&uidStoryRequirements.trim()&&<Tag c="green">Requirements added</Tag>}
+                <Btn v="primary" onClick={()=>setPhase("uidSetup")}>Next: Setup →</Btn>
+              </div>
+            </div>
+          </div>;
+        })()}
+
+        {/* ── UI Design: Test Cases review ── */}
+        {!uidLoading&&phase==="uidCases"&&(()=>{
+          const approved=uidCases.filter(c=>c.status==="approved");
+          const pending=uidCases.filter(c=>c.status==="pending");
+          const exportUidExcel=()=>{
+            const header=["ID","Summary","Linked Issue","Priority","Status","Area","Preconditions","Steps","Expected Result","Automatable"];
+            const rows=[header,...uidCases.filter(c=>c.status!=="rejected").map(c=>[c.id,c.title,c.linkedIssue||uidJiraTicketKey||"UNMAPPED",c.priority||"Medium","",c.area||"UI",c.preconditions||"",(c.steps||[]).join(" | "),c.expected||"",c.automatable!==false?"Yes":"No"])];
+            const wb=XLSX.utils.book_new();
+            const ws=XLSX.utils.aoa_to_sheet(rows);
+            ws["!cols"]=[{wch:10},{wch:55},{wch:14},{wch:10},{wch:10},{wch:18},{wch:30},{wch:60},{wch:50},{wch:12}];
+            const range=XLSX.utils.decode_range(ws["!ref"]);
+            for(let c=range.s.c;c<=range.e.c;c++){const cell=ws[XLSX.utils.encode_cell({r:0,c})];if(cell)cell.s={font:{bold:true},fill:{fgColor:{rgb:"D9E1F2"}}};}
+            XLSX.utils.book_append_sheet(wb,ws,"UI Test Cases");
+            XLSX.writeFile(wb,"UI_TestCases_"+proj.jiraProjKey+".xlsx");
+          };
+          const doRunVisual=async()=>{
+            setUidLoading(true);setUidLoadMsg("Taking screenshot of live page…");
+            try{
+              const r=await fetch(API_BASE+"/api/ui-design/screenshot",{method:"POST",headers:{"Content-Type":"application/json","X-Member-Token":sessionStorage.getItem(MEMBER_TOKEN_KEY)||""},body:JSON.stringify({url:uidForm.pageUrl})});
+              const d=await r.json();
+              if(d.error)throw new Error(d.error);
+              setUidScreenshotImg(d.imageBase64);
+              setUidLoadMsg("Comparing Figma design vs implementation…");
+              const r2=await fetch(API_BASE+"/api/ui-design/analyze",{method:"POST",headers:{"Content-Type":"application/json","X-Member-Token":sessionStorage.getItem(MEMBER_TOKEN_KEY)||""},body:JSON.stringify({figmaImageBase64:uidFigmaImg,screenshotBase64:d.imageBase64,pageUrl:uidForm.pageUrl,figmaUrl:uidForm.figmaUrl,mode:"compare"})});
+              const d2=await r2.json();
+              if(d2.error)throw new Error(d2.error);
+              setUidVisualResult(d2);
+              setPhase("uidResults");
+            }catch(e){alert("Error: "+e.message);}
+            setUidLoading(false);
+          };
+          const sevColor=s=>s==="Critical"||s==="High"?"red":"amber";
+          const importToAiotest=async()=>{
+            if(!jiraConfigured){alert("Configure Jira credentials in Settings first.");return;}
+            if(!uidJiraTicketKey){alert("No Jira ticket linked. Go back to 'Jira Ticket' step and select a ticket.");return;}
+            const approvedCases=uidCases.filter(c=>c.status!=="rejected");
+            if(!approvedCases.length){alert("No test cases to import (all are rejected).");return;}
+            setUidAiotestStatus({importing:true,done:false,error:""});
+            let ok=0,fail=0;
+            for(const tc of approvedCases){
+              try{
+                const body={
+                  title:tc.title,
+                  description:(tc.preconditions?"Preconditions: "+tc.preconditions+"\n\n":"")+"Expected: "+(tc.expected||""),
+                  stepsType:"TEXT",
+                  steps:(tc.steps||[]).map((s,i)=>({description:s,expectedResult:i===tc.steps.length-1?(tc.expected||""):""})),
+                  issueKey:uidJiraTicketKey
+                };
+                await callJira(proj,"POST","/rest/aio-tests/latest/cases",body,true);
+                ok++;
+              }catch{fail++;}
+            }
+            setUidAiotestStatus({importing:false,done:true,error:fail>0?`${fail} case(s) failed to import`:""});
+          };
+          return <div>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16,flexWrap:"wrap",gap:8}}>
+              <div>
+                <H2 style={{marginBottom:2}}>UI Test Cases</H2>
+                <div style={{fontSize:13,color:"var(--color-text-secondary)"}}>{uidCases.length} generated · {approved.length} approved · {pending.length} pending{uidJiraTicketKey&&<> · <Tag c="blue">{uidJiraTicketKey}</Tag></>}</div>
+              </div>
+              <div style={{display:"flex",gap:8,flexWrap:"wrap",justifyContent:"flex-end"}}>
+                <button onClick={()=>setUidCases(cs=>cs.map(c=>({...c,status:"approved"})))} style={{...ghostBtn,fontSize:13}}>Approve All</button>
+                <button onClick={exportUidExcel} style={{...ghostBtn,fontSize:13}}>📥 Export Excel</button>
+                {uidAiotestStatus.done
+                  ?<Tag c="green">✓ Imported to AIOTest{uidAiotestStatus.error?" ("+uidAiotestStatus.error+")":""}</Tag>
+                  :<button onClick={importToAiotest} disabled={uidAiotestStatus.importing} style={{...ghostBtn,fontSize:13,opacity:uidAiotestStatus.importing?0.6:1}}>{uidAiotestStatus.importing?"Importing…":"📋 Import to AIOTest"}</button>}
+                <button onClick={()=>{setUidSelectedForScript(uidCases.filter(c=>c.status!=="rejected").map(c=>c.id));setPhase("uidRun");}} style={{...ghostBtn,fontSize:13}}>🤖 Generate Scripts →</button>
+                <Btn v="primary" disabled={uidFigmaImg===null} onClick={doRunVisual}>▶ Start Visual Testing →</Btn>
+              </div>
+            </div>
+            {uidFigmaImg&&<div style={{...card,marginBottom:12,display:"flex",alignItems:"center",gap:12,padding:"10px 16px"}}>
+              <span style={{fontSize:13,color:"var(--color-text-secondary)"}}>Figma design preview:</span>
+              <img src={"data:image/png;base64,"+uidFigmaImg} alt="Figma design" style={{maxHeight:120,maxWidth:260,borderRadius:6,border:"1px solid var(--color-border-secondary)",objectFit:"contain"}}/>
+            </div>}
+            <div style={{display:"flex",flexDirection:"column",gap:8}}>
+              {uidCases.map((c,i)=>(
+                <div key={c.id} style={{...card,marginBottom:0,padding:"12px 16px",border:"1px solid "+(c.status==="approved"?"rgba(22,101,52,0.3)":c.status==="rejected"?"rgba(153,27,27,0.2)":"var(--color-border-tertiary)"),background:c.status==="approved"?"var(--color-background-success)":c.status==="rejected"?"rgba(254,242,242,0.5)":"var(--color-background-primary)"}}>
+                  <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:10}}>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{display:"flex",gap:6,alignItems:"center",marginBottom:4,flexWrap:"wrap"}}>
+                        <Tag c="blue">{c.id}</Tag>
+                        <Tag c={c.priority==="High"?"red":c.priority==="Critical"?"red":c.priority==="Medium"?"amber":"blue"}>{c.priority||"Medium"}</Tag>
+                        <Tag>{c.area||"UI"}</Tag>
+                        {(c.linkedIssue&&c.linkedIssue!=="UNMAPPED")&&<Tag c="green">{c.linkedIssue}</Tag>}
+                        {c.linkedIssue==="UNMAPPED"&&<Tag c="amber">UNMAPPED</Tag>}
+                      </div>
+                      <div style={{fontWeight:500,fontSize:13,marginBottom:6}}>{c.title}</div>
+                      {c.preconditions&&<div style={{fontSize:12,color:"var(--color-text-tertiary)",marginBottom:4}}><b>Preconditions:</b> {c.preconditions}</div>}
+                      {c.steps?.length>0&&<div style={{fontSize:12,color:"var(--color-text-secondary)",marginBottom:2}}><b>Steps:</b> {c.steps.join(" → ")}</div>}
+                      {c.expected&&<div style={{fontSize:12,color:"var(--color-text-secondary)",marginTop:2}}><b>Expected:</b> {c.expected}</div>}
+                    </div>
+                    <div style={{display:"flex",gap:6,flexShrink:0}}>
+                      <button onClick={()=>setUidCases(cs=>cs.map((x,j)=>j===i?{...x,status:"approved"}:x))} style={{padding:"4px 12px",borderRadius:6,border:"1px solid rgba(22,101,52,0.4)",background:c.status==="approved"?"var(--color-background-success)":"transparent",cursor:"pointer",fontSize:12,color:"var(--color-text-success)",fontWeight:c.status==="approved"?600:400}}>✓ Approve</button>
+                      <button onClick={()=>setUidCases(cs=>cs.map((x,j)=>j===i?{...x,status:"rejected"}:x))} style={{padding:"4px 12px",borderRadius:6,border:"1px solid rgba(153,27,27,0.3)",background:c.status==="rejected"?"var(--color-background-danger)":"transparent",cursor:"pointer",fontSize:12,color:"var(--color-text-danger)",fontWeight:c.status==="rejected"?600:400}}>✗ Reject</button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>;
+        })()}
+
+        {/* ── UI Design: Run Tests / Generate Scripts ── */}
+        {!uidLoading&&phase==="uidRun"&&(()=>{
+          const approvedCases=uidCases.filter(c=>c.status!=="rejected");
+          const toggleCase=id=>setUidSelectedForScript(sel=>sel.includes(id)?sel.filter(x=>x!==id):[...sel,id]);
+          const allSelected=approvedCases.every(c=>uidSelectedForScript.includes(c.id));
+          const doGenerate=async()=>{
+            if(!uidSelectedForScript.length){alert("Select at least one test case.");return;}
+            const demand=uidDemandName.trim()||uidJiraTicketKey||"Feature";
+            setUidScriptLoading(true);setUidScriptError("");setUidScript({config:"",page:"",spec:""});
+            try{
+              const selected=uidCases.filter(c=>uidSelectedForScript.includes(c.id));
+              const r=await fetch(API_BASE+"/api/ui-design/generate-scripts",{method:"POST",headers:{"Content-Type":"application/json","X-Member-Token":sessionStorage.getItem(MEMBER_TOKEN_KEY)||""},body:JSON.stringify({testCases:selected,pageUrl:uidForm.pageUrl,figmaUrl:uidForm.figmaUrl||"",projectName:proj?.name||"Doroob",demandName:demand,jiraTicketKey:uidJiraTicketKey||""})});
+              const d=await r.json();
+              if(d.error)throw new Error(d.error);
+              setUidScript({config:d.config||"",page:d.page||"",spec:d.spec||""});
+              setUidScriptTab("spec");
+              setUidDemandName(demand);
+            }catch(e){setUidScriptError(e.message);}
+            setUidScriptLoading(false);
+          };
+          const dlScript=(content,filename)=>{const b=new Blob([content],{type:"text/plain"});const a=document.createElement("a");a.href=URL.createObjectURL(b);a.download=filename;a.click();};
+          const hasScript=uidScript.spec||uidScript.config;
+          const safeSlug=(uidDemandName||uidJiraTicketKey||"feature").toLowerCase().replace(/\s+/g,"_").replace(/[^a-z0-9_]/g,"");
+          const tabFiles={spec:{label:"tests/"+safeSlug+".spec.ts",content:uidScript.spec},page:{label:"pages/"+safeSlug+".page.ts",content:uidScript.page},config:{label:"playwright.config.ts",content:uidScript.config}};
+          return <div>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16,flexWrap:"wrap",gap:8}}>
+              <div>
+                <H2 style={{marginBottom:2}}>Generate Playwright Scripts</H2>
+                <div style={{fontSize:13,color:"var(--color-text-secondary)"}}>TypeScript · Page Object Model · Cross-browser · RTL</div>
+              </div>
+              <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                <button onClick={()=>setPhase("uidCases")} style={{...ghostBtn,fontSize:13}}>← Test Cases</button>
+                <Btn v="primary" disabled={uidFigmaImg===null} onClick={()=>setPhase("uidResults")}>▶ Start Visual Testing →</Btn>
+              </div>
+            </div>
+
+            {/* Demand name input */}
+            <div style={{...card,marginBottom:16,padding:"14px 16px"}}>
+              <div style={{display:"flex",gap:12,alignItems:"flex-end",flexWrap:"wrap"}}>
+                <div style={{flex:1,minWidth:180}}>
+                  <Lbl>Demand / Feature Name</Lbl>
+                  <input style={inp} value={uidDemandName} onChange={e=>setUidDemandName(e.target.value)} placeholder={uidJiraTicketKey||"e.g. DGA, Login, Dashboard"}/>
+                  <div style={{fontSize:11,color:"var(--color-text-tertiary)",marginTop:4}}>Used as folder name: doroob/{uidDemandName||"feature"}/</div>
+                </div>
+                <Btn v="primary" onClick={doGenerate} disabled={uidScriptLoading||!uidSelectedForScript.length}>
+                  {uidScriptLoading?"Generating…":"🤖 Generate Scripts"}
+                </Btn>
+              </div>
+              {uidScriptError&&<div style={{marginTop:10,padding:"8px 12px",background:"var(--color-background-danger)",borderRadius:6,fontSize:12,color:"var(--color-text-danger)",wordBreak:"break-word"}}>{uidScriptError}</div>}
+            </div>
+
+            {/* Test case selector */}
+            {!hasScript&&<div style={{...card,marginBottom:16}}>
+              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10,flexWrap:"wrap",gap:8}}>
+                <div style={{fontWeight:500,fontSize:13}}>Select test cases to automate ({uidSelectedForScript.length}/{approvedCases.length})</div>
+                <button onClick={()=>setUidSelectedForScript(allSelected?[]:approvedCases.map(c=>c.id))} style={{...ghostBtn,fontSize:12}}>{allSelected?"Deselect All":"Select All"}</button>
+              </div>
+              <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                {approvedCases.map(c=>{
+                  const sel=uidSelectedForScript.includes(c.id);
+                  return <label key={c.id} style={{display:"flex",alignItems:"flex-start",gap:10,padding:"8px 10px",borderRadius:6,border:"1px solid "+(sel?"rgba(37,99,235,0.3)":"var(--color-border-tertiary)"),background:sel?"rgba(37,99,235,0.04)":"transparent",cursor:"pointer"}}>
+                    <input type="checkbox" checked={sel} onChange={()=>toggleCase(c.id)} style={{marginTop:2,accentColor:"var(--color-accent)"}}/>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:3}}>
+                        <Tag c="blue">{c.id}</Tag>
+                        <Tag c={c.priority==="High"||c.priority==="Critical"?"red":c.priority==="Medium"?"amber":"blue"}>{c.priority}</Tag>
+                        <Tag>{c.area||"UI"}</Tag>
+                        {c.automatable===false&&<Tag c="amber">Manual only</Tag>}
+                      </div>
+                      <div style={{fontSize:12,fontWeight:500}}>{c.title}</div>
+                    </div>
+                  </label>;
+                })}
+              </div>
+            </div>}
+
+            {/* Generated scripts */}
+            {uidScriptLoading&&<div style={{...card,marginBottom:16,textAlign:"center",padding:32}}>
+              <div style={{fontSize:13,color:"var(--color-text-secondary)"}}>Generating production-ready Playwright scripts…</div>
+              <div style={{fontSize:12,color:"var(--color-text-tertiary)",marginTop:6}}>This may take up to a minute for large test suites.</div>
+            </div>}
+            {hasScript&&<div style={{...card,marginBottom:0}}>
+              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12,flexWrap:"wrap",gap:8}}>
+                <div style={{display:"flex",gap:2}}>
+                  {Object.entries(tabFiles).filter(([,f])=>f.content).map(([k,f])=>(
+                    <button key={k} onClick={()=>setUidScriptTab(k)} style={{padding:"6px 14px",borderRadius:"6px 6px 0 0",border:"1px solid var(--color-border-secondary)",borderBottom:uidScriptTab===k?"none":"1px solid var(--color-border-secondary)",background:uidScriptTab===k?"var(--color-background-primary)":"var(--color-background-secondary)",cursor:"pointer",fontSize:12,fontWeight:uidScriptTab===k?600:400,color:"var(--color-text-primary)"}}>
+                      {f.label}
+                    </button>
+                  ))}
+                </div>
+                <div style={{display:"flex",gap:8}}>
+                  <button onClick={()=>navigator.clipboard?.writeText(tabFiles[uidScriptTab]?.content||"")} style={{...ghostBtn,fontSize:12}}>📋 Copy</button>
+                  <button onClick={()=>dlScript(tabFiles[uidScriptTab]?.content||"",tabFiles[uidScriptTab]?.label||"script.ts")} style={{...ghostBtn,fontSize:12}}>⬇ Download</button>
+                  <button onClick={()=>{dlScript(tabFiles.spec.content||"",tabFiles.spec.label);if(tabFiles.page.content)dlScript(tabFiles.page.content,tabFiles.page.label);if(tabFiles.config.content)dlScript(tabFiles.config.content,tabFiles.config.label);}} style={{...ghostBtn,fontSize:12}}>⬇ Download All</button>
+                </div>
+              </div>
+              <pre style={{margin:0,padding:"14px 16px",background:"var(--color-background-code,#1e1e2e)",color:"#cdd6f4",borderRadius:6,fontSize:12,lineHeight:1.6,overflow:"auto",maxHeight:520,whiteSpace:"pre-wrap",wordBreak:"break-word",fontFamily:"'Cascadia Code','Fira Code','Consolas',monospace",border:"1px solid var(--color-border-secondary)"}}>{tabFiles[uidScriptTab]?.content||""}</pre>
+              <div style={{marginTop:12,padding:"10px 14px",background:"var(--color-background-info)",borderRadius:6,fontSize:12,color:"var(--color-text-info)",border:"1px solid rgba(29,78,216,0.1)"}}>
+                <b>Setup:</b> <code>npm init playwright@latest</code> inside the <code>doroob/</code> project, then place these files in the correct paths. Run with <code>npx playwright test</code>.
+              </div>
+              <div style={{marginTop:8,display:"flex",gap:8,flexWrap:"wrap"}}>
+                <button onClick={()=>{setUidScript({config:"",page:"",spec:""});setUidScriptError("");}} style={{...ghostBtn,fontSize:12}}>↩ Regenerate</button>
+              </div>
+            </div>}
+          </div>;
+        })()}
+
+        {/* ── UI Design: Results ── */}
+        {!uidLoading&&phase==="uidResults"&&uidVisualResult&&(()=>{
+          const bugs=uidVisualResult.bugs||[];
+          const passRate=uidVisualResult.passRate||0;
+          const passed=passRate>=80;
+          return <div>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16,flexWrap:"wrap",gap:8}}>
+              <div><H2 style={{marginBottom:2}}>Visual Comparison Results</H2><div style={{fontSize:13,color:"var(--color-text-secondary)"}}>Figma design vs live implementation</div></div>
+              <div style={{display:"flex",gap:8}}>
+                {bugs.length>0&&<Btn v="primary" onClick={()=>setPhase("uidBugs")}>Review {bugs.length} Bug{bugs.length!==1?"s":""}→</Btn>}
+              </div>
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:12,marginBottom:16}}>
+              <div style={{...card,marginBottom:0,textAlign:"center",padding:"16px 12px"}}>
+                <div style={{fontSize:28,fontWeight:700,color:passed?"var(--color-text-success)":"var(--color-text-danger)"}}>{passRate}%</div>
+                <div style={{fontSize:12,color:"var(--color-text-secondary)"}}>Visual Fidelity</div>
+              </div>
+              <div style={{...card,marginBottom:0,textAlign:"center",padding:"16px 12px"}}>
+                <div style={{fontSize:28,fontWeight:700,color:"var(--color-text-danger)"}}>{bugs.length}</div>
+                <div style={{fontSize:12,color:"var(--color-text-secondary)"}}>Bugs Found</div>
+              </div>
+              <div style={{...card,marginBottom:0,textAlign:"center",padding:"16px 12px"}}>
+                <div style={{fontSize:28,fontWeight:700,color:"var(--color-text-danger)"}}>{bugs.filter(b=>b.severity==="Critical"||b.severity==="High").length}</div>
+                <div style={{fontSize:12,color:"var(--color-text-secondary)"}}>Critical / High</div>
+              </div>
+            </div>
+            {uidVisualResult.summary&&<div style={{...card,marginBottom:12,background:"var(--color-background-info)",border:"1px solid rgba(29,78,216,0.12)",padding:"12px 16px",fontSize:13,color:"var(--color-text-info)"}}>{uidVisualResult.summary}</div>}
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:16}}>
+              {uidFigmaImg&&<div style={card}><div style={{fontSize:12,fontWeight:500,color:"var(--color-text-secondary)",marginBottom:8}}>Expected (Figma Design)</div><img src={"data:image/png;base64,"+uidFigmaImg} alt="Figma" style={{width:"100%",borderRadius:6,border:"1px solid var(--color-border-secondary)"}}/></div>}
+              {uidScreenshotImg&&<div style={card}><div style={{fontSize:12,fontWeight:500,color:"var(--color-text-secondary)",marginBottom:8}}>Actual (Live Implementation)</div><img src={"data:image/png;base64,"+uidScreenshotImg} alt="Screenshot" style={{width:"100%",borderRadius:6,border:"1px solid var(--color-border-secondary)"}}/></div>}
+            </div>
+            {bugs.length>0&&<div>
+              <div style={{fontWeight:500,fontSize:14,marginBottom:10}}>Found Bugs</div>
+              <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                {bugs.map(b=>(
+                  <div key={b.id} style={{...card,marginBottom:0,padding:"12px 16px",borderLeft:"3px solid "+(b.severity==="Critical"||b.severity==="High"?"var(--color-text-danger)":"var(--color-text-warning)")}}>
+                    <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:4,flexWrap:"wrap"}}>
+                      <Tag c="red">{b.id}</Tag>
+                      <Tag c={b.severity==="Critical"||b.severity==="High"?"red":"amber"}>{b.severity}</Tag>
+                      <Tag>{b.area}</Tag>
+                      <span style={{fontWeight:500,fontSize:13}}>{b.title}</span>
+                    </div>
+                    <div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:4}}>{b.description}</div>
+                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,fontSize:12}}>
+                      <div><span style={{color:"var(--color-text-success)",fontWeight:500}}>Expected: </span>{b.expected}</div>
+                      <div><span style={{color:"var(--color-text-danger)",fontWeight:500}}>Actual: </span>{b.actual}</div>
+                    </div>
+                    {b.recommendation&&<div style={{marginTop:6,fontSize:12,color:"var(--color-text-info)",background:"var(--color-background-info)",padding:"6px 10px",borderRadius:6}}>Fix: {b.recommendation}</div>}
+                  </div>
+                ))}
+              </div>
+            </div>}
+          </div>;
+        })()}
+
+        {/* ── UI Design: Bug review & JIRA import ── */}
+        {!uidLoading&&phase==="uidBugs"&&uidVisualResult&&(()=>{
+          const bugs=uidVisualResult.bugs||[];
+          const updateBug=(id,updates)=>setUidVisualResult(prev=>({...prev,bugs:(prev.bugs||[]).map(b=>b.id===id?{...b,...updates}:b)}));
+          const deleteBug=id=>{setUidVisualResult(prev=>({...prev,bugs:(prev.bugs||[]).filter(b=>b.id!==id)}));setUidJiraStatus(prev=>{const s={...prev};delete s[id];return s;});};
+          const addNewBug=()=>{
+            const nextNum=(bugs.length+1).toString().padStart(3,"0");
+            setUidVisualResult(prev=>({...prev,bugs:[...(prev.bugs||[]),{id:"VB-"+nextNum,...uidAddBugForm}]}));
+            setUidShowAddBug(false);
+            setUidAddBugForm({title:"",severity:"High",area:"UI",description:"",expected:"",actual:"",recommendation:""});
+          };
+          const importBug=async(bug)=>{
+            if(!jiraConfigured){alert("No Jira session. Please configure Jira credentials in Settings.");return;}
+            setUidJiraStatus(s=>({...s,[bug.id]:"importing"}));
+            try{
+              const descText=`Visual discrepancy found comparing Figma design vs live implementation.\n\nArea: ${bug.area}\nSeverity: ${bug.severity}\n\nExpected (Figma):\n${bug.expected}\n\nActual (Implementation):\n${bug.actual}\n\nRecommendation:\n${bug.recommendation||"See description."}\n\nPage URL: ${uidForm.pageUrl}\nFigma URL: ${uidForm.figmaUrl}${uidJiraTicketKey?"\n\nLinked Ticket: "+uidJiraTicketKey:""}`;
+              const body={fields:{project:{key:proj.jiraProjKey},summary:"[UI Design] "+bug.title,description:{type:"doc",version:1,content:[{type:"paragraph",content:[{type:"text",text:descText}]}]},issuetype:{name:"Bug"},priority:{name:bug.severity}}};
+              const res=await callJira(proj,"POST","/issue",body);
+              if(uidJiraTicketKey&&res.key){try{await callJira(proj,"POST","/issueLink",{type:{name:"Relates"},inwardIssue:{key:res.key},outwardIssue:{key:uidJiraTicketKey}});}catch{}}
+              setUidJiraStatus(s=>({...s,[bug.id]:res.key||"created"}));
+              syncToServer("bug",{memberId:member.id,memberName:member.name,projectId:proj?.id||"",projectName:proj?.name||"",bid:bug.id,sid:"UI-"+proj.jiraProjKey,summary:"[UI Design] "+bug.title,severity:bug.severity,jiraKey:res.key||null,status:"Open"});
+            }catch(e){setUidJiraStatus(s=>({...s,[bug.id]:"error: "+e.message.slice(0,200)}));}
+          };
+          const importAll=async()=>{for(const b of bugs){if(!uidJiraStatus[b.id]||uidJiraStatus[b.id].startsWith("error")){await importBug(b);}}};
+          const importedCount=Object.values(uidJiraStatus).filter(s=>s&&!s.startsWith("error")&&s!=="importing").length;
+          const allDone=bugs.length>0&&bugs.every(b=>uidJiraStatus[b.id]&&!uidJiraStatus[b.id].startsWith("error")&&uidJiraStatus[b.id]!=="importing");
+          const sevC=s=>s==="Critical"||s==="High"?"red":"amber";
+          return <div>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16,flexWrap:"wrap",gap:8}}>
+              <div><H2 style={{marginBottom:2}}>Review & Import Bugs to Jira</H2>
+                <div style={{fontSize:13,color:"var(--color-text-secondary)"}}>{bugs.length} visual bug{bugs.length!==1?"s":""} found · {importedCount} imported{uidJiraTicketKey&&<> · Linked to <Tag c="blue">{uidJiraTicketKey}</Tag></>}</div>
+              </div>
+              <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                <button onClick={()=>{setUidShowAddBug(o=>!o);setUidEditingBugId(null);}} style={ghostBtn}>+ Add Bug</button>
+                {!jiraConfigured&&<Tag c="amber">No Jira — configure in Settings</Tag>}
+                {jiraConfigured&&!allDone&&<button onClick={importAll} style={{...ghostBtn,fontSize:13}}>Import All to Jira</button>}
+                {allDone&&<Tag c="green">✓ All imported to Jira</Tag>}
+                <button onClick={()=>setPhase("uidResults")} style={{...ghostBtn,fontSize:13}}>← Back to Results</button>
+                <Btn v="primary" onClick={()=>setPhase("uidReport")}>Report →</Btn>
+              </div>
+            </div>
+            {uidShowAddBug&&<div style={{...card,marginBottom:16,border:"1px solid var(--color-border-accent)"}}>
+              <H2 style={{marginBottom:12}}>Add New Bug</H2>
+              <div style={{display:"flex",flexDirection:"column",gap:10}}>
+                <div><Lbl>Title *</Lbl><input style={inp} value={uidAddBugForm.title} onChange={e=>setUidAddBugForm(p=>({...p,title:e.target.value}))} placeholder="Bug title"/></div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                  <div><Lbl>Severity</Lbl><select style={{...inp,width:"100%"}} value={uidAddBugForm.severity} onChange={e=>setUidAddBugForm(p=>({...p,severity:e.target.value}))}>{["Critical","High","Medium","Low"].map(s=><option key={s}>{s}</option>)}</select></div>
+                  <div><Lbl>Area</Lbl><input style={inp} value={uidAddBugForm.area} onChange={e=>setUidAddBugForm(p=>({...p,area:e.target.value}))} placeholder="e.g. Header, Footer, Form"/></div>
+                </div>
+                <div><Lbl>Description</Lbl><textarea style={{...ta,marginBottom:0}} rows={2} value={uidAddBugForm.description} onChange={e=>setUidAddBugForm(p=>({...p,description:e.target.value}))} placeholder="Describe the visual discrepancy"/></div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                  <div><Lbl>Expected (Figma)</Lbl><textarea style={{...ta,marginBottom:0}} rows={2} value={uidAddBugForm.expected} onChange={e=>setUidAddBugForm(p=>({...p,expected:e.target.value}))} placeholder="What the design shows"/></div>
+                  <div><Lbl>Actual (Implementation)</Lbl><textarea style={{...ta,marginBottom:0}} rows={2} value={uidAddBugForm.actual} onChange={e=>setUidAddBugForm(p=>({...p,actual:e.target.value}))} placeholder="What the live page shows"/></div>
+                </div>
+                <div><Lbl>Recommendation</Lbl><textarea style={{...ta,marginBottom:0}} rows={2} value={uidAddBugForm.recommendation} onChange={e=>setUidAddBugForm(p=>({...p,recommendation:e.target.value}))} placeholder="How to fix"/></div>
+                <div style={{display:"flex",gap:8,marginTop:4}}>
+                  <Btn v="primary" disabled={!uidAddBugForm.title.trim()} onClick={addNewBug}>Add Bug</Btn>
+                  <button onClick={()=>setUidShowAddBug(false)} style={ghostBtn}>Cancel</button>
+                </div>
+              </div>
+            </div>}
+            <div style={{display:"flex",flexDirection:"column",gap:10}}>
+              {bugs.map(b=>{
+                const status=uidJiraStatus[b.id];
+                const isImported=status&&!status.startsWith("error")&&status!=="importing";
+                const isError=status?.startsWith("error");
+                const isImporting=status==="importing";
+                return <div key={b.id} style={{...card,marginBottom:0,padding:"14px 16px",border:"1px solid "+(isImported?"rgba(22,101,52,0.3)":isError?"rgba(153,27,27,0.2)":"var(--color-border-tertiary)"),background:isImported?"var(--color-background-success)":isError?"var(--color-background-danger)":"var(--color-background-primary)"}}>
+                  {uidEditingBugId===b.id
+                    ?<div style={{display:"flex",flexDirection:"column",gap:10}}>
+                        <div><Lbl>Title</Lbl><input style={{...inp,marginBottom:0}} value={uidEditBugForm.title||""} onChange={e=>setUidEditBugForm(p=>({...p,title:e.target.value}))}/></div>
+                        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                          <div><Lbl>Severity</Lbl><select style={{...inp,width:"100%",marginBottom:0}} value={uidEditBugForm.severity||"High"} onChange={e=>setUidEditBugForm(p=>({...p,severity:e.target.value}))}>{["Critical","High","Medium","Low"].map(s=><option key={s}>{s}</option>)}</select></div>
+                          <div><Lbl>Area</Lbl><input style={{...inp,marginBottom:0}} value={uidEditBugForm.area||""} onChange={e=>setUidEditBugForm(p=>({...p,area:e.target.value}))}/></div>
+                        </div>
+                        <div><Lbl>Description</Lbl><textarea style={{...ta,marginBottom:0}} rows={2} value={uidEditBugForm.description||""} onChange={e=>setUidEditBugForm(p=>({...p,description:e.target.value}))}/></div>
+                        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                          <div><Lbl>Expected (Figma)</Lbl><textarea style={{...ta,marginBottom:0}} rows={2} value={uidEditBugForm.expected||""} onChange={e=>setUidEditBugForm(p=>({...p,expected:e.target.value}))}/></div>
+                          <div><Lbl>Actual (Implementation)</Lbl><textarea style={{...ta,marginBottom:0}} rows={2} value={uidEditBugForm.actual||""} onChange={e=>setUidEditBugForm(p=>({...p,actual:e.target.value}))}/></div>
+                        </div>
+                        <div><Lbl>Recommendation</Lbl><textarea style={{...ta,marginBottom:0}} rows={2} value={uidEditBugForm.recommendation||""} onChange={e=>setUidEditBugForm(p=>({...p,recommendation:e.target.value}))}/></div>
+                        <div style={{display:"flex",gap:8}}>
+                          <Btn v="primary" onClick={()=>{updateBug(b.id,uidEditBugForm);setUidEditingBugId(null);}}>Save</Btn>
+                          <button onClick={()=>setUidEditingBugId(null)} style={ghostBtn}>Cancel</button>
+                        </div>
+                      </div>
+                    :<div>
+                        <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:6,flexWrap:"wrap"}}>
+                          <Tag c="red">{b.id}</Tag>
+                          <Tag c={sevC(b.severity)}>{b.severity}</Tag>
+                          <Tag>{b.area}</Tag>
+                          {isImported&&<Tag c="green">✓ {status}</Tag>}
+                          <div style={{marginLeft:"auto",display:"flex",gap:2}}>
+                            {!isImported&&<button title="Edit" onClick={()=>{setUidEditingBugId(b.id);setUidShowAddBug(false);setUidEditBugForm({title:b.title||"",severity:b.severity||"High",area:b.area||"",description:b.description||"",expected:b.expected||"",actual:b.actual||"",recommendation:b.recommendation||""});}} style={{background:"none",border:"none",cursor:"pointer",color:"var(--color-text-tertiary)",fontSize:14,padding:"2px 5px"}}>✎</button>}
+                            <button title="Delete" onClick={()=>deleteBug(b.id)} style={{background:"none",border:"none",cursor:"pointer",color:"var(--color-text-danger)",fontSize:14,padding:"2px 5px"}}>✕</button>
+                          </div>
+                        </div>
+                        <div style={{fontWeight:500,fontSize:13,marginBottom:4}}>{b.title}</div>
+                        <div style={{fontSize:12,color:"var(--color-text-secondary)",marginBottom:6}}>{b.description}</div>
+                        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,fontSize:12,marginBottom:4}}>
+                          <div><b style={{color:"var(--color-text-success)"}}>Expected:</b> {b.expected}</div>
+                          <div><b style={{color:"var(--color-text-danger)"}}>Actual:</b> {b.actual}</div>
+                        </div>
+                        {b.recommendation&&<div style={{fontSize:12,color:"var(--color-text-tertiary)",marginBottom:4}}>💡 {b.recommendation}</div>}
+                        {isError&&<div style={{marginTop:6,fontSize:12,color:"var(--color-text-danger)",wordBreak:"break-word"}}>{status}</div>}
+                        {!isImported&&<div style={{marginTop:10}}>
+                          <button disabled={isImporting||!jiraConfigured} onClick={()=>importBug(b)} style={{...ghostBtn,fontSize:13,opacity:isImporting||!jiraConfigured?0.5:1,cursor:isImporting||!jiraConfigured?"not-allowed":"pointer"}}>
+                            {isImporting?"Importing…":"→ Import to Jira"}
+                          </button>
+                        </div>}
+                      </div>}
+                </div>;
+              })}
+            </div>
+          </div>;
+        })()}
+
+        {/* ── UI Design: Report ── */}
+        {!uidLoading&&phase==="uidReport"&&uidVisualResult&&(()=>{
+          const bugs=uidVisualResult.bugs||[];
+          const importedBugs=bugs.filter(b=>uidJiraStatus[b.id]&&!uidJiraStatus[b.id].startsWith("error")&&uidJiraStatus[b.id]!=="importing");
+          const approvedCases=uidCases.filter(c=>c.status!=="rejected");
+          const rejectedCases=uidCases.filter(c=>c.status==="rejected");
+          const criticalBugs=bugs.filter(b=>b.severity==="Critical");
+          const highBugs=bugs.filter(b=>b.severity==="High");
+          const sendComment=async()=>{
+            if(!uidReportComment.trim()){return;}
+            if(!uidJiraTicketKey){alert("No Jira ticket linked.");return;}
+            if(!jiraConfigured){alert("Configure Jira credentials in Settings.");return;}
+            setUidCommentStatus({sending:true,done:false,error:""});
+            try{
+              const lines=[
+                uidReportComment,
+                "",
+                "---",
+                `UI Design Test Summary`,
+                `Page: ${uidForm.pageUrl||"—"}`,
+                `Test Cases: ${uidCases.length} total · ${approvedCases.length} approved · ${rejectedCases.length} rejected`,
+                `Bugs Found: ${bugs.length} (${criticalBugs.length} Critical · ${highBugs.length} High)`,
+                `Bugs Imported to Jira: ${importedBugs.length}`,
+                importedBugs.length>0?`Jira Issues: ${importedBugs.map(b=>uidJiraStatus[b.id]).join(", ")}`:null,
+              ].filter(Boolean).join("\n");
+              const adfBody={type:"doc",version:1,content:[{type:"paragraph",content:[{type:"text",text:lines}]}]};
+              await callJira(proj,"POST",`/issue/${uidJiraTicketKey}/comment`,{body:adfBody});
+              setUidCommentStatus({sending:false,done:true,error:""});
+              showToast("Comment added to "+uidJiraTicketKey);
+            }catch(e){setUidCommentStatus({sending:false,done:false,error:e.message.slice(0,160)});}
+          };
+          const scoreColor=s=>s>=80?"var(--color-text-success)":s>=60?"#d97706":"var(--color-text-danger)";
+          return <div>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:20,flexWrap:"wrap",gap:8}}>
+              <div><H2 style={{marginBottom:2}}>Test Session Report</H2>
+                <div style={{fontSize:13,color:"var(--color-text-secondary)"}}>UI Design test summary{uidJiraTicketKey&&<> for <Tag c="blue">{uidJiraTicketKey}</Tag></>}</div>
+              </div>
+              <button onClick={()=>setPhase("uidBugs")} style={{...ghostBtn,fontSize:13}}>← Back to Bugs</button>
+            </div>
+
+            {/* Summary stat cards */}
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(155px,1fr))",gap:12,marginBottom:20}}>
+              {[
+                {val:uidCases.length,label:"Test Cases",sub:`${approvedCases.length} approved · ${rejectedCases.length} rejected`,color:"var(--accent)"},
+                {val:bugs.length,label:"Bugs Found",sub:`${criticalBugs.length} Critical · ${highBugs.length} High`,color:"var(--color-text-danger)"},
+                {val:importedBugs.length,label:"Imported to Jira",sub:uidJiraTicketKey||"No ticket linked",color:"var(--color-text-success)"},
+                {val:(uidVisualResult.overallScore||0)+"%",label:"Design Match",sub:uidVisualResult.verdict||"",color:scoreColor(uidVisualResult.overallScore||0)},
+              ].map(({val,label,sub,color})=>(
+                <div key={label} style={{...card,padding:"16px 14px",textAlign:"center"}}>
+                  <div style={{fontSize:26,fontWeight:700,color}}>{val}</div>
+                  <div style={{fontSize:12,fontWeight:500,color:"var(--color-text-primary)",marginTop:2}}>{label}</div>
+                  <div style={{fontSize:11,color:"var(--color-text-tertiary)",marginTop:3}}>{sub}</div>
+                </div>
+              ))}
+            </div>
+
+            {/* Session details */}
+            <div style={{...card,marginBottom:16}}>
+              <H2 style={{marginBottom:12}}>Session Details</H2>
+              <div style={{display:"flex",flexDirection:"column",gap:8,fontSize:13}}>
+                {uidJiraTicketKey&&<div style={{display:"flex",gap:10,alignItems:"center"}}><span style={{color:"var(--color-text-tertiary)",minWidth:110,flexShrink:0}}>Linked Ticket</span><Tag c="blue">{uidJiraTicketKey}</Tag></div>}
+                {uidForm.pageUrl&&<div style={{display:"flex",gap:10,alignItems:"flex-start"}}><span style={{color:"var(--color-text-tertiary)",minWidth:110,flexShrink:0}}>Page URL</span><span style={{wordBreak:"break-all"}}>{uidForm.pageUrl}</span></div>}
+                {uidForm.figmaUrl&&<div style={{display:"flex",gap:10,alignItems:"flex-start"}}><span style={{color:"var(--color-text-tertiary)",minWidth:110,flexShrink:0}}>Figma URL</span><span style={{wordBreak:"break-all",overflow:"hidden",textOverflow:"ellipsis",display:"-webkit-box",WebkitLineClamp:1,WebkitBoxOrient:"vertical"}}>{uidForm.figmaUrl}</span></div>}
+                {importedBugs.length>0&&<div style={{display:"flex",gap:10,alignItems:"flex-start"}}><span style={{color:"var(--color-text-tertiary)",minWidth:110,flexShrink:0}}>Jira Issues</span>
+                  <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                    {importedBugs.map(b=><div key={b.id} style={{display:"flex",gap:4,alignItems:"center"}}>
+                      <Tag c="green">{uidJiraStatus[b.id]}</Tag>
+                      <Tag c={b.severity==="Critical"||b.severity==="High"?"red":"amber"}>{b.severity}</Tag>
+                      <span style={{fontSize:12,color:"var(--color-text-secondary)"}}>{b.title}</span>
+                    </div>)}
+                  </div>
+                </div>}
+                {bugs.filter(b=>!uidJiraStatus[b.id]||uidJiraStatus[b.id].startsWith("error")).length>0&&
+                  <div style={{display:"flex",gap:10,alignItems:"flex-start"}}>
+                    <span style={{color:"var(--color-text-tertiary)",minWidth:110,flexShrink:0}}>Not Imported</span>
+                    <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
+                      {bugs.filter(b=>!uidJiraStatus[b.id]||uidJiraStatus[b.id].startsWith("error")).map(b=><Tag key={b.id} c="red">{b.id}</Tag>)}
+                    </div>
+                  </div>}
+              </div>
+            </div>
+
+            {/* Comment to Jira */}
+            <div style={card}>
+              <H2 style={{marginBottom:4}}>Add Comment to Jira Story</H2>
+              <div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:14}}>
+                {uidJiraTicketKey
+                  ?<>Your comment will be posted directly to <Tag c="blue">{uidJiraTicketKey}</Tag>. A test summary is automatically appended.</>
+                  :"No Jira ticket linked — go back to Jira Ticket step to select one."}
+              </div>
+              <textarea
+                style={{...ta,width:"100%",boxSizing:"border-box",minHeight:130,marginBottom:0}}
+                value={uidReportComment}
+                onChange={e=>setUidReportComment(e.target.value)}
+                placeholder={"Write your QA findings, recommendations, or any notes for the developer...\n\nExample:\nAll critical UI bugs have been filed. The hero section and statistics area need urgent attention before release. Navigation and footer passed visual review."}
+              />
+              <div style={{display:"flex",gap:10,alignItems:"center",marginTop:12,flexWrap:"wrap"}}>
+                {uidCommentStatus.done
+                  ?<Tag c="green">✓ Comment added to {uidJiraTicketKey}</Tag>
+                  :<>
+                      <Btn v="primary"
+                        disabled={!uidReportComment.trim()||!uidJiraTicketKey||!jiraConfigured||uidCommentStatus.sending}
+                        onClick={sendComment}>
+                        {uidCommentStatus.sending?"Sending…":"💬 Add Comment to Jira"}
+                      </Btn>
+                      {uidCommentStatus.done&&<button onClick={()=>setUidCommentStatus({sending:false,done:false,error:""})} style={ghostBtn}>Edit & Resend</button>}
+                      {!jiraConfigured&&<Tag c="amber">Configure Jira in Settings first</Tag>}
+                      {!uidJiraTicketKey&&jiraConfigured&&<Tag c="amber">No ticket linked</Tag>}
+                    </>}
+                {uidCommentStatus.error&&<div style={{fontSize:12,color:"var(--color-text-danger)",wordBreak:"break-word",flex:"1 1 100%",marginTop:4}}>{uidCommentStatus.error}</div>}
+              </div>
+            </div>
+          </div>;
+        })()}
+
         {perfLoading&&<Loader msg="Running k6 performance test…"/>}
 
         {!loading&&!perfLoading&&phase==="perfTest"&&(()=>{
@@ -2272,9 +3351,31 @@ OVERALL STORY READINESS FOR QA:
           const totalSec=isStress?durSecs[perfForm.duration]*4+rampSecs[perfForm.ramp]*5:(durSecs[perfForm.duration]||60)+(rampSecs[perfForm.ramp]||10)*2;
           const s_=v=>setPerfForm(f=>({...f,...v}));
           const inpN={...inp,maxWidth:130};
+          const applyCurl=()=>{
+            const parsed=parseCurlCommand(curlDraft);
+            if(!parsed||!parsed.url){setCurlErr("Couldn't find a URL in that command.");return;}
+            const updates={apiUrl:parsed.url,method:parsed.method};
+            if(parsed.body)updates.requestBody=parsed.body;
+            if(parsed.bearer){updates.authType="bearer";updates.token=parsed.bearer;}
+            else if(parsed.basicUser){updates.authType="basic";updates.basicUsername=parsed.basicUser;updates.basicPassword=parsed.basicPass;}
+            if(parsed.otherHeaders&&parsed.otherHeaders.length)updates.customHeaders=[...(perfForm.customHeaders||[]),...parsed.otherHeaders];
+            s_(updates);
+            setCurlErr("");
+          };
           return <div style={{display:"flex",gap:20,alignItems:"flex-start"}}>
             {/* ── LEFT: form ── */}
             <div style={{flex:1,minWidth:0,display:"flex",flexDirection:"column",gap:0}}>
+
+              {/* Import from cURL */}
+              <div style={card}>
+                <H2 style={{marginBottom:8}}>Import from cURL</H2>
+                <div style={{fontSize:12,color:"var(--color-text-tertiary)",marginBottom:10}}>Paste a cURL command (from browser DevTools' "Copy as cURL", Postman, etc.) to auto-fill the method, URL, body, and auth below.</div>
+                <textarea style={{...inp,height:70,fontFamily:"monospace",fontSize:12,resize:"vertical"}} value={curlDraft} onChange={e=>{setCurlDraft(e.target.value);setCurlErr("");}} placeholder={'curl -X POST https://api.example.com/items \\\n  -H "Authorization: Bearer eyJ..." \\\n  -d \'{"key":"value"}\''}/>
+                <div style={{display:"flex",gap:10,alignItems:"center",marginTop:8}}>
+                  <button onClick={applyCurl} disabled={!curlDraft.trim()} style={{...ghostBtn,opacity:curlDraft.trim()?1:0.5,cursor:curlDraft.trim()?"pointer":"not-allowed"}}>⬇ Import</button>
+                  {curlErr&&<span style={{fontSize:12,color:"var(--color-text-danger)"}}>{curlErr}</span>}
+                </div>
+              </div>
 
               {/* Test type */}
               <div style={card}>
@@ -2302,7 +3403,22 @@ OVERALL STORY READINESS FOR QA:
                         {["GET","POST","PUT","PATCH","DELETE"].map(m=><option key={m}>{m}</option>)}
                       </select>
                     </div>
-                    <div style={{flex:1}}><Lbl>API Endpoint URL *</Lbl><input style={inp} value={perfForm.apiUrl} onChange={e=>s_({apiUrl:e.target.value})} placeholder="https://api.example.com/endpoint"/></div>
+                    <div style={{flex:1}}><Lbl>API Endpoint URL *</Lbl><input style={inp} value={perfForm.apiUrl} onChange={e=>s_({apiUrl:e.target.value})} placeholder="https://api.example.com/endpoint or .../items/{{itemId}}"/></div>
+                  </div>
+                  <div>
+                    <Lbl>Configurable Variables <span style={{fontWeight:400,color:"var(--color-text-tertiary)"}}>— reference as {"{{name}}"} anywhere in the URL above; each becomes overridable per run</span></Lbl>
+                    {(perfForm.variables||[]).map((v,i)=>(
+                      <div key={i} style={{display:"flex",gap:8,marginTop:6}}>
+                        <input style={{...inp,flex:1}} value={v.name} placeholder="e.g. auctionItemId" onChange={e=>{
+                          const next=[...perfForm.variables]; next[i]={...next[i],name:e.target.value}; s_({variables:next});
+                        }}/>
+                        <input style={{...inp,flex:1}} value={v.value} placeholder="default value" onChange={e=>{
+                          const next=[...perfForm.variables]; next[i]={...next[i],value:e.target.value}; s_({variables:next});
+                        }}/>
+                        <button onClick={()=>s_({variables:perfForm.variables.filter((_,j)=>j!==i)})} style={{...ghostBtn,padding:"0 10px"}} title="Remove">✕</button>
+                      </div>
+                    ))}
+                    <button onClick={()=>s_({variables:[...(perfForm.variables||[]),{name:"",value:""}]})} style={{...ghostBtn,fontSize:12,marginTop:8}}>+ Add Variable</button>
                   </div>
                   <div style={{maxWidth:200}}><Lbl>Expected Status Code</Lbl><input style={inpN} type="number" value={perfForm.expectedStatus} onChange={e=>s_({expectedStatus:parseInt(e.target.value)||200})}/></div>
                   <div>
@@ -2348,7 +3464,22 @@ OVERALL STORY READINESS FOR QA:
                       </div>
                     </div>}
                   </div>}
-                  {["POST","PUT","PATCH"].includes(perfForm.method)&&<div><Lbl>Request Body (JSON)</Lbl><textarea style={{...inp,height:76,fontFamily:"monospace",resize:"vertical"}} value={perfForm.requestBody} onChange={e=>s_({requestBody:e.target.value})} placeholder='{"key":"value"}'/></div>}
+                  <div>
+                    <Lbl>Custom Headers <span style={{fontWeight:400,color:"var(--color-text-tertiary)"}}>— for auth your API expects in its own header, e.g. X-Api-Key. Values can reference {"{{variables}}"} too.</span></Lbl>
+                    {(perfForm.customHeaders||[]).map((h,i)=>(
+                      <div key={i} style={{display:"flex",gap:8,marginTop:6}}>
+                        <input style={{...inp,flex:1}} value={h.name} placeholder="e.g. X-Api-Key" onChange={e=>{
+                          const next=[...perfForm.customHeaders]; next[i]={...next[i],name:e.target.value}; s_({customHeaders:next});
+                        }}/>
+                        <input style={{...inp,flex:1}} value={h.value} placeholder="header value" onChange={e=>{
+                          const next=[...perfForm.customHeaders]; next[i]={...next[i],value:e.target.value}; s_({customHeaders:next});
+                        }}/>
+                        <button onClick={()=>s_({customHeaders:perfForm.customHeaders.filter((_,j)=>j!==i)})} style={{...ghostBtn,padding:"0 10px"}} title="Remove">✕</button>
+                      </div>
+                    ))}
+                    <button onClick={()=>s_({customHeaders:[...(perfForm.customHeaders||[]),{name:"",value:""}]})} style={{...ghostBtn,fontSize:12,marginTop:8}}>+ Add Header</button>
+                  </div>
+                  {["POST","PUT","PATCH"].includes(perfForm.method)&&<div><Lbl>Request Body (JSON) <span style={{fontWeight:400,color:"var(--color-text-tertiary)"}}>— can reference {"{{variables}}"} too</span></Lbl><textarea style={{...inp,height:76,fontFamily:"monospace",resize:"vertical"}} value={perfForm.requestBody} onChange={e=>s_({requestBody:e.target.value})} placeholder='{"key":"{{value}}"}'/></div>}
                 </div>
               </div>
 
@@ -2392,11 +3523,16 @@ OVERALL STORY READINESS FOR QA:
             <div style={{width:230,flexShrink:0}}>
               <div style={{...card,position:"sticky",top:0}}>
                 <H2 style={{marginBottom:12}}>Test Summary</H2>
-                {[
+                {(()=>{
+                  const namedVars=(perfForm.variables||[]).filter(v=>v.name.trim());
+                  const namedHeaders=(perfForm.customHeaders||[]).filter(h=>h.name.trim());
+                  return [
                   {label:"Type",val:<Tag c={isStress?"red":"blue"}>{isStress?"Stress":"Load"}</Tag>},
                   {label:"Name",val:perfForm.testName||"—"},
                   {label:"Method",val:<Tag c="blue">{perfForm.method}</Tag>},
                   {label:"URL",val:<span style={{fontSize:11,wordBreak:"break-all"}}>{perfForm.apiUrl||"—"}</span>},
+                  {label:"Variables",val:namedVars.length?namedVars.map(v=>v.name).join(", "):"—"},
+                  {label:"Custom Headers",val:namedHeaders.length?namedHeaders.map(h=>h.name).join(", "):"—"},
                   {label:"Auth",val:perfForm.authType==="bearer"?"🔑 Bearer":perfForm.authType==="basic"?"👤 Basic":perfForm.authType==="csv"?("🔄 Dynamic ("+(perfForm.csvUsers?.length||0)+" users)"):"🔓 None"},
                   null,
                   {label:"Virtual Users",val:isStress?perfForm.vus+" (max)":String(perfForm.vus)},
@@ -2409,7 +3545,8 @@ OVERALL STORY READINESS FOR QA:
                     <span style={{fontSize:12,color:"var(--color-text-tertiary)",flexShrink:0}}>{row.label}</span>
                     <span style={{fontSize:12,fontWeight:500,textAlign:"right"}}>{row.val}</span>
                   </div>
-                )}
+                  );
+                })()}
                 {isStress&&<div style={{marginTop:8,fontSize:12,color:"var(--color-text-secondary)",background:"var(--color-background-warning)",padding:"8px 10px",borderRadius:8}}>
                   🔥 Steps: {Math.ceil(perfForm.vus*.25)} → {Math.ceil(perfForm.vus*.5)} → {Math.ceil(perfForm.vus*.75)} → {perfForm.vus} VUs
                 </div>}
@@ -3206,13 +4343,19 @@ function AdminChangePasswordModal({onClose,forced}) {
 
 /* ─── Root App ────────────────────────────────────────────────────────────── */
 /* ─── Member Config Dialog ────────────────────────────────────────────────── */
+const FIGMA_TOKEN_KEY = id => `qa_figma_token_${id}`;
 function MemberConfigDialog({memberId, onClose}) {
-  const [f,setF]=useState({jiraUrl:"",jiraEmail:"",jiraToken:""});
+  const [f,setF]=useState({jiraUrl:"",jiraEmail:"",jiraToken:"",figmaToken:""});
   const [testing,setTesting]=useState(false);
   const [testMsg,setTestMsg]=useState("");
   const [saving,setSaving]=useState(false);
   const [saveErr,setSaveErr]=useState("");
   const sf=v=>setF(p=>({...p,...v}));
+
+  // Load saved Figma token from localStorage on open
+  React.useEffect(()=>{
+    try{const t=localStorage.getItem(FIGMA_TOKEN_KEY(memberId))||"";if(t)sf({figmaToken:t});}catch{}
+  },[]);
 
   const testJira=async()=>{
     if(!f.jiraUrl||!f.jiraToken||!f.jiraEmail){setTestMsg("Fill in all three fields first.");return;}
@@ -3242,8 +4385,12 @@ function MemberConfigDialog({memberId, onClose}) {
         body:JSON.stringify({jiraUrl:(()=>{try{return new URL(f.jiraUrl.trim()).origin;}catch{return f.jiraUrl.trim();}})(),jiraEmail:f.jiraEmail.trim(),jiraToken:f.jiraToken.trim()})
       });
       const d=await r.json();
+      if(r.status===401){setSaveErr("Session expired — please sign out and sign back in.");setSaving(false);return;}
       if(!r.ok)throw new Error(d.error||"Save failed");
       if(d.sessionToken)sessionStorage.setItem(SESSION_TOKEN_KEY,d.sessionToken);
+      // Save Figma token locally (not sent to server — stays in browser)
+      if(f.figmaToken.trim())localStorage.setItem(FIGMA_TOKEN_KEY(memberId),f.figmaToken.trim());
+      else localStorage.removeItem(FIGMA_TOKEN_KEY(memberId));
       onClose();
     }catch(e){setSaveErr(e.message);}
     setSaving(false);
@@ -3277,6 +4424,14 @@ function MemberConfigDialog({memberId, onClose}) {
           </button>
           {testMsg&&<div style={{marginTop:6,fontSize:12,color:testMsg.startsWith("✓")?"var(--color-text-success)":"var(--color-text-danger)"}}>{testMsg}</div>}
         </div>}
+        <div style={{borderTop:"1px solid var(--color-border-tertiary)",paddingTop:14,marginTop:4}}>
+          <div style={{fontWeight:600,fontSize:14,marginBottom:2}}>🎨 Figma (optional)</div>
+          <div style={{fontSize:12,color:"var(--color-text-tertiary)",marginBottom:10}}>Required for UI Design Testing. Stored only in your browser.</div>
+          <div><Lbl>Personal Access Token</Lbl>
+            <input type="password" style={inp} value={f.figmaToken} onChange={e=>sf({figmaToken:e.target.value})} placeholder="figd_..."/>
+            <div style={{fontSize:11,color:"var(--color-text-tertiary)",marginTop:3}}>Figma → Settings → Security → Personal access tokens → Generate new token.<br/><b style={{color:"var(--color-text-warning)"}}>⚠ When creating the token, expand "File content" scope and set it to Read.</b></div>
+          </div>
+        </div>
         <div style={{display:"flex",gap:10,marginTop:4,alignItems:"center"}}>
           <Btn v="primary" onClick={save} disabled={saving}>{saving?"Saving…":"Save & Continue"}</Btn>
           <button onClick={onClose} style={{padding:"8px 18px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:14,color:"var(--color-text-secondary)"}}>Skip</button>
@@ -3383,9 +4538,9 @@ function App() {
             </div>;})}
         </div>)}
         {user.role==="member"&&savedStories.length>0&&(()=>{
-          const visibleStories=activeProj?.jiraProjKey?savedStories.filter(s=>s.sid&&s.sid.startsWith(activeProj.jiraProjKey+"-")):savedStories;
+          const visibleStories=activeProj?savedStories.filter(s=>storyMatchesProject(s,activeProj.jiraProjKey,activeProj.id)):savedStories;
           if(visibleStories.length===0)return null;
-          const isActive=s=>s.sid===activeSid&&page==="workspace";
+          const isActive=s=>s.testKind==="ui-design"?activeSid===("uid:"+s.id)&&page==="workspace":s.testKind==="non-functional"?activeSid===("perf:"+s.id)&&page==="workspace":s.sid===activeSid&&page==="workspace";
           const StoryCard=({s})=>(
             <div key={s.id} style={{borderRadius:7,padding:"8px 9px",background:isActive(s)?"var(--color-background-info)":"var(--color-background-primary)",border:isActive(s)?"1px solid var(--color-text-info)":"1px solid var(--color-border-tertiary)",cursor:renamingId===s.id?"default":"pointer",transition:"border-color 0.15s",borderLeft:isActive(s)?"3px solid var(--color-text-info)":"1px solid var(--color-border-tertiary)"}}
               onMouseEnter={e=>{if(renamingId!==s.id&&!isActive(s))e.currentTarget.style.borderColor="var(--color-border-primary)";}}
@@ -3393,8 +4548,8 @@ function App() {
               onClick={()=>{if(renamingId!==s.id){setRestoreTarget(s);setPage("workspace");}}}>
               {renamingId===s.id
                 ?<div style={{display:"flex",gap:4}} onClick={e=>e.stopPropagation()}>
-                    <input autoFocus style={{flex:1,fontSize:12,padding:"3px 7px",borderRadius:5,border:"1px solid var(--color-border-primary)",background:"var(--color-background-secondary)",color:"var(--color-text-primary)",outline:"none"}} value={renameVal} onChange={e=>setRenameVal(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")renameSnap(s.id,renameVal||s.sid);if(e.key==="Escape")setRenamingId(null);}}/>
-                    <button onClick={()=>renameSnap(s.id,renameVal||s.sid)} style={{background:"none",border:"none",cursor:"pointer",color:"var(--color-text-success)",fontSize:14,padding:"0 2px"}}>✓</button>
+                    <input autoFocus style={{flex:1,fontSize:12,padding:"3px 7px",borderRadius:5,border:"1px solid var(--color-border-primary)",background:"var(--color-background-secondary)",color:"var(--color-text-primary)",outline:"none"}} value={renameVal} onChange={e=>setRenameVal(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")renameSnap(s.id,renameVal||s.name||s.sid||"Session");if(e.key==="Escape")setRenamingId(null);}}/>
+                    <button onClick={()=>renameSnap(s.id,renameVal||s.name||s.sid||"Session")} style={{background:"none",border:"none",cursor:"pointer",color:"var(--color-text-success)",fontSize:14,padding:"0 2px"}}>✓</button>
                   </div>
                 :<div>
                     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
@@ -3405,9 +4560,11 @@ function App() {
                       </div>
                     </div>
                     <div style={{display:"flex",gap:3,flexWrap:"wrap"}}>
-                      <Tag c="blue">{s.sid}</Tag>
-                      {(s.cases?.filter(c=>c.status==="approved")?.length||0)>0&&<Tag c="green">{s.cases.filter(c=>c.status==="approved").length} TC</Tag>}
-                      {s.coverageText&&<Tag c="green">✓</Tag>}
+                      {s.testKind==="ui-design"
+                        ?<><Tag c="purple">UI</Tag>{s.uidJiraTicketKey&&<Tag c="blue">{s.uidJiraTicketKey}</Tag>}{(s.uidCases?.length||0)>0&&<Tag c="green">{s.uidCases.length} TC</Tag>}{s.uidVisualResult&&<Tag c="green">✓</Tag>}</>
+                        :s.testKind==="non-functional"
+                        ?<><Tag c="amber">PERF</Tag><Tag c="blue">{s.perfForm?.method||"GET"}</Tag>{s.perfResult&&<Tag c={s.perfResult.passed?"green":"red"}>{s.perfResult.passed?"✓ Pass":"✗ Fail"}</Tag>}</>
+                        :<><Tag c="blue">{s.sid}</Tag>{(s.cases?.filter(c=>c.status==="approved")?.length||0)>0&&<Tag c="green">{s.cases.filter(c=>c.status==="approved").length} TC</Tag>}{s.coverageText&&<Tag c="green">✓</Tag>}</>}
                     </div>
                   </div>}
             </div>);
