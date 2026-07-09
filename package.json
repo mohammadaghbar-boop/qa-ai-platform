@@ -5,5 +5,8 @@
   "scripts": {
     "start": "node server.js",
     "test": "node tests/qa-platform.test.js"
+  },
+  "dependencies": {
+    "dotenv": "^17.4.2"
   }
 }
