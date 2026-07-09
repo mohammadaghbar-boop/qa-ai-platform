@@ -278,8 +278,9 @@ async function loadMembersFromServer() {
 /* ─── File helpers ───────────────────────────────────────────────────────── */
 function dlFile(content, name, mime="text/plain") {
   const a = document.createElement("a");
-  a.href = URL.createObjectURL(new Blob([content],{type:mime}));
-  a.download = name; a.click();
+  const url = URL.createObjectURL(new Blob([content],{type:mime}));
+  a.href = url; a.download = name; a.click();
+  URL.revokeObjectURL(url);
 }
 function toGapData(v) {
   if (!v) return null;
@@ -600,12 +601,12 @@ function NotifBell({userId}) {
     {open&&<div style={{position:"fixed",left:pos.left,bottom:pos.bottom,width:300,background:"var(--color-background-secondary)",border:"1px solid var(--color-border-secondary)",borderRadius:12,zIndex:9999,boxShadow:"0 8px 24px rgba(0,0,0,.14)"}}>
       <div style={{padding:"12px 16px",borderBottom:"1px solid var(--color-border-tertiary)",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
         <div style={{fontWeight:500,fontSize:14}}>Notifications <span style={{fontSize:11,fontWeight:400,color:"var(--color-text-tertiary)"}}>· last 7 days</span></div>
-        {unread.length>0&&<button onClick={()=>{unread.forEach(n=>n.read=true);tick(x=>x+1);}} style={{padding:"3px 8px",borderRadius:6,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:12,color:"var(--color-text-secondary)"}}>Mark all read</button>}
+        {unread.length>0&&<button onClick={()=>{unread.forEach(n=>n.read=true);saveDB();tick(x=>x+1);}} style={{padding:"3px 8px",borderRadius:6,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:12,color:"var(--color-text-secondary)"}}>Mark all read</button>}
       </div>
       <div style={{maxHeight:340,overflowY:"auto"}}>
         {withinWeek.length===0
           ?<div style={{padding:16,fontSize:13,color:"var(--color-text-tertiary)"}}>No notifications in the past 7 days.</div>
-          :visible.map(n=><div key={n.id} onClick={()=>{n.read=true;tick(x=>x+1);}} style={{padding:"10px 16px",borderBottom:"1px solid var(--color-border-tertiary)",cursor:"pointer",background:n.read?"transparent":"var(--color-background-info)"}}>
+          :visible.map(n=><div key={n.id} onClick={()=>{n.read=true;saveDB();tick(x=>x+1);}} style={{padding:"10px 16px",borderBottom:"1px solid var(--color-border-tertiary)",cursor:"pointer",background:n.read?"transparent":"var(--color-background-info)"}}>
             <div style={{fontSize:13,fontWeight:n.read?400:500}}>{n.msg}</div>
             <div style={{fontSize:11,color:"var(--color-text-tertiary)",marginTop:2}}>
               {n.at?new Date(n.at).toLocaleDateString([],{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"}):n.ts}
@@ -1571,7 +1572,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
   // Save workspace state on every change
   useEffect(()=>{
     if(phase==="input"||phase==="testType"){localStorage.removeItem(WS_SNAP);return;}
-    try{localStorage.setItem(WS_SNAP,JSON.stringify({phase,testKind,sid,sdata,platform,ctypes,gapData,cases,scripts,tab,result,execLines,coverageText,sessionBugs,selectedForScripts,appUrl,uidForm,uidCases,uidVisualResult,uidFigmaImg,uidManualFigmaImg,uidJiraTicketKey,uidStoryId,uidScript,uidDemandName,uidSelectedForScript,uidJiraMode,uidStoryRequirements,uidStoryFiles,uidSvgFiles}));}catch{}
+    try{const uidFormSafe={...uidForm,figmaToken:""};localStorage.setItem(WS_SNAP,JSON.stringify({phase,testKind,sid,sdata,platform,ctypes,gapData,cases,scripts,tab,result,execLines,coverageText,sessionBugs,selectedForScripts,appUrl,uidForm:uidFormSafe,uidCases,uidVisualResult,uidFigmaImg,uidManualFigmaImg,uidJiraTicketKey,uidStoryId,uidScript,uidDemandName,uidSelectedForScript,uidJiraMode,uidStoryRequirements,uidStoryFiles,uidSvgFiles}));}catch{}
     // Also keep per-story cache up to date
     if(sid&&sdata)saveStoryToCache(sid,{phase,sdata,platform,ctypes,gapData,cases,needsClarification,scripts,result,sessionBugs,coverageText,appUrl});
   },[phase,sid,sdata,platform,ctypes,gapData,cases,scripts,tab,result,execLines,coverageText,sessionBugs,selectedForScripts,appUrl,uidCases,uidVisualResult,uidJiraTicketKey,uidStoryId,uidScript,uidDemandName,uidSelectedForScript,uidJiraMode,uidStoryRequirements,uidStoryFiles,uidSvgFiles]);
@@ -1632,8 +1633,8 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
   const manOnly=approved.filter(c=>c.automatable===false);
   const allDone=cases.length>0&&cases.every(c=>c.status!=="pending");
 
-  if (!proj) return <div style={card}><div style={{color:"var(--color-text-warning)",fontWeight:500}}>No project assigned. Contact your QA lead.</div></div>;
   const [switchTarget,setSwitchTarget]=React.useState(null);
+  if (!proj) return <div style={card}><div style={{color:"var(--color-text-warning)",fontWeight:500}}>No project assigned. Contact your QA lead.</div></div>;
   const doSwitchProj=(id)=>{setSelectedProjId(id);setPhase("testType");setTestKind("functional");setPerfForm(PERF_FORM_DEFAULT);setPerfResult(null);setPerfStoryId(null);setSid("");setSdata(null);setCases([]);setNeedsClarification([]);setCoverageSummary("");setResult(null);setExecLines([]);setScripts({web:"",ios:"",android:""});setHasSaved(false);setUidForm({pageUrl:"",figmaUrl:"",figmaToken:"",selectedNodeId:""});setUidCases([]);setUidVisualResult(null);setUidFigmaImg(null);setUidScreenshotImg(null);setUidFigmaFrames([]);setUidJiraStatus({});setUidManualFigmaImg(null);setUidJiraTicketKey("");setUidStoryId(null);setUidAiotestStatus({importing:false,done:false,error:""});setUidTicketSearch("");setUidTicketResults([]);setUidTicketSearching(false);};
   const switchProj=(id)=>{
     if(id===selectedProjId)return;
@@ -2893,7 +2894,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
             }catch(e){setUidScriptError(e.message);}
             setUidScriptLoading(false);
           };
-          const dlScript=(content,filename)=>{const b=new Blob([content],{type:"text/plain"});const a=document.createElement("a");a.href=URL.createObjectURL(b);a.download=filename;a.click();};
+          const dlScript=(content,filename)=>{const b=new Blob([content],{type:"text/plain"});const a=document.createElement("a");const u=URL.createObjectURL(b);a.href=u;a.download=filename;a.click();URL.revokeObjectURL(u);};
           const hasScript=uidScript.spec||uidScript.config;
           const safeSlug=(uidDemandName||uidJiraTicketKey||"feature").toLowerCase().replace(/\s+/g,"_").replace(/[^a-z0-9_]/g,"");
           const tabFiles={spec:{label:"tests/"+safeSlug+".spec.ts",content:uidScript.spec},page:{label:"pages/"+safeSlug+".page.ts",content:uidScript.page},config:{label:"playwright.config.ts",content:uidScript.config}};

@@ -77,7 +77,6 @@ fs.writeFileSync(EMPTY_MCP, JSON.stringify({ mcpServers: {} }));
 /* ── Rate limiter (login endpoints) ─────────────────────────────────────── */
 const loginAttempts = new Map(); // ip -> { count, resetAt }
 function checkRateLimit(ip) {
-  return true; // TEMPORARILY DISABLED for testing — re-enable before rolling out to the team
   const now = Date.now();
   let e = loginAttempts.get(ip);
   if (!e || now > e.resetAt) e = { count: 0, resetAt: now + 15 * 60 * 1000 };
@@ -99,6 +98,16 @@ function sanitizeK6Duration(d) {
 }
 function isValidHttpUrl(s) {
   try { const u = new URL(s); return u.protocol === 'http:' || u.protocol === 'https:'; } catch { return false; }
+}
+// SSRF guard: allows http or https but blocks private/loopback IPs (used for screenshot endpoint)
+function isValidPublicUrl(s) {
+  try {
+    const u = new URL(s);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;
+    const h = u.hostname.toLowerCase();
+    if (/^(localhost|127\.|10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|0\.0\.0\.0|::1|169\.254\.)/.test(h)) return false;
+    return true;
+  } catch { return false; }
 }
 // SSRF guard: only allow public HTTPS Jira URLs
 function isValidJiraUrl(s) {
@@ -168,8 +177,14 @@ function decryptMemberCredentials(member) {
   } catch { return null; }
 }
 function loadServerDB() {
-  try { if (fs.existsSync(DATA_FILE)) return JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')); } catch {}
-  return { sessions: [], bugs: [], perfResults: [], coverage: [], members: [], adminPasswordHash: null, adminPasswordIsDefault: true };
+  if (!fs.existsSync(DATA_FILE)) return { sessions: [], bugs: [], perfResults: [], coverage: [], members: [], adminPasswordHash: null, adminPasswordIsDefault: true };
+  try { return JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')); }
+  catch (e) {
+    const backup = DATA_FILE + '.corrupt.' + Date.now();
+    try { fs.copyFileSync(DATA_FILE, backup); } catch {}
+    console.error('[DB] Corrupt database file — backed up to', backup, '— starting fresh:', e.message);
+    return { sessions: [], bugs: [], perfResults: [], coverage: [], members: [], adminPasswordHash: null, adminPasswordIsDefault: true };
+  }
 }
 function saveServerDB(db) {
   const tmp = DATA_FILE + '.tmp';
@@ -1579,6 +1594,10 @@ const server = http.createServer((req, res) => {
           res.writeHead(400, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'issueKey and files are required' })); return;
         }
+        if (!/^[A-Z][A-Z0-9]{1,9}-\d{1,6}$/.test(String(issueKey))) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Invalid issueKey format' })); return;
+        }
         console.log('[Jira] Attaching', files.length, 'file(s) to', issueKey);
         await attachToJira(jiraUrl, issueKey, auth, files);
         console.log('[Jira] Attachments uploaded to', issueKey);
@@ -1699,7 +1718,7 @@ const server = http.createServer((req, res) => {
       if (!_mToken || !memberSessions.has(_mToken)) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Authentication required — please sign in' })); return; }
       try {
         const { url } = JSON.parse(body);
-        if (!isValidHttpUrl(url)) throw new Error('Invalid URL');
+        if (!isValidPublicUrl(url)) throw new Error('Invalid URL: must be a public http/https URL');
         const outPath = path.join(os.tmpdir(), 'qa_uid_ss_' + crypto.randomBytes(8).toString('hex') + '.png');
         console.log('[UID] Taking screenshot of:', url);
         await new Promise((resolve, reject) => {
