@@ -121,6 +121,33 @@ function dlFile(content, name, mime="text/plain") {
   a.href = URL.createObjectURL(new Blob([content],{type:mime}));
   a.download = name; a.click();
 }
+function toGapData(v) {
+  if (!v) return null;
+  return typeof v === "string" ? { legacy:true, raw:v } : v;
+}
+function formatGapText(gapData) {
+  if (!gapData) return "";
+  if (gapData.legacy) return gapData.raw || "";
+  const sevIcon = s => s==="high"?"🔴":s==="medium"?"🟡":"🟢";
+  const acIcon = s => s==="clear"?"✓":s==="missing"?"✗":"⚠";
+  const lines = [];
+  lines.push("📋 Story Summary:", gapData.summary||"", "");
+  lines.push("✅ Acceptance Criteria Review:");
+  (gapData.acReview||[]).forEach(a=>lines.push(`${acIcon(a.status)} ${a.text}${a.note?" — "+a.note:""}`));
+  lines.push("", "🔍 GAP Analysis:");
+  (gapData.gaps||[]).forEach(g=>lines.push(`${sevIcon(g.severity)} [${g.category||"Gap"}] ${g.description}`));
+  lines.push("", "⚠️ Risk Areas:");
+  (gapData.risks||[]).forEach(r=>lines.push(`${sevIcon(r.severity)} ${r.description}`));
+  lines.push("", "💡 Recommendations:");
+  (gapData.recommendations||[]).forEach(r=>lines.push("- "+r));
+  if (gapData.coverage) {
+    const c = gapData.coverage;
+    lines.push("", "📊 Test Coverage Estimate:",
+      `Happy flows: ${c.happyPct??"—"}% · Edge cases: ${c.edgePct??"—"}% · Negative cases: ${c.negativePct??"—"}% · Automation: ${c.automationPct??"—"}%`);
+    if (c.note) lines.push(c.note);
+  }
+  return lines.join("\n").trim();
+}
 function exportCSV(cases, sid) {
   const h = ["ID","Title","Type","Preconditions","Steps","Expected","Platform","Automatable"];
   const rows = cases.filter(c=>c.status==="approved").map(c=>[
@@ -301,7 +328,7 @@ function inlineMd(text){
 }
 
 /* ─── AI Chat ─────────────────────────────────────────────────────────────── */
-function AIChat({proj,sid,sdata,cases=[],gapText="",result=null,sessionBugs=[],coverageText="",platform=""}) {
+function AIChat({proj,sid,sdata,cases=[],gapData=null,result=null,sessionBugs=[],coverageText="",platform=""}) {
   const [msgs,setMsgs]=useState([{role:"assistant",text:"Hi! I can see your full story, test cases, execution results and bugs. Ask me anything!"}]);
   const [msg,setMsg]=useState(""); const [busy,setBusy]=useState(false);
   const [jiraCtx,setJiraCtx]=useState("");
@@ -384,7 +411,7 @@ function AIChat({proj,sid,sdata,cases=[],gapText="",result=null,sessionBugs=[],c
 
       // Build workspace context from current session data
       const storySection=sdata?`USER STORY:\n  ID: ${sid}\n  Summary: ${sdata.summary||""}\n  Description: ${sdata.description||sdata.rawText||""}\n  Platform: ${platform}`:sid?`Story ID: ${sid}`:"No story loaded yet.";
-      const gapSection=gapText?`GAP ANALYSIS:\n${gapText}`:"";
+      const gapSection=gapData?`GAP ANALYSIS:\n${formatGapText(gapData)}`:"";
       const casesSection=cases.length>0?`TEST CASES (${cases.length} total):\n${cases.map(c=>`  [${c.status?.toUpperCase()||"PENDING"}] ${c.id} (${c.type}): ${c.title}${c.steps?.length?"\n    Steps: "+c.steps.join(" → "):""}`).join("\n")}`:"No test cases yet.";
       const resultSection=result?`EXECUTION RESULTS:\n  Total: ${result.total} | Passed: ${result.pass?.length||0} | Failed: ${result.fail?.length||0}\n  Passed: ${(result.pass||[]).join(", ")||"none"}\n  Failed: ${(result.fail||[]).join(", ")||"none"}`:"No execution results yet.";
       const bugsSection=sessionBugs.length>0?`BUGS FILED (${sessionBugs.length}):\n${sessionBugs.map(b=>`  ${b.bid} [${b.sev}]: ${b.summary}${b.jKey?" → "+b.jKey:""}`).join("\n")}`:"No bugs filed yet.";
@@ -640,7 +667,7 @@ function Workspace({member,refreshSaved,restoreTarget,clearRestore,onActiveSid,o
   const proj=memberProjects.find(x=>x.id===selectedProjId)||memberProjects[0]||null;
 const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.memberId===member.id); return ps.length>1?"project":"input"; }); const [sid,setSid]=useState(""); const [sdata,setSdata]=useState(null);
   const [platform,setPlatform]=useState("web"); const [ctypes,setCtypes]=useState([]);
-  const [gapText,setGapText]=useState(""); const [cases,setCases]=useState([]);
+  const [gapData,setGapData]=useState(null); const [cases,setCases]=useState([]);
   const [editOn,setEditOn]=useState(false); const [scripts,setScripts]=useState({web:"",ios:"",android:""});
   const [projFiles,setProjFiles]=useState(null); const [tab,setTab]=useState("web");
   const [execLines,setExecLines]=useState([]); const [result,setResult]=useState(null);
@@ -650,6 +677,7 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
   const [fixed,setFixed]=useState(false); const [hist,setHist]=useState([]); const [chat,setChat]=useState(false); const [hasSaved,setHasSaved]=useState(false);
   const [showAddCase,setShowAddCase]=useState(false); const [newCase,setNewCase]=useState({title:"",type:"happy",platform:"web",preconditions:"",steps:[""],expected:"",automatable:true});
   const [selectedForScripts,setSelectedForScripts]=useState([]); const [coverageText,setCoverageText]=useState(""); const [sessionBugs,setSessionBugs]=useState([]); const [appUrl,setAppUrl]=useState("");
+  const [selGaps,setSelGaps]=useState([]);
   const [scriptCache,setScriptCache]=useState({});
   const [editingBugId,setEditingBugId]=useState(null); const [editBugForm,setEditBugForm]=useState({});
   const [toast,setToast]=useState(null);
@@ -662,7 +690,7 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
       const s=JSON.parse(localStorage.getItem(WS_SNAP));
       if(!s||s.phase==="input")return;
       setPhase(s.phase);setSid(s.sid||"");setSdata(s.sdata||null);setPlatform(s.platform||"web");
-      setCtypes(s.ctypes||[]);setGapText(s.gapText||"");setCases(s.cases||[]);
+      setCtypes(s.ctypes||[]);setGapData(toGapData(s.gapData||s.gapText));setCases(s.cases||[]);
       setScripts(s.scripts||{web:"",ios:"",android:""});setTab(s.tab||"web");
       setResult(s.result||null);setExecLines(s.execLines||[]);
       setCoverageText(s.coverageText||"");setSessionBugs(s.sessionBugs||[]);
@@ -672,8 +700,8 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
   // Save workspace state on every change
   useEffect(()=>{
     if(phase==="input"){localStorage.removeItem(WS_SNAP);return;}
-    try{localStorage.setItem(WS_SNAP,JSON.stringify({phase,sid,sdata,platform,ctypes,gapText,cases,scripts,tab,result,execLines,coverageText,sessionBugs,selectedForScripts,appUrl}));}catch{}
-  },[phase,sid,sdata,platform,ctypes,gapText,cases,scripts,tab,result,execLines,coverageText,sessionBugs,selectedForScripts,appUrl]);
+    try{localStorage.setItem(WS_SNAP,JSON.stringify({phase,sid,sdata,platform,ctypes,gapData,cases,scripts,tab,result,execLines,coverageText,sessionBugs,selectedForScripts,appUrl}));}catch{}
+  },[phase,sid,sdata,platform,ctypes,gapData,cases,scripts,tab,result,execLines,coverageText,sessionBugs,selectedForScripts,appUrl]);
 
   const SYS=`You are an expert QA engineer. All story data is already provided in the user message — do NOT use any external tools, do NOT access Jira, Atlassian, or any other service. Work only with the text provided. Project:"${proj?.name}" Platform:${proj?.platform||"web"}.`;
   const approved=cases.filter(c=>c.status==="approved");
@@ -714,11 +742,44 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
   const doGap=async()=>{
     setLoading(true); setLmsg("Running GAP analysis…");
     const ctx=sdata&&!sdata.sim?`STORY TITLE: ${sdata.summary}\n\nSTORY CONTENT:\n${sdata.description?.slice(0,2000)||"(no description available)"}`:`STORY TITLE: Simulated ${platform} feature for project ${proj.jiraProjKey}\n\nSTORY CONTENT:\nAs a user I want to perform a core action so that I gain value. Acceptance Criteria: 1. The feature works on valid input. 2. Errors are shown for invalid input. 3. The UI is responsive.`;
+    const header=`You are a senior QA engineer. All data is provided below — do NOT access Jira or any external service. Perform a thorough, specific story review using ONLY the text below.\n\nStory ID: ${sid} | Platform: ${platform}\n${ctx}`;
+    const parseJSON=(r,label)=>{
+      const match=r.replace(/```json|```/g,"").trim().match(/\{[\s\S]*\}/);
+      if(!match) throw new Error("Invalid GAP analysis response ("+label+"). Make sure server.js is running.");
+      return JSON.parse(match[0]);
+    };
     try {
-      const r=await callAI([{role:"user",content:`You are a senior QA engineer. All data is provided below — do NOT access Jira or any external service. Perform a thorough story review and GAP analysis using ONLY the text below.\n\nStory ID: ${sid} | Platform: ${platform}\n${ctx}\n\nIMPORTANT: Write in plain text only. No markdown, no --- separators, no ** bold **, no > quotes, no tables, no backticks, no # headings. Use emoji + colon for section titles. Use numbered lists or dashes for items.\n\nStructure your response exactly like this:\n\n📋 Story Summary:\n[2-3 sentence summary]\n\n✅ Acceptance Criteria Review:\n[For each AC: ✓ Clear / ⚠ Needs clarification / ✗ Missing — with explanation]\n\n🔍 GAP Analysis:\n[List missing scenarios, boundary conditions, untested areas]\n\n⚠️ Risk Areas:\n[Each risk with rating: 🔴 High / 🟡 Medium / 🟢 Low]\n\n💡 Recommendations:\n[Actionable steps to improve story quality]\n\n📊 Test Coverage Estimate:\n[Breakdown: Happy flows / Edge cases / Negative cases / Automation %]`}],SYS,4000,"");
-      const cleanGap = t => t.replace(/^#{1,6}\s*/gm,"").replace(/\*{1,2}([^*]+)\*{1,2}/g,"$1").replace(/^[-─]{3,}\s*$/gm,"").replace(/^\|.*\|$/gm,"").replace(/^>\s*/gm,"").replace(/`([^`]*)`/g,"$1").trim();
-      setGapText(cleanGap(r));
+      // Split into two independent calls run in parallel — same instructions and rigor as
+      // a single call, but each generates less output so wall-clock time is ~halved.
+      const [r1,r2]=await Promise.all([
+        callAI([{role:"user",content:`${header}\n\nINSTRUCTIONS:\n1. In acReview, address EACH acceptance criterion individually by paraphrasing it in "text" — do not merge multiple ACs into one entry, do not write generic filler.\n2. coverage percentages are your estimate of how much of the required testing is covered by what's already specified in the story (0-100).\n\nReturn ONLY valid JSON (no markdown fences, no prose before or after) matching exactly this shape:\n{"summary":"2-3 sentence summary of the story","acReview":[{"text":"...","status":"clear|unclear|missing","note":"..."}],"coverage":{"happyPct":0,"edgePct":0,"negativePct":0,"automationPct":0,"note":"short note"}}`}],SYS,2000,""),
+        callAI([{role:"user",content:`${header}\n\nINSTRUCTIONS:\n1. In gaps, list every concrete missing scenario, boundary condition, or untested area you can find — each must be a specific, testable scenario (e.g. "No validation shown when file exceeds 10MB upload limit"), never a vague statement like "edge cases should be considered". Give each gap a severity and a suggestedType which is the single most fitting test case type for covering it.\n2. In risks, list concrete product/technical risks distinct from the gaps (e.g. data loss, security, performance, integration).\n3. recommendations must be actionable steps to improve the STORY itself (missing info to request, ACs to clarify), not generic QA advice.\n\nReturn ONLY valid JSON (no markdown fences, no prose before or after) matching exactly this shape:\n{"gaps":[{"category":"Missing scenario|Boundary condition|Untested area|...","severity":"high|medium|low","suggestedType":"happy|edge|negative","description":"..."}],"risks":[{"description":"...","severity":"high|medium|low"}],"recommendations":["...","..."]}`}],SYS,3500,"")
+      ]);
+      const merged={...parseJSON(r1,"summary/AC review"),...parseJSON(r2,"gaps/risks")};
+      merged.gaps=(merged.gaps||[]).map((g,i)=>({id:g.id||"gap-"+(i+1),...g}));
+      setGapData(merged);
       setPhase("gap");
+    } catch(e){alert(e.message);}
+    setLoading(false);
+  };
+
+  const doGapCases=async(gapIds)=>{
+    if(!gapData||gapData.legacy)return;
+    const selected=(gapData.gaps||[]).filter(g=>gapIds.includes(g.id));
+    if(selected.length===0)return;
+    setLoading(true); setLmsg("Generating test cases for "+selected.length+" gap(s)…");
+    try {
+      const r=await callAI([{role:"user",content:`You are a QA engineer. For story ${sid} (${proj.jiraProjKey}), platform ${platform}, generate ONE precise test case for EACH gap listed below, addressing exactly what that gap describes. Use each gap's suggested type as the test case "type".\n\nGaps:\n${selected.map((g,i)=>`${i+1}. [${g.suggestedType||"edge"}] ${g.description}`).join("\n")}\n\nMark automatable:false ONLY for offline/camera/biometrics/hardware tests.\n\nReturn ONLY a valid JSON array (no markdown, no explanation), one entry per gap in the same order:\n[{"title":"...","type":"happy|edge|negative","platform":"${platform}","preconditions":"...","steps":["Step 1","Step 2"],"expected":"...","automatable":true}]`}],SYS,3000,"");
+      const match=r.replace(/```json|```/g,"").trim().match(/\[[\s\S]*\]/);
+      if(!match) throw new Error("Invalid response generating cases from gaps. Make sure server.js is running.");
+      const rawNew=JSON.parse(match[0]).map(c=>({...c,status:"pending"}));
+      setCases(cs=>{
+        const merged=[...cs,...rawNew];
+        return merged.map((c,i)=>({...c,id:"TC-"+String(i+1).padStart(3,"0")}));
+      });
+      setSelGaps([]);
+      setPhase("ready");
+      showToast(rawNew.length+" test case"+(rawNew.length!==1?"s":"")+" added from selected gaps");
     } catch(e){alert(e.message);}
     setLoading(false);
   };
@@ -813,6 +874,17 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
     exportCSV(cases,sid); setPhase("jiraDone"); setLoading(false);
   };
 
+  const doPostGapToJira=async()=>{
+    if(!gapData||gapData.legacy)return;
+    setLoading(true); setLmsg("Posting GAP analysis to Jira…");
+    try {
+      const body={body:{type:"doc",version:1,content:[{type:"paragraph",content:[{type:"text",text:formatGapText(gapData).slice(0,30000)}]}]}};
+      await callJira(proj,"POST","/issue/"+sid+"/comment",body);
+      showToast("GAP analysis posted to "+sid+" on Jira");
+    } catch(e){ alert("Failed to post to Jira: "+e.message); }
+    setLoading(false);
+  };
+
   const doFileBug=async()=>{
     setLoading(true); setLmsg("Filing bug…");
     let jRef=null;
@@ -850,7 +922,7 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
   const editS=(id,si,v)=>setCases(cs=>cs.map(c=>{if(c.id!==id)return c;const s=[...c.steps];s[si]=v;return{...c,steps:s};}));
   const addStep=id=>setCases(cs=>cs.map(c=>c.id===id?{...c,steps:[...(c.steps||[]),"New step"]}:c));
   const delStep=(id,si)=>setCases(cs=>cs.map(c=>c.id===id?{...c,steps:(c.steps||[]).filter((_,i)=>i!==si)}:c));
-  const reset=()=>{localStorage.removeItem(WS_SNAP);setPhase(memberProjects.length>1?"project":"input");setSid("");setSdata(null);setPlatform("web");setCtypes([]);setGapText("");setCases([]);setEditOn(false);setScripts({web:"",ios:"",android:""});setProjFiles(null);setExecLines([]);setResult(null);setJKey(null);setBugDone(null);setShowBugForm(false);setFixed(false);setChat(false);setShowAddCase(false);setSelectedForScripts([]);setCoverageText("");setSessionBugs([]);setHasSaved(false);setAppUrl("");};
+  const reset=()=>{localStorage.removeItem(WS_SNAP);setPhase(memberProjects.length>1?"project":"input");setSid("");setSdata(null);setPlatform("web");setCtypes([]);setGapData(null);setCases([]);setEditOn(false);setScripts({web:"",ios:"",android:""});setProjFiles(null);setExecLines([]);setResult(null);setJKey(null);setBugDone(null);setShowBugForm(false);setFixed(false);setChat(false);setShowAddCase(false);setSelectedForScripts([]);setCoverageText("");setSessionBugs([]);setHasSaved(false);setAppUrl("");};
   const [saveModal,setSaveModal]=useState(null);
   // saveModal: null | {step:1,name:""} | {step:2,name:"",newCat:""}
   const openSaveModal=()=>{
@@ -860,7 +932,7 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
   };
   const commitSave=(name,categoryId)=>{
     const existing=DB.savedStories.find(s=>s.sid===sid);
-    const snap={id:existing?.id||uid(),name,categoryId:categoryId||null,phase,sid,sdata,cases:[...cases],gapText,platform,ctypes:[...ctypes],scripts:{...scripts},result,sessionBugs:[...sessionBugs],coverageText,savedAt:Date.now()};
+    const snap={id:existing?.id||uid(),name,categoryId:categoryId||null,phase,sid,sdata,cases:[...cases],gapData,platform,ctypes:[...ctypes],scripts:{...scripts},result,sessionBugs:[...sessionBugs],coverageText,savedAt:Date.now()};
     if(existing){DB.savedStories=DB.savedStories.map(s=>s.sid===sid?snap:s);}
     else{DB.savedStories.unshift(snap);}
     saveDB(); if(refreshSaved)refreshSaved(); setHasSaved(true); setSaveModal(null); showToast("Session saved successfully");
@@ -868,7 +940,7 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
   const saveAndReset=()=>{
     if(sid&&sdata){
       const existing=DB.savedStories.find(s=>s.sid===sid);
-      const snap={id:existing?.id||uid(),name:existing?.name||(sdata?.summary||sid),phase,sid,sdata,cases:[...cases],gapText,platform,ctypes:[...ctypes],scripts:{...scripts},result,sessionBugs:[...sessionBugs],coverageText,savedAt:Date.now()};
+      const snap={id:existing?.id||uid(),name:existing?.name||(sdata?.summary||sid),phase,sid,sdata,cases:[...cases],gapData,platform,ctypes:[...ctypes],scripts:{...scripts},result,sessionBugs:[...sessionBugs],coverageText,savedAt:Date.now()};
       if(existing){DB.savedStories=DB.savedStories.map(s=>s.sid===sid?snap:s);}
       else{DB.savedStories.unshift(snap);}
       saveDB(); if(refreshSaved)refreshSaved();
@@ -876,7 +948,7 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
     reset();
   };
   const restoreStory=snap=>{
-    setSid(snap.sid);setSdata(snap.sdata);setPlatform(snap.platform);setCtypes(snap.ctypes||[]);setGapText(snap.gapText||"");setCases(snap.cases||[]);setScripts(snap.scripts||{web:"",ios:"",android:""});setResult(snap.result||null);setSessionBugs(snap.sessionBugs||[]);setCoverageText(snap.coverageText||"");setSelectedForScripts([]);setExecLines([]);setJKey(null);setBugDone(null);setShowBugForm(false);setFixed(false);setEditOn(false);setChat(false);setShowAddCase(false);
+    setSid(snap.sid);setSdata(snap.sdata);setPlatform(snap.platform);setCtypes(snap.ctypes||[]);setGapData(toGapData(snap.gapData||snap.gapText));setCases(snap.cases||[]);setScripts(snap.scripts||{web:"",ios:"",android:""});setResult(snap.result||null);setSessionBugs(snap.sessionBugs||[]);setCoverageText(snap.coverageText||"");setSelectedForScripts([]);setExecLines([]);setJKey(null);setBugDone(null);setShowBugForm(false);setFixed(false);setEditOn(false);setChat(false);setShowAddCase(false);
     const lastPhase=snap.phase||(snap.coverageText?"coverage":snap.result?"result":snap.cases?.some(c=>c.status==="approved")?"review":"ctype");
     setPhase(lastPhase);
   };
@@ -887,7 +959,7 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
   React.useEffect(()=>{
     if(!sid||!sdata)return;
     const existing=DB.savedStories.find(s=>s.sid===sid);
-    const snap={id:existing?.id||uid(),name:existing?.name||(sdata?.summary||sid),categoryId:existing?.categoryId||null,phase,sid,sdata,cases:[...cases],gapText,platform,ctypes:[...ctypes],scripts:{...scripts},result,sessionBugs:[...sessionBugs],coverageText,savedAt:Date.now()};
+    const snap={id:existing?.id||uid(),name:existing?.name||(sdata?.summary||sid),categoryId:existing?.categoryId||null,phase,sid,sdata,cases:[...cases],gapData,platform,ctypes:[...ctypes],scripts:{...scripts},result,sessionBugs:[...sessionBugs],coverageText,savedAt:Date.now()};
     if(existing){DB.savedStories=DB.savedStories.map(s=>s.sid===sid?snap:s);}
     else{DB.savedStories.unshift(snap);}
     saveDB();if(refreshSaved)refreshSaved();
@@ -1046,10 +1118,90 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
           </div>
         </div>}
 
-        {!loading&&phase==="gap"&&<div>
-          <div style={card}><div style={{display:"flex",gap:8,marginBottom:14,alignItems:"center"}}><Tag c="blue">{sid}</Tag><span style={{fontWeight:500}}>GAP Analysis</span></div><div style={{whiteSpace:"pre-wrap",fontSize:14,lineHeight:1.85}}>{gapText}</div></div>
-          <Confirm icon="📝" title="Would you like to write test cases?" onYes={()=>setPhase("ctype")} yesLabel="Yes, write test cases"/>
-        </div>}
+        {!loading&&phase==="gap"&&gapData&&(()=>{
+          if(gapData.legacy) return <div>
+            <div style={card}>
+              <div style={{display:"flex",gap:8,marginBottom:14,alignItems:"center",flexWrap:"wrap"}}>
+                <Tag c="blue">{sid}</Tag><span style={{fontWeight:500}}>GAP Analysis</span><Tag>legacy format</Tag>
+                <div style={{marginLeft:"auto",display:"flex",gap:8}}>
+                  <button onClick={()=>navigator.clipboard?.writeText(gapData.raw)} style={ghostBtn}>📋 Copy</button>
+                  <button onClick={()=>dlFile(gapData.raw,"GapAnalysis_"+sid+".txt")} style={ghostBtn}>⬇ Download</button>
+                </div>
+              </div>
+              <div style={{whiteSpace:"pre-wrap",fontSize:14,lineHeight:1.85}}>{gapData.raw}</div>
+            </div>
+            <Confirm icon="📝" title="Would you like to write test cases?" onYes={()=>setPhase("ctype")} yesLabel="Yes, write test cases"/>
+          </div>;
+
+          const sevColor=s=>s==="high"?"var(--color-text-danger)":s==="medium"?"var(--color-text-warning)":"var(--color-text-success)";
+          const sevTag=s=>s==="high"?"red":s==="medium"?"amber":"green";
+          const rank={high:0,medium:1,low:2};
+          const sortedGaps=[...(gapData.gaps||[])].sort((a,b)=>(rank[a.severity]??3)-(rank[b.severity]??3));
+          const acList=gapData.acReview||[]; const risksList=gapData.risks||[]; const recs=gapData.recommendations||[];
+          const cov=gapData.coverage||{};
+
+          return <div id="gap-print-area">
+            <div style={{...card,marginBottom:12}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:10}}>
+                <div style={{display:"flex",gap:8,alignItems:"center"}}><Tag c="blue">{sid}</Tag><span style={{fontWeight:600,fontSize:15}}>GAP Analysis</span></div>
+                <div className="no-pdf" style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                  <button onClick={()=>navigator.clipboard?.writeText(formatGapText(gapData))} style={ghostBtn}>📋 Copy</button>
+                  <button onClick={()=>dlFile(formatGapText(gapData),"GapAnalysis_"+sid+".txt")} style={ghostBtn}>⬇ Download .txt</button>
+                  <button onClick={()=>{const el=document.getElementById("gap-print-area");const btns=el.querySelectorAll(".no-pdf");btns.forEach(b=>b.style.display="none");html2pdf().set({margin:10,filename:`GapAnalysis_${sid}.pdf`,html2canvas:{scale:2,useCORS:true},jsPDF:{unit:"mm",format:"a4",orientation:"portrait"}}).from(el).save().then(()=>btns.forEach(b=>b.style.display=""));}} style={ghostBtn}>⬇ Download PDF</button>
+                  {proj?.jiraToken&&<button onClick={doPostGapToJira} style={ghostBtn}>🔗 Post to Jira</button>}
+                </div>
+              </div>
+              <div style={{fontSize:14,lineHeight:1.7,marginTop:12}}>{gapData.summary}</div>
+            </div>
+
+            <div style={card}>
+              <H2>✅ Acceptance Criteria Review</H2>
+              {acList.map((a,i)=><div key={i} style={{display:"flex",gap:10,padding:"8px 0",borderBottom:i<acList.length-1?"1px solid var(--color-border-tertiary)":"none"}}>
+                <span style={{fontSize:15,flexShrink:0,color:a.status==="clear"?"var(--color-text-success)":a.status==="missing"?"var(--color-text-danger)":"var(--color-text-warning)"}}>{a.status==="clear"?"✓":a.status==="missing"?"✗":"⚠"}</span>
+                <div style={{flex:1,fontSize:13}}><div>{a.text}</div>{a.note&&<div style={{color:"var(--color-text-secondary)",marginTop:2}}>{a.note}</div>}</div>
+              </div>)}
+              {acList.length===0&&<div style={{fontSize:13,color:"var(--color-text-tertiary)"}}>No acceptance criteria reviewed.</div>}
+            </div>
+
+            <div style={card}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,flexWrap:"wrap",gap:8}}>
+                <H2>🔍 GAP Analysis <span style={{fontSize:13,fontWeight:400,color:"var(--color-text-secondary)"}}>({sortedGaps.length})</span></H2>
+                {selGaps.length>0&&<Btn v="primary" onClick={()=>doGapCases(selGaps)}>📝 Generate test cases for {selGaps.length} selected gap{selGaps.length!==1?"s":""}</Btn>}
+              </div>
+              {sortedGaps.map(g=><label key={g.id} style={{display:"flex",gap:10,padding:12,marginBottom:8,borderRadius:8,cursor:"pointer",border:"1px solid var(--color-border-tertiary)",borderLeft:"3px solid "+sevColor(g.severity)}}>
+                <input type="checkbox" checked={selGaps.includes(g.id)} onChange={()=>setSelGaps(s=>s.includes(g.id)?s.filter(x=>x!==g.id):[...s,g.id])} style={{marginTop:2}}/>
+                <div style={{flex:1}}>
+                  <div style={{display:"flex",gap:6,marginBottom:4,flexWrap:"wrap",alignItems:"center"}}><Tag c={sevTag(g.severity)}>{g.severity}</Tag><Tag>{g.category||"Gap"}</Tag>{g.suggestedType&&<Tag c={tcol(g.suggestedType)}>{g.suggestedType}</Tag>}</div>
+                  <div style={{fontSize:13.5}}>{g.description}</div>
+                </div>
+              </label>)}
+              {sortedGaps.length===0&&<div style={{fontSize:13,color:"var(--color-text-tertiary)"}}>No gaps identified.</div>}
+            </div>
+
+            <div style={card}>
+              <H2>⚠️ Risk Areas</H2>
+              {risksList.map((r,i)=><div key={i} style={{display:"flex",gap:8,alignItems:"center",padding:"6px 0"}}><Tag c={sevTag(r.severity)}>{r.severity}</Tag><span style={{fontSize:13.5}}>{r.description}</span></div>)}
+              {risksList.length===0&&<div style={{fontSize:13,color:"var(--color-text-tertiary)"}}>No specific risks identified.</div>}
+            </div>
+
+            <div style={card}>
+              <H2>💡 Recommendations</H2>
+              <ul style={{margin:0,paddingLeft:20,fontSize:13.5,lineHeight:1.8}}>{recs.map((r,i)=><li key={i}>{r}</li>)}</ul>
+              {recs.length===0&&<div style={{fontSize:13,color:"var(--color-text-tertiary)"}}>No recommendations.</div>}
+            </div>
+
+            <div style={card}>
+              <H2>📊 Test Coverage Estimate</H2>
+              {[{l:"Happy flows",v:cov.happyPct,c:"#4caf50"},{l:"Edge cases",v:cov.edgePct,c:"#f59e0b"},{l:"Negative cases",v:cov.negativePct,c:"#ef4444"},{l:"Automation",v:cov.automationPct,c:"#8b5cf6"}].map(b=><div key={b.l} style={{marginBottom:10}}>
+                <div style={{display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:4}}><span>{b.l}</span><span style={{fontWeight:600}}>{b.v??0}%</span></div>
+                <div style={{height:10,background:"var(--color-border-tertiary)",borderRadius:5,overflow:"hidden"}}><div style={{height:"100%",width:(b.v??0)+"%",background:b.c,borderRadius:5}}/></div>
+              </div>)}
+              {cov.note&&<div style={{fontSize:12,color:"var(--color-text-secondary)",marginTop:4}}>{cov.note}</div>}
+            </div>
+
+            <Confirm icon="📝" title="Would you like to write test cases?" onYes={()=>setPhase("ctype")} yesLabel="Yes, write test cases"/>
+          </div>;
+        })()}
 
         {!loading&&phase==="ctype"&&<div style={card}>
           <div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:16}}>Story: <b>{sid}</b></div><H2>Which test case types?</H2>
@@ -1440,7 +1592,7 @@ const [phase,setPhase]=useState(()=>{ const ps=DB.assignments.filter(x=>x.member
       {phase!=="input"&&<div style={{width:290,flexShrink:0,display:chat?"flex":"none",flexDirection:"column",height:"calc(100vh - 120px)",position:"sticky",top:0}}>
         <div style={{...card,flex:1,display:"flex",flexDirection:"column",overflow:"hidden",padding:16}}>
           <div style={{fontWeight:500,fontSize:14,marginBottom:12,display:"flex",alignItems:"center",gap:8}}>🤖 QA Assistant <Tag c="blue">{sid}</Tag></div>
-          <div style={{flex:1,overflow:"auto"}}><AIChat proj={proj} sid={sid} sdata={sdata} cases={cases} gapText={gapText} result={result} sessionBugs={sessionBugs} coverageText={coverageText} platform={platform}/></div>
+          <div style={{flex:1,overflow:"auto"}}><AIChat proj={proj} sid={sid} sdata={sdata} cases={cases} gapData={gapData} result={result} sessionBugs={sessionBugs} coverageText={coverageText} platform={platform}/></div>
         </div>
       </div>}
     </div>
