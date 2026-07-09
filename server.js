@@ -342,13 +342,92 @@ function collectRepoContext(dir) {
 }
 
 /* ── Claude AI (via Claude CLI — no API key required) ───────────────────── */
+/* == Claude CLI resolver ==================================================
+ * Locates the Claude CLI dynamically instead of assuming a hard-coded
+ * install path, so the platform works on any machine regardless of how
+ * Node/npm/Claude Code were installed.
+ *
+ * Resolution order:
+ *   1. CLAUDE_CLI_PATH environment variable (explicit override)
+ *   2. Every directory on the system PATH (same lookup the shell does)
+ *   3. Known common install locations (npm default, ZIP installs, native installer)
+ *
+ * The result is cached after the first successful lookup. Every step is
+ * logged with the [AI] prefix so failures are diagnosable from the console.
+ */
+let _claudeCliPath = null;
+
+function resolveClaudeCli(forceRefresh = false) {
+  if (_claudeCliPath && !forceRefresh) return _claudeCliPath;
+  const isWin = process.platform === 'win32';
+  const found = (how, p) => {
+    console.log(`[AI]   Claude CLI found (${how}): ${p}`);
+    _claudeCliPath = p;
+    return p;
+  };
+
+  // 1. Explicit override
+  const override = process.env.CLAUDE_CLI_PATH;
+  if (override) {
+    if (fs.existsSync(override)) return found('CLAUDE_CLI_PATH override', override);
+    console.warn(`[AI]   CLAUDE_CLI_PATH is set but no file exists there: ${override} - falling back to PATH search`);
+  }
+
+  // 2. Search the system PATH the same way the shell does
+  const names = isWin ? ['claude.cmd', 'claude.exe', 'claude.bat'] : ['claude'];
+  const pathDirs = (process.env.PATH || '').split(path.delimiter).filter(Boolean);
+  for (const dir of pathDirs) {
+    for (const name of names) {
+      const candidate = path.join(dir, name);
+      try { if (fs.existsSync(candidate)) return found('on PATH', candidate); } catch {}
+    }
+  }
+
+  // 3. Known common install locations
+  const home = os.homedir();
+  const candidates = isWin
+    ? [
+        process.env.APPDATA ? path.join(process.env.APPDATA, 'npm', 'claude.cmd') : null, // npm default (MSI Node)
+        'C:\\nodejs\\claude.cmd',                                                     // npm global with ZIP-installed Node
+        path.join(home, '.local', 'bin', 'claude.exe'),                                   // native installer
+      ]
+    : [
+        '/usr/local/bin/claude',
+        path.join(home, '.local', 'bin', 'claude'),      // native installer
+        path.join(home, '.claude', 'bin', 'claude'),     // native installer (alt)
+        path.join(home, '.npm-global', 'bin', 'claude'), // common npm prefix
+        '/usr/bin/claude',
+      ];
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    try { if (fs.existsSync(candidate)) return found('known location', candidate); } catch {}
+  }
+
+  console.error(`[AI]   Claude CLI NOT FOUND - searched CLAUDE_CLI_PATH, ${pathDirs.length} PATH directories, and ${candidates.filter(Boolean).length} known locations.`);
+  console.error('[AI]   Fix: install with "npm install -g @anthropic-ai/claude-code", or set CLAUDE_CLI_PATH to the full path of the claude executable.');
+  return null;
+}
+
+/* Builds the [command, args] pair to spawn the CLI portably.
+ * Windows .cmd/.bat files cannot be spawned directly with shell:false -
+ * they must run through cmd /c. Real executables spawn directly. */
+function claudeSpawnSpec(cliPath, cliArgs) {
+  const needsCmdShell = process.platform === 'win32' && /\.(cmd|bat)$/i.test(cliPath);
+  return needsCmdShell
+    ? { cmd: 'cmd', args: ['/c', cliPath, ...cliArgs] }
+    : { cmd: cliPath, args: cliArgs };
+}
+
+const CLAUDE_CLI_MISSING_MSG =
+  'AI engine is not available: the Claude CLI was not found on this machine. ' +
+  'Install it with "npm install -g @anthropic-ai/claude-code" and sign in by running "claude", ' +
+  'or set the CLAUDE_CLI_PATH environment variable. See the server console for details.';
+
 function callClaude(messages, system, maxTokens=4000) {
   return new Promise((resolve, reject) => {
     const fullPrompt = messages.map(m =>
       (m.role === 'user' ? 'Human' : 'Assistant') + ': ' + m.content
     ).join('\n\n');
-    const isWin = process.platform === 'win32';
-    const claudeCmd = isWin ? 'cmd' : 'claude';
     // --allowedTools "" disables every built-in tool (Write/Edit/Bash/Read/...) — without it, the
     // CLI can decide on its own to try editing a file in its cwd, hit a permission gate it can't
     // resolve headlessly, and dump the resulting "I need permission to write it..." dialogue into
@@ -360,12 +439,13 @@ function callClaude(messages, system, maxTokens=4000) {
     // correctly refuse the entire request on sight when it spots that pattern, especially once
     // real repo source is also in the prompt (from the attached-project feature) making the whole
     // thing look like an injection test case rather than a legitimate instruction.
+    const cliPath = resolveClaudeCli();
+    if (!cliPath) { reject(new Error(CLAUDE_CLI_MISSING_MSG)); return; }
     const baseArgs = ['-p', '--output-format', 'text', '--effort', 'low', '--strict-mcp-config', '--mcp-config', EMPTY_MCP, '--allowedTools', ''];
     if (system) baseArgs.push('--system-prompt', system);
-    const claudeArgs = isWin
-      ? ['/c', process.env.APPDATA + '\\npm\\claude.cmd', ...baseArgs]
-      : baseArgs;
-    const proc = spawn(claudeCmd, claudeArgs, { shell: false, env: process.env });
+    const { cmd, args } = claudeSpawnSpec(cliPath, baseArgs);
+    console.log('[AI]   Spawning Claude CLI:', cliPath);
+    const proc = spawn(cmd, args, { shell: false, env: process.env });
     let output = '', error = '';
     proc.stdin.write(fullPrompt);
     proc.stdin.end();
@@ -448,7 +528,8 @@ function downloadImageUrl(imageUrl) {
 function callClaudeWithImages(prompt, imagePaths = []) {
   return new Promise((resolve, reject) => {
     const isWin = process.platform === 'win32';
-    const claudeExe = isWin ? (process.env.APPDATA + '\\npm\\claude.cmd') : 'claude';
+    const cliPath = resolveClaudeCli();
+    if (!cliPath) { reject(new Error(CLAUDE_CLI_MISSING_MSG)); return; }
     const mcpFlags = ['--strict-mcp-config', '--mcp-config', EMPTY_MCP];
     const baseArgs = ['-p', '--verbose', '--output-format', 'stream-json', '--input-format', 'stream-json', '--effort', 'low', ...mcpFlags];
     // Build stream-json message with images
@@ -466,10 +547,9 @@ function callClaudeWithImages(prompt, imagePaths = []) {
     // Write to temp file then stream into stdin to handle large image data
     const tmpInput = path.join(os.tmpdir(), 'qa_claude_in_' + crypto.randomBytes(6).toString('hex') + '.json');
     fs.writeFileSync(tmpInput, msgJson + '\n', 'utf8');
-    const claudeArgs = isWin
-      ? ['/c', claudeExe, ...baseArgs]
-      : baseArgs;
-    const proc = spawn(isWin ? 'cmd' : 'claude', claudeArgs, { shell: false, env: process.env });
+    const { cmd, args } = claudeSpawnSpec(cliPath, baseArgs);
+    console.log('[AI]   Spawning Claude CLI (vision):', cliPath);
+    const proc = spawn(cmd, args, { shell: false, env: process.env });
     let output = '', error = '';
     proc.stdout.on('data', d => output += d.toString());
     proc.stderr.on('data', d => error  += d.toString());
@@ -1920,6 +2000,9 @@ server.listen(PORT, () => {
   console.log('  Perf → http://localhost:' + PORT + '/api/perf');
   console.log('');
   console.log('  Open http://localhost:' + PORT + '/ in your browser.');
+  const cliAtBoot = resolveClaudeCli();
+  if (cliAtBoot) console.log('  AI engine: Claude CLI ready (' + cliAtBoot + ')');
+  else console.warn('  AI engine: NOT AVAILABLE - AI features will fail until the Claude CLI is installed (see [AI] messages above).');
   console.log('  Press Ctrl+C to stop.');
   console.log('');
 });
