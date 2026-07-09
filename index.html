@@ -281,6 +281,33 @@ function dlFile(content, name, mime="text/plain") {
   a.href = URL.createObjectURL(new Blob([content],{type:mime}));
   a.download = name; a.click();
 }
+function toGapData(v) {
+  if (!v) return null;
+  return typeof v === "string" ? { legacy:true, raw:v } : v;
+}
+function formatGapText(gapData) {
+  if (!gapData) return "";
+  if (gapData.legacy) return gapData.raw || "";
+  const sevIcon = s => s==="high"?"🔴":s==="medium"?"🟡":"🟢";
+  const acIcon = s => s==="clear"?"✓":s==="missing"?"✗":"⚠";
+  const lines = [];
+  lines.push("📋 Story Summary:", gapData.summary||"", "");
+  lines.push("✅ Acceptance Criteria Review:");
+  (gapData.acReview||[]).forEach(a=>lines.push(`${acIcon(a.status)} ${a.text}${a.note?" — "+a.note:""}`));
+  lines.push("", "🔍 GAP Analysis:");
+  (gapData.gaps||[]).forEach(g=>lines.push(`${sevIcon(g.severity)} [${g.category||"Gap"}] ${g.description}`));
+  lines.push("", "⚠️ Risk Areas:");
+  (gapData.risks||[]).forEach(r=>lines.push(`${sevIcon(r.severity)} ${r.description}`));
+  lines.push("", "💡 Recommendations:");
+  (gapData.recommendations||[]).forEach(r=>lines.push("- "+r));
+  if (gapData.coverage) {
+    const c = gapData.coverage;
+    lines.push("", "📊 Test Coverage Estimate:",
+      `Happy flows: ${c.happyPct??"—"}% · Edge cases: ${c.edgePct??"—"}% · Negative cases: ${c.negativePct??"—"}% · Automation: ${c.automationPct??"—"}%`);
+    if (c.note) lines.push(c.note);
+  }
+  return lines.join("\n").trim();
+}
 function exportCSV(cases, sid) {
   const h = ["ID","Title","Type","Preconditions","Steps","Expected","Platform","Automatable"];
   const rows = cases.filter(c=>c.status==="approved").map(c=>[
@@ -712,7 +739,7 @@ function htmlToMd(html){
 }
 
 /* ─── AI Chat ─────────────────────────────────────────────────────────────── */
-function AIChat({proj,sid,sdata,cases=[],gapText="",result=null,sessionBugs=[],coverageText="",platform=""}) {
+function AIChat({proj,sid,sdata,cases=[],gapData=null,result=null,sessionBugs=[],coverageText="",platform=""}) {
   const [msgs,setMsgs]=useState([{role:"assistant",text:"Hi! I can see your full story, test cases, execution results and bugs. Ask me anything!"}]);
   const [msg,setMsg]=useState(""); const [busy,setBusy]=useState(false);
   const [jiraCtx,setJiraCtx]=useState("");
@@ -795,7 +822,7 @@ function AIChat({proj,sid,sdata,cases=[],gapText="",result=null,sessionBugs=[],c
 
       // Build workspace context from current session data
       const storySection=sdata?`USER STORY:\n  ID: ${sid}\n  Summary: ${sdata.summary||""}\n  Description: ${sdata.description||sdata.rawText||""}\n  Platform: ${platform}`:sid?`Story ID: ${sid}`:"No story loaded yet.";
-      const gapSection=gapText?`GAP ANALYSIS:\n${gapText}`:"";
+      const gapSection=gapData?`GAP ANALYSIS:\n${formatGapText(gapData)}`:"";
       const casesSection=cases.length>0?`TEST CASES (${cases.length} total):\n${cases.map(c=>`  [${c.status?.toUpperCase()||"PENDING"}] ${c.id} (${c.type}): ${c.title}${c.steps?.length?"\n    Steps: "+c.steps.join(" → "):""}`).join("\n")}`:"No test cases yet.";
       const resultSection=result?`EXECUTION RESULTS:\n  Total: ${result.total} | Passed: ${result.pass?.length||0} | Failed: ${result.fail?.length||0}\n  Passed: ${(result.pass||[]).join(", ")||"none"}\n  Failed: ${(result.fail||[]).join(", ")||"none"}`:"No execution results yet.";
       const bugsSection=sessionBugs.length>0?`BUGS FILED (${sessionBugs.length}):\n${sessionBugs.map(b=>`  ${b.bid} [${b.sev}]: ${b.summary}${b.jKey?" → "+b.jKey:""}`).join("\n")}`:"No bugs filed yet.";
@@ -1397,7 +1424,7 @@ function Workspace({member,refreshSaved,restoreTarget,clearRestore,onActiveSid,o
 const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); const [sdata,setSdata]=useState(null);
   const [platform,setPlatform]=useState("web"); const [ctypes,setCtypes]=useState([]);
   const [readyFilter,setReadyFilter]=useState("all");
-  const [gapText,setGapText]=useState(""); const [cases,setCases]=useState([]);
+  const [gapData,setGapData]=useState(null); const [cases,setCases]=useState([]);
   const [needsClarification,setNeedsClarification]=useState([]);
   const [coverageSummary,setCoverageSummary]=useState("");
   const [editOn,setEditOn]=useState(false); const [scripts,setScripts]=useState({web:"",ios:"",android:""});
@@ -1411,6 +1438,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
   const [selectedForScripts,setSelectedForScripts]=useState([]); const [coverageText,setCoverageText]=useState(""); const [sessionBugs,setSessionBugs]=useState([]); const [appUrl,setAppUrl]=useState("");
   const [codegenSessionId,setCodegenSessionId]=useState(null); const [codegenScript,setCodegenScript]=useState(""); const [codegenStatus,setCodegenStatus]=useState("idle");
   const [attachCheck,setAttachCheck]=useState(null); const [attachStatus,setAttachStatus]=useState("idle"); const [autoExecute,setAutoExecute]=useState(false); const [forceManual,setForceManual]=useState(false);
+  const [selGaps,setSelGaps]=useState([]);
   const [scriptCache,setScriptCache]=useState({});
   const [showFullStory,setShowFullStory]=useState(false);
   const [editingBugId,setEditingBugId]=useState(null); const [editBugForm,setEditBugForm]=useState({});
@@ -1519,7 +1547,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
       if(!s||s.phase==="input"||s.phase==="testType")return;
       const restoredPhase=s.phase==="running"?(s.result?"result":"scripts"):s.phase;
       setPhase(restoredPhase);setTestKind(s.testKind||"functional");setSid(s.sid||"");setSdata(s.sdata||null);setPlatform(s.platform||"web");
-      setCtypes(s.ctypes||[]);setGapText(s.gapText||"");setCases(s.cases||[]);
+      setCtypes(s.ctypes||[]);setGapData(toGapData(s.gapData||s.gapText));setCases(s.cases||[]);
       setScripts(s.scripts||{web:"",ios:"",android:""});setTab(s.tab||"web");
       setResult(s.result||null);setExecLines(s.execLines||[]);
       setCoverageText(s.coverageText||"");setSessionBugs(s.sessionBugs||[]);
@@ -1543,10 +1571,10 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
   // Save workspace state on every change
   useEffect(()=>{
     if(phase==="input"||phase==="testType"){localStorage.removeItem(WS_SNAP);return;}
-    try{localStorage.setItem(WS_SNAP,JSON.stringify({phase,testKind,sid,sdata,platform,ctypes,gapText,cases,scripts,tab,result,execLines,coverageText,sessionBugs,selectedForScripts,appUrl,uidForm,uidCases,uidVisualResult,uidFigmaImg,uidManualFigmaImg,uidJiraTicketKey,uidStoryId,uidScript,uidDemandName,uidSelectedForScript,uidJiraMode,uidStoryRequirements,uidStoryFiles,uidSvgFiles}));}catch{}
+    try{localStorage.setItem(WS_SNAP,JSON.stringify({phase,testKind,sid,sdata,platform,ctypes,gapData,cases,scripts,tab,result,execLines,coverageText,sessionBugs,selectedForScripts,appUrl,uidForm,uidCases,uidVisualResult,uidFigmaImg,uidManualFigmaImg,uidJiraTicketKey,uidStoryId,uidScript,uidDemandName,uidSelectedForScript,uidJiraMode,uidStoryRequirements,uidStoryFiles,uidSvgFiles}));}catch{}
     // Also keep per-story cache up to date
-    if(sid&&sdata)saveStoryToCache(sid,{phase,sdata,platform,ctypes,gapText,cases,needsClarification,scripts,result,sessionBugs,coverageText,appUrl});
-  },[phase,sid,sdata,platform,ctypes,gapText,cases,scripts,tab,result,execLines,coverageText,sessionBugs,selectedForScripts,appUrl,uidCases,uidVisualResult,uidJiraTicketKey,uidStoryId,uidScript,uidDemandName,uidSelectedForScript,uidJiraMode,uidStoryRequirements,uidStoryFiles,uidSvgFiles]);
+    if(sid&&sdata)saveStoryToCache(sid,{phase,sdata,platform,ctypes,gapData,cases,needsClarification,scripts,result,sessionBugs,coverageText,appUrl});
+  },[phase,sid,sdata,platform,ctypes,gapData,cases,scripts,tab,result,execLines,coverageText,sessionBugs,selectedForScripts,appUrl,uidCases,uidVisualResult,uidJiraTicketKey,uidStoryId,uidScript,uidDemandName,uidSelectedForScript,uidJiraMode,uidStoryRequirements,uidStoryFiles,uidSvgFiles]);
 
   // Poll codegen session status while recording
   useEffect(()=>{
@@ -1615,7 +1643,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
   const confirmSwitch=()=>{
     if(sid&&sdata){
       const existing=DB.savedStories.find(s=>s.sid===sid);
-      const snap={id:existing?.id||uid(),name:existing?.name||(sdata?.summary||sid),categoryId:existing?.categoryId||null,phase,sid,sdata,cases:[...cases],gapText,platform,ctypes:[...ctypes],scripts:{...scripts},result,sessionBugs:[...sessionBugs],coverageText,selectedForScripts:[...selectedForScripts],appUrl,savedAt:Date.now()};
+      const snap={id:existing?.id||uid(),name:existing?.name||(sdata?.summary||sid),categoryId:existing?.categoryId||null,phase,sid,sdata,cases:[...cases],gapData,platform,ctypes:[...ctypes],scripts:{...scripts},result,sessionBugs:[...sessionBugs],coverageText,selectedForScripts:[...selectedForScripts],appUrl,savedAt:Date.now()};
       if(existing){DB.savedStories=DB.savedStories.map(s=>s.sid===sid?snap:s);}else{DB.savedStories.unshift(snap);}
       saveDB();if(refreshSaved)refreshSaved();
     }
@@ -1655,7 +1683,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
   const doFetch=async()=>{
     // Save current story state before switching to a new one
     if(sdata?.key && sdata.key!==sid){
-      saveStoryToCache(sdata.key,{phase,sdata,platform,ctypes,gapText,cases,needsClarification,scripts,result,sessionBugs,coverageText,appUrl});
+      saveStoryToCache(sdata.key,{phase,sdata,platform,ctypes,gapData,cases,needsClarification,scripts,result,sessionBugs,coverageText,appUrl});
     }
     setLoading(true); setLmsg("Fetching story from Jira…"); setFetchError(""); setShowFullStory(false);
     // Check per-story cache first — if we have state for this story, restore it immediately
@@ -1663,7 +1691,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
     if(cached&&cached.sdata){
       setSdata(cached.sdata);
       setPlatform(cached.platform||proj?.platform||"web");
-      setGapText(cached.gapText||"");
+      setGapData(toGapData(cached.gapData||cached.gapText));
       setCases(cached.cases||[]);
       setNeedsClarification(cached.needsClarification||[]);
       setCtypes(cached.ctypes||[]);
@@ -1692,7 +1720,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
       const {flds,desc}=extractDesc(d);
       const sd={key:d.key,summary:flds.summary||sid,description:desc,labels:flds.labels||[],type:flds.issuetype?.name||"Story",status:flds.status?.name||"",assignee:flds.assignee?.displayName||"—",priority:flds.priority?.name||"Medium",comments};
       setSdata(sd); const pp=proj.platform||"web"; setPlatform(pp==="both"?"web":pp);
-      setGapText(""); setCases([]); setCtypes([]); setNeedsClarification([]); setCoverageSummary(""); setResult(null); setSessionBugs([]); setCoverageText(""); setAppUrl("");
+      setGapData(null); setCases([]); setCtypes([]); setNeedsClarification([]); setCoverageSummary(""); setResult(null); setSessionBugs([]); setCoverageText(""); setAppUrl("");
       setPhase("mode"); setLoading(false);
     } catch(e) {
       if(jiraConfigured){
@@ -1704,7 +1732,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
       }
       setSdata({key:sid,summary:"Story "+sid,description:"",labels:[],type:"Story",status:"In Progress",assignee:"—",priority:"Medium",sim:true});
       const pp=proj?.platform||"web"; setPlatform(pp==="both"?"web":pp);
-      setGapText(""); setCases([]); setCtypes([]); setNeedsClarification([]); setCoverageSummary(""); setResult(null); setSessionBugs([]); setCoverageText(""); setAppUrl("");
+      setGapData(null); setCases([]); setCtypes([]); setNeedsClarification([]); setCoverageSummary(""); setResult(null); setSessionBugs([]); setCoverageText(""); setAppUrl("");
       setPhase("mode"); setLoading(false);
     }
   };
@@ -1734,161 +1762,48 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
     const storyBlock=sdata&&!sdata.sim
       ?`STORY TITLE: ${sdata.summary}\nDESCRIPTION (${descLen} characters):\n${desc.slice(0,20000)}${commentsCtx}`
       :`STORY TITLE: Simulated ${platform} feature\nDESCRIPTION:\nAs a user I want to perform a core action so that I gain value.\nAcceptance Criteria:\n1. The feature works on valid input.\n2. Errors are shown for invalid input.\n3. The UI is responsive.`;
-
-    const GAP_PROMPT=`You are a QA Gap Analysis Agent specialized in analyzing user stories that have already been fetched from Jira by the application.
-
-The story content below was retrieved directly from Jira. Your task is to analyze it following the 5-step process below.
-
-${storyMeta}
-${storyBlock}
-
-== STEP 1: ACKNOWLEDGE WHAT YOU RECEIVED ==
-Start your response with this header block (fill in the actual values):
-
-STORY FETCHED: ${sid}
-TITLE: [the actual story title from the content above]
-DESCRIPTION LENGTH: ${descLen} characters
-LANGUAGE DETECTED: [Arabic / English / Mixed — based on the actual description text above]
-
-== STEP 2: CONTENT VALIDATION ==
-Before analyzing, verify ALL of the following:
-- The description is NOT empty and is longer than 100 characters
-- The story references a real actor with a specific role (not just "a user" with no context)
-- There is at least one acceptance criterion
-- The description references real domain concepts (not generic placeholders like "performs a core action", "valid input works", "receives value")
-
-If ANY check fails, respond with:
-"CONTENT VALIDATION FAILED: [which check failed and why]. Gap analysis cannot proceed."
-Then STOP. Do not produce a gap analysis.
-
-Only continue to Steps 3-5 if ALL checks pass.
-
-== STEP 3: LANGUAGE HANDLING ==
-Read the story content in its ORIGINAL language — never skip or ignore Arabic text.
-- Arabic only → translate to English for analysis, then output BOTH Arabic and English versions
-- English only → output BOTH English and Arabic versions (translate the Arabic output yourself)
-- Mixed → read as-is, output BOTH English and Arabic versions
-
-CRITICAL: Every field — title, description, acceptance criteria, comments — must be fully read, regardless of whether it is in Arabic or English.
-
-== STEP 4: GAP ANALYSIS ==
-Analyze only the actual story content above. Do NOT fabricate or invent gaps.
-Every gap you report MUST quote or reference a specific phrase, section, or AC number from the story.
-
-Reasoning process (mandatory — do not skip):
-A. Extract every defined behavior, rule, and AC from the story. This is your ground truth.
-B. For each potential gap, ask: "Is this behavior actually stated anywhere?" → If yes, discard it.
-C. For each surviving gap, read every comment: does any comment resolve it? → If yes, discard. If partially, narrow the gap.
-D. Output only gaps that survived B and C.
-
-Analysis checklist (examine each category):
-1. FUNCTIONAL: Missing user flows, undefined success/failure behaviors
-2. DATA VALIDATION: Missing field constraints, formats, lengths, required vs optional
-3. ERROR HANDLING: Error messages, recovery paths, failure scenarios
-4. ROLES AND PERMISSIONS: Access control for each user role mentioned
-5. EDGE CASES: Boundary conditions, empty states, concurrent actions, session expiry
-6. INTEGRATION: External systems, APIs, notifications — behaviors defined?
-7. SECURITY: Token handling, session management, authorization bypasses, OAuth/PKCE gaps
-8. UI AND UX: Loading states, empty states, confirmation dialogs, responsive behavior
-9. NAVIGATION: Back button, refresh, direct URL, browser history
-10. DEVICE AND ENVIRONMENT: Mobile app dependency, OS differences, fallback behavior
-11. DOMAIN-SPECIFIC: Apply domain knowledge (Saudi gov, Nafath, payment flows, etc.) to detect gaps the story author assumed but did not write
-
-== STEP 5: PRODUCE OUTPUT IN BOTH LANGUAGES ==
-Write in plain text only. No **, no ##, no ---, no backticks, no > quotes. Use CAPS for section titles. Use numbered lists. Keep the === dividers exactly as shown.
-
-=== ENGLISH VERSION ===
-
-STORY FETCHED: ${sid}
-TITLE: [actual title]
-DESCRIPTION LENGTH: ${descLen} characters
-LANGUAGE DETECTED: [detected language]
-
-STORY SUMMARY:
-[2-3 sentences describing what this story actually does, based strictly on the content above]
-
-COMMENTS AUDIT:
-[For each gap discarded because a comment resolved it:]
-DISCARDED: [Gap title] — resolved by Comment [N] by [author]: [what was clarified]
-[If none discarded: No gaps were invalidated by comments.]
-
-REAL GAPS FOUND:
-GAP [N]: [Gap Title]
-Category: [Functional / Data Validation / Error Handling / Roles and Permissions / Edge Cases / Integration / Security / UI and UX / Navigation and Browser Behavior / Device and Environment]
-Section reference: [Exact quote or AC number from the story]
-What is missing: [Specific description]
-Impact on testing: [Concrete testing impact]
-Risk: [HIGH / MEDIUM / LOW]
-Risk justification: [One sentence]
-Blocked test cases: Estimate: [N] — [rationale]
-
-[If no gaps: No gaps found — story is complete for QA.]
-
-QUESTIONS FOR THE BA:
-Q[N]: [Direct question to resolve GAP [N]]
-
-ACs THAT NEED CLARIFICATION:
-| AC | What Is Unclear |
-|----|-----------------|
-[One row per ambiguous AC. If all clear: All ACs are clearly defined.]
-
-OVERALL STORY READINESS FOR QA:
-[Ready / Needs minor clarification / Needs major clarification / Not ready]
-[One sentence explaining the main reason]
-
-=== النسخة العربية ===
-
-القصة المُجلَبة: ${sid}
-العنوان: [العنوان الفعلي]
-طول الوصف: ${descLen} حرفاً
-اللغة المكتشفة: [اللغة المكتشفة]
-
-ملخص القصة:
-[2-3 جمل تصف ما تفعله هذه القصة بالفعل، استناداً فقط إلى المحتوى أعلاه]
-
-مراجعة التعليقات:
-[لكل ثغرة تم استبعادها لأن تعليقاً حلّها:]
-مستبعد: [عنوان الثغرة] — حُسم في تعليق [رقم] بواسطة [الكاتب]: [ما تم توضيحه]
-[إذا لم تُستبعد أي ثغرات: لم تُلغَ أي ثغرات بسبب التعليقات.]
-
-الثغرات الحقيقية المكتشفة:
-الثغرة [رقم]: [عنوان الثغرة]
-الفئة: [وظيفية / التحقق من البيانات / معالجة الأخطاء / الأدوار والصلاحيات / الحالات الحدية / التكامل / الأمن / واجهة المستخدم / التنقل / البيئة والأجهزة]
-مرجع القسم: [اقتباس أو رقم معيار القبول من القصة]
-ما هو غائب: [وصف تفصيلي]
-الأثر على الاختبار: [التأثير الملموس]
-درجة الخطر: [مرتفعة / متوسطة / منخفضة]
-تبرير درجة الخطر: [جملة واحدة]
-حالات الاختبار المحجوبة: تقدير: [العدد] — [المبرر]
-
-[إذا لم تكن هناك ثغرات: لا ثغرات مكتشفة — القصة مكتملة للاختبار.]
-
-أسئلة لمحلل الأعمال:
-س[رقم]: [سؤال مباشر لحل الثغرة رقم [N]]
-
-معايير القبول التي تحتاج توضيح:
-| معيار القبول | ما هو غير واضح |
-|---------|----------------|
-[صف لكل معيار غامض. إذا كانت جميعها واضحة: جميع معايير القبول محددة بوضوح.]
-
-جاهزية القصة للاختبار:
-[جاهزة / تحتاج توضيحات بسيطة / تحتاج توضيحات جوهرية / غير جاهزة]
-[جملة واحدة تشرح السبب الرئيسي]`;
-
+    const header=`You are a senior QA engineer. All data is provided below — do NOT access Jira or any external service. Perform a thorough, specific story review using ONLY the text below.\n\n${storyMeta}\n${storyBlock}`;
+    const parseJSON=(r,label)=>{
+      const match=r.replace(/```json|```/g,"").trim().match(/\{[\s\S]*\}/);
+      if(!match) throw new Error("Invalid GAP analysis response ("+label+"). Make sure server.js is running.");
+      return JSON.parse(match[0]);
+    };
     try {
-      const r=await callAI([{role:"user",content:GAP_PROMPT}],SYS,8000,"");
-      // Clean up markdown formatting but preserve === section dividers and Arabic text
-      setGapText(r
-        .replace(/\*{1,3}([^*]+)\*{1,3}/g,"$1")
-        .replace(/^#{1,6}\s*/gm,"")
-        .replace(/^[-─]{3,}(?!\|)(?!=)\s*$/gm,"")
-        .replace(/^>\s*/gm,"")
-        .replace(/`([^`]*)`/g,"$1")
-        .trim());
+      // Split into two independent calls run in parallel — same instructions and rigor as
+      // a single call, but each generates less output so wall-clock time is ~halved.
+      const [r1,r2]=await Promise.all([
+        callAI([{role:"user",content:`${header}\n\nINSTRUCTIONS:\n1. In acReview, address EACH acceptance criterion individually by paraphrasing it in "text" — do not merge multiple ACs into one entry, do not write generic filler.\n2. coverage percentages are your estimate of how much of the required testing is covered by what's already specified in the story (0-100).\n\nReturn ONLY valid JSON (no markdown fences, no prose before or after) matching exactly this shape:\n{"summary":"2-3 sentence summary of the story","acReview":[{"text":"...","status":"clear|unclear|missing","note":"..."}],"coverage":{"happyPct":0,"edgePct":0,"negativePct":0,"automationPct":0,"note":"short note"}}`}],SYS,2000,""),
+        callAI([{role:"user",content:`${header}\n\nINSTRUCTIONS:\n1. In gaps, list every concrete missing scenario, boundary condition, or untested area you can find — each must be a specific, testable scenario (e.g. "No validation shown when file exceeds 10MB upload limit"), never a vague statement like "edge cases should be considered". Give each gap a severity and a suggestedType which is the single most fitting test case type for covering it.\n2. In risks, list concrete product/technical risks distinct from the gaps (e.g. data loss, security, performance, integration).\n3. recommendations must be actionable steps to improve the STORY itself (missing info to request, ACs to clarify), not generic QA advice.\n\nReturn ONLY valid JSON (no markdown fences, no prose before or after) matching exactly this shape:\n{"gaps":[{"category":"Missing scenario|Boundary condition|Untested area|...","severity":"high|medium|low","suggestedType":"happy|edge|negative","description":"..."}],"risks":[{"description":"...","severity":"high|medium|low"}],"recommendations":["...","..."]}`}],SYS,3500,"")
+      ]);
+      const merged={...parseJSON(r1,"summary/AC review"),...parseJSON(r2,"gaps/risks")};
+      merged.gaps=(merged.gaps||[]).map((g,i)=>({id:g.id||"gap-"+(i+1),...g}));
+      setGapData(merged);
       setPhase("gap");
     } catch(e){alert(e.message);}
     setLoading(false);
   };
+
+  const doGapCases=async(gapIds)=>{
+    if(!gapData||gapData.legacy)return;
+    const selected=(gapData.gaps||[]).filter(g=>gapIds.includes(g.id));
+    if(selected.length===0)return;
+    setLoading(true); setLmsg("Generating test cases for "+selected.length+" gap(s)…");
+    try {
+      const r=await callAI([{role:"user",content:`You are a QA engineer. For story ${sid} (${proj.jiraProjKey}), platform ${platform}, generate ONE precise test case for EACH gap listed below, addressing exactly what that gap describes. Use each gap's suggested type as the test case "type".\n\nGaps:\n${selected.map((g,i)=>`${i+1}. [${g.suggestedType||"edge"}] ${g.description}`).join("\n")}\n\nMark automatable:false ONLY for offline/camera/biometrics/hardware tests.\n\nReturn ONLY a valid JSON array (no markdown, no explanation), one entry per gap in the same order:\n[{"title":"...","type":"happy|edge|negative","platform":"${platform}","preconditions":"...","steps":["Step 1","Step 2"],"expected":"...","automatable":true}]`}],SYS,3000,"");
+      const match=r.replace(/```json|```/g,"").trim().match(/\[[\s\S]*\]/);
+      if(!match) throw new Error("Invalid response generating cases from gaps. Make sure server.js is running.");
+      const rawNew=JSON.parse(match[0]).map(c=>({...c,status:"pending"}));
+      setCases(cs=>{
+        const merged=[...cs,...rawNew];
+        return merged.map((c,i)=>({...c,id:"TC-"+String(i+1).padStart(3,"0")}));
+      });
+      setSelGaps([]);
+      setPhase("ready");
+      showToast(rawNew.length+" test case"+(rawNew.length!==1?"s":"")+" added from selected gaps");
+    } catch(e){alert(e.message);}
+    setLoading(false);
+  };
+
 
   // Shared by doGen and doFindGaps — apply before finalizing any generated test case list.
   const dedupRules=`\nDEDUPLICATION RULES — apply before finalizing the list:\n1. SEMANTIC DEDUP, NOT JUST TEXT DEDUP. Before adding a case, check if it asserts the SAME underlying (trigger + expected outcome) pair as an existing/kept case, even if worded differently. "Verify X is visible only when status is Y", "Verify X is not available when status is not Y", and "Verify X cannot happen when status is Z (Z != Y)" are the SAME test — generate ONE case with the positive assertion. Only add a separate negative case if the negative path has a genuinely different mechanism (different error message, different response code, different UI treatment) — not just the logical inverse of the same check.\n2. ONE CANONICAL CASE PER RULE. For each AC/business rule/exception, generate exactly ONE case unless it has genuinely distinct sub-behaviors (3 different named error messages for 3 different triggers = 3 cases; 1 trigger and 1 outcome restated 4 ways = 1 case).\n3. Before adding a case, check it against every case already in the list (including the KEPT CASES below): does an existing case test the same (component, trigger, expected result)? If yes, does the new one exercise a genuinely distinct boundary/data variant/failure mode? If it only restates the same tuple with different phrasing or a trivial variation, DISCARD it.\n4. MERGE PARAMETERIZED CHECKS. If several candidates differ only in input value (min length, max length, special chars, empty, whitespace-only, etc. all testing the same field-rendering/validation behavior), do NOT generate separate cases — generate ONE case whose testData/steps describe the full set of input variants to try.\n5. FLAG, DON'T GUESS, undefined requirements. If a candidate case would assert behavior not explicitly stated in the story (list sort order, max attachment count, exact timing of a status change, etc.), do NOT generate it as a normal case — instead add it to needsClarification with the assumption it's making, so a human confirms the requirement exists first.\n6. Before finalizing, do an internal pass: group drafts by (component + trigger + expected-outcome-category) and collapse each group to its single best-worded canonical case.`;
@@ -2094,6 +2009,17 @@ OVERALL STORY READINESS FOR QA:
     exportExcel(cases,sid); setPhase("jiraDone"); setLoading(false);
   };
 
+  const doPostGapToJira=async()=>{
+    if(!gapData||gapData.legacy)return;
+    setLoading(true); setLmsg("Posting GAP analysis to Jira…");
+    try {
+      const body={body:{type:"doc",version:1,content:[{type:"paragraph",content:[{type:"text",text:formatGapText(gapData).slice(0,30000)}]}]}};
+      await callJira(proj,"POST","/issue/"+sid+"/comment",body);
+      showToast("GAP analysis posted to "+sid+" on Jira");
+    } catch(e){ alert("Failed to post to Jira: "+e.message); }
+    setLoading(false);
+  };
+
   const doFileBug=async()=>{
     setLoading(true); setLmsg("Filing bug…");
     let jRef=null;
@@ -2199,7 +2125,7 @@ OVERALL STORY READINESS FOR QA:
   const editS=(id,si,v)=>setCases(cs=>cs.map(c=>{if(c.id!==id)return c;const s=[...c.steps];s[si]=v;return{...c,steps:s};}));
   const addStep=id=>setCases(cs=>cs.map(c=>c.id===id?{...c,steps:[...(c.steps||[]),"New step"]}:c));
   const delStep=(id,si)=>setCases(cs=>cs.map(c=>c.id===id?{...c,steps:(c.steps||[]).filter((_,i)=>i!==si)}:c));
-  const reset=()=>{localStorage.removeItem(WS_SNAP);setPhase("project");setTestKind("functional");setPerfResult(null);setPerfForm(PERF_FORM_DEFAULT);setPerfChat(false);setSid("");setSdata(null);setPlatform("web");setCtypes([]);setReadyFilter("all");setGapText("");setCases([]);setEditOn(false);setScripts({web:"",ios:"",android:""});setProjFiles(null);setExecLines([]);setResult(null);setJKey(null);setBugDone(null);setShowBugForm(false);setFixed(false);setChat(false);setShowAddCase(false);setSelectedForScripts([]);setCoverageText("");setSessionBugs([]);setHasSaved(false);setAppUrl("");setScriptCache({});setUidForm({pageUrl:"",figmaUrl:"",figmaToken:"",selectedNodeId:""});setUidCases([]);setUidVisualResult(null);setUidFigmaImg(null);setUidManualFigmaImg(null);setUidJiraTicketKey("");setUidStoryId(null);setPerfStoryId(null);setUidJiraStatus({});setUidAiotestStatus({importing:false,done:false,error:""});setUidReportComment("");setUidCommentStatus({sending:false,done:false,error:""});setCurlDraft("");setCurlErr("");};
+  const reset=()=>{localStorage.removeItem(WS_SNAP);setPhase("project");setTestKind("functional");setPerfResult(null);setPerfForm(PERF_FORM_DEFAULT);setPerfChat(false);setSid("");setSdata(null);setPlatform("web");setCtypes([]);setReadyFilter("all");setGapData(null);setCases([]);setEditOn(false);setScripts({web:"",ios:"",android:""});setProjFiles(null);setExecLines([]);setResult(null);setJKey(null);setBugDone(null);setShowBugForm(false);setFixed(false);setChat(false);setShowAddCase(false);setSelectedForScripts([]);setCoverageText("");setSessionBugs([]);setHasSaved(false);setAppUrl("");setScriptCache({});setUidForm({pageUrl:"",figmaUrl:"",figmaToken:"",selectedNodeId:""});setUidCases([]);setUidVisualResult(null);setUidFigmaImg(null);setUidManualFigmaImg(null);setUidJiraTicketKey("");setUidStoryId(null);setPerfStoryId(null);setUidJiraStatus({});setUidAiotestStatus({importing:false,done:false,error:""});setUidReportComment("");setUidCommentStatus({sending:false,done:false,error:""});setCurlDraft("");setCurlErr("");};
   const resetPerf=()=>{setPerfForm(PERF_FORM_DEFAULT);setPerfResult(null);setPerfStoryId(null);setPerfChat(false);setHasSaved(false);setPhase("perfTest");setCurlDraft("");setCurlErr("");};
   const [saveModal,setSaveModal]=useState(null);
   // saveModal: null | {step:1,name:""} | {step:2,name:"",newCat:""}
@@ -2240,7 +2166,7 @@ OVERALL STORY READINESS FOR QA:
       return;
     }
     const existing=DB.savedStories.find(s=>s.sid===sid);
-    const snap={id:existing?.id||uid(),name,categoryId:categoryId||null,phase,sid,sdata,cases:[...cases],gapText,platform,ctypes:[...ctypes],scripts:{...scripts},result,sessionBugs:[...sessionBugs],coverageText,selectedForScripts:[...selectedForScripts],appUrl,savedAt:Date.now()};
+    const snap={id:existing?.id||uid(),name,categoryId:categoryId||null,phase,sid,sdata,cases:[...cases],gapData,platform,ctypes:[...ctypes],scripts:{...scripts},result,sessionBugs:[...sessionBugs],coverageText,selectedForScripts:[...selectedForScripts],appUrl,savedAt:Date.now()};
     if(existing){DB.savedStories=DB.savedStories.map(s=>s.sid===sid?snap:s);}
     else{DB.savedStories.unshift(snap);}
     saveDB(); if(refreshSaved)refreshSaved(); setHasSaved(true); setSaveModal(null); showToast("Session saved successfully");
@@ -2248,7 +2174,7 @@ OVERALL STORY READINESS FOR QA:
   const saveAndReset=()=>{
     if(sid&&sdata){
       const existing=DB.savedStories.find(s=>s.sid===sid);
-      const snap={id:existing?.id||uid(),name:existing?.name||(sdata?.summary||sid),categoryId:existing?.categoryId||null,phase,sid,sdata,cases:[...cases],gapText,platform,ctypes:[...ctypes],scripts:{...scripts},result,sessionBugs:[...sessionBugs],coverageText,selectedForScripts:[...selectedForScripts],appUrl,savedAt:Date.now()};
+      const snap={id:existing?.id||uid(),name:existing?.name||(sdata?.summary||sid),categoryId:existing?.categoryId||null,phase,sid,sdata,cases:[...cases],gapData,platform,ctypes:[...ctypes],scripts:{...scripts},result,sessionBugs:[...sessionBugs],coverageText,selectedForScripts:[...selectedForScripts],appUrl,savedAt:Date.now()};
       if(existing){DB.savedStories=DB.savedStories.map(s=>s.sid===sid?snap:s);}
       else{DB.savedStories.unshift(snap);}
       saveDB(); if(refreshSaved)refreshSaved();
@@ -2288,7 +2214,7 @@ OVERALL STORY READINESS FOR QA:
       return;
     }
     setTestKind("functional");
-    setSid(snap.sid);setSdata(snap.sdata);setPlatform(snap.platform);setCtypes(snap.ctypes||[]);setGapText(snap.gapText||"");setCases(snap.cases||[]);setScripts(snap.scripts||{web:"",ios:"",android:""});setResult(snap.result||null);setSessionBugs(snap.sessionBugs||[]);setCoverageText(snap.coverageText||"");setSelectedForScripts(snap.selectedForScripts||[]);setAppUrl(snap.appUrl||"");setExecLines([]);setJKey(null);setBugDone(null);setShowBugForm(false);setFixed(false);setEditOn(false);setChat(false);setShowAddCase(false);
+    setSid(snap.sid);setSdata(snap.sdata);setPlatform(snap.platform);setCtypes(snap.ctypes||[]);setGapData(toGapData(snap.gapData||snap.gapText));setCases(snap.cases||[]);setScripts(snap.scripts||{web:"",ios:"",android:""});setResult(snap.result||null);setSessionBugs(snap.sessionBugs||[]);setCoverageText(snap.coverageText||"");setSelectedForScripts(snap.selectedForScripts||[]);setAppUrl(snap.appUrl||"");setExecLines([]);setJKey(null);setBugDone(null);setShowBugForm(false);setFixed(false);setEditOn(false);setChat(false);setShowAddCase(false);
     const lastPhase=snap.phase||(snap.coverageText?"coverage":snap.result?"result":snap.cases?.some(c=>c.status==="approved")?"review":"ctype");
     setPhase(lastPhase);
   };
@@ -2305,7 +2231,7 @@ OVERALL STORY READINESS FOR QA:
   React.useEffect(()=>{
     if(!sid||!sdata)return;
     const existing=DB.savedStories.find(s=>s.sid===sid);
-    const snap={id:existing?.id||uid(),name:existing?.name||(sdata?.summary||sid),categoryId:existing?.categoryId||null,phase,sid,sdata,cases:[...cases],gapText,platform,ctypes:[...ctypes],scripts:{...scripts},result,sessionBugs:[...sessionBugs],coverageText,selectedForScripts:[...selectedForScripts],appUrl,savedAt:Date.now()};
+    const snap={id:existing?.id||uid(),name:existing?.name||(sdata?.summary||sid),categoryId:existing?.categoryId||null,phase,sid,sdata,cases:[...cases],gapData,platform,ctypes:[...ctypes],scripts:{...scripts},result,sessionBugs:[...sessionBugs],coverageText,selectedForScripts:[...selectedForScripts],appUrl,savedAt:Date.now()};
     if(existing){DB.savedStories=DB.savedStories.map(s=>s.sid===sid?snap:s);}
     else{DB.savedStories.unshift(snap);}
     saveDB();if(refreshSaved)refreshSaved();
@@ -2326,7 +2252,7 @@ OVERALL STORY READINESS FOR QA:
       return;
     }
     if(i===2){setPhase("input");return;}
-    if(i===3&&sdata){setPhase(gapText?"gap":"mode");return;}
+    if(i===3&&sdata){setPhase(gapData?"gap":"mode");return;}
     if(i===4&&sdata){const et=[...new Set(cases.map(c=>c.type))];setCtypes(et.length>0?et:[]);setPhase("ctype");return;}
     if(i===5&&cases.length>0){setPhase("review");return;}
     if(i===6&&approved.length>0){setPhase("jira");return;}
@@ -3627,7 +3553,7 @@ OVERALL STORY READINESS FOR QA:
           <div style={card}><div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:16}}>Story: <b>{sid}</b></div><H2>What would you like to do?</H2>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
               {[
-                {icon:"🔍",title:"Story review + GAP analysis",desc:gapText?"View saved GAP analysis (already done)":"Analyze ACs for gaps and missing scenarios.",fn:gapText?()=>setPhase("gap"):doGap,done:!!gapText},
+                {icon:"🔍",title:"Story review + GAP analysis",desc:gapData?"View saved GAP analysis (already done)":"Analyze ACs for gaps and missing scenarios.",fn:gapData?()=>setPhase("gap"):doGap,done:!!gapData},
                 {icon:"📝",title:"Write test cases",desc:cases.length>0?`Resume — ${cases.length} test cases already generated`:"Generate structured manual test cases.",fn:()=>cases.length>0?setPhase("review"):setPhase("ctype"),done:cases.length>0}
               ].map(o=><button key={o.title} onClick={o.fn} style={{padding:20,borderRadius:12,border:"1px solid "+(o.done?"var(--color-text-success)":"var(--color-border-secondary)"),background:o.done?"var(--color-background-success)":"var(--color-background-primary)",cursor:"pointer",textAlign:"left"}}>
                 <div style={{fontSize:24,marginBottom:8}}>{o.icon}{o.done&&<span style={{fontSize:14,marginLeft:6,color:"var(--color-text-success)"}}>✓</span>}</div><div style={{fontWeight:500,fontSize:15,marginBottom:4}}>{o.title}</div><div style={{fontSize:13,color:o.done?"var(--color-text-success)":"var(--color-text-secondary)",lineHeight:1.5}}>{o.desc}</div>
@@ -3636,16 +3562,90 @@ OVERALL STORY READINESS FOR QA:
           </div>
         </div>}
 
-        {!loading&&phase==="gap"&&<div>
-          <div style={card}>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
-              <div style={{display:"flex",gap:8,alignItems:"center"}}><Tag c="blue">{sid}</Tag><span style={{fontWeight:500}}>GAP Analysis</span></div>
-              <button className="qa-btn" onClick={doGap} style={{...ghostBtn,fontSize:12,padding:"5px 12px"}}>🔄 Regenerate</button>
+        {!loading&&phase==="gap"&&gapData&&(()=>{
+          if(gapData.legacy) return <div>
+            <div style={card}>
+              <div style={{display:"flex",gap:8,marginBottom:14,alignItems:"center",flexWrap:"wrap"}}>
+                <Tag c="blue">{sid}</Tag><span style={{fontWeight:500}}>GAP Analysis</span><Tag>legacy format</Tag>
+                <div style={{marginLeft:"auto",display:"flex",gap:8}}>
+                  <button onClick={()=>navigator.clipboard?.writeText(gapData.raw)} style={ghostBtn}>📋 Copy</button>
+                  <button onClick={()=>dlFile(gapData.raw,"GapAnalysis_"+sid+".txt")} style={ghostBtn}>⬇ Download</button>
+                </div>
+              </div>
+              <div style={{whiteSpace:"pre-wrap",fontSize:14,lineHeight:1.85}}>{gapData.raw}</div>
             </div>
-            <div style={{fontSize:14,lineHeight:1.85}}>{renderMd(gapText)}</div>
-          </div>
-          <Confirm icon="📝" title="Would you like to write test cases?" onYes={()=>{const et=[...new Set(cases.map(c=>c.type))];if(et.length>0)setCtypes(et);setPhase("ctype");}} yesLabel="Yes, write test cases"/>
-        </div>}
+            <Confirm icon="📝" title="Would you like to write test cases?" onYes={()=>setPhase("ctype")} yesLabel="Yes, write test cases"/>
+          </div>;
+
+          const sevColor=s=>s==="high"?"var(--color-text-danger)":s==="medium"?"var(--color-text-warning)":"var(--color-text-success)";
+          const sevTag=s=>s==="high"?"red":s==="medium"?"amber":"green";
+          const rank={high:0,medium:1,low:2};
+          const sortedGaps=[...(gapData.gaps||[])].sort((a,b)=>(rank[a.severity]??3)-(rank[b.severity]??3));
+          const acList=gapData.acReview||[]; const risksList=gapData.risks||[]; const recs=gapData.recommendations||[];
+          const cov=gapData.coverage||{};
+
+          return <div id="gap-print-area">
+            <div style={{...card,marginBottom:12}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:10}}>
+                <div style={{display:"flex",gap:8,alignItems:"center"}}><Tag c="blue">{sid}</Tag><span style={{fontWeight:600,fontSize:15}}>GAP Analysis</span></div>
+                <div className="no-pdf" style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                  <button onClick={()=>navigator.clipboard?.writeText(formatGapText(gapData))} style={ghostBtn}>📋 Copy</button>
+                  <button onClick={()=>dlFile(formatGapText(gapData),"GapAnalysis_"+sid+".txt")} style={ghostBtn}>⬇ Download .txt</button>
+                  <button onClick={()=>{const el=document.getElementById("gap-print-area");const btns=el.querySelectorAll(".no-pdf");btns.forEach(b=>b.style.display="none");html2pdf().set({margin:10,filename:`GapAnalysis_${sid}.pdf`,html2canvas:{scale:2,useCORS:true},jsPDF:{unit:"mm",format:"a4",orientation:"portrait"}}).from(el).save().then(()=>btns.forEach(b=>b.style.display=""));}} style={ghostBtn}>⬇ Download PDF</button>
+                  {proj?.jiraToken&&<button onClick={doPostGapToJira} style={ghostBtn}>🔗 Post to Jira</button>}
+                </div>
+              </div>
+              <div style={{fontSize:14,lineHeight:1.7,marginTop:12}}>{gapData.summary}</div>
+            </div>
+
+            <div style={card}>
+              <H2>✅ Acceptance Criteria Review</H2>
+              {acList.map((a,i)=><div key={i} style={{display:"flex",gap:10,padding:"8px 0",borderBottom:i<acList.length-1?"1px solid var(--color-border-tertiary)":"none"}}>
+                <span style={{fontSize:15,flexShrink:0,color:a.status==="clear"?"var(--color-text-success)":a.status==="missing"?"var(--color-text-danger)":"var(--color-text-warning)"}}>{a.status==="clear"?"✓":a.status==="missing"?"✗":"⚠"}</span>
+                <div style={{flex:1,fontSize:13}}><div>{a.text}</div>{a.note&&<div style={{color:"var(--color-text-secondary)",marginTop:2}}>{a.note}</div>}</div>
+              </div>)}
+              {acList.length===0&&<div style={{fontSize:13,color:"var(--color-text-tertiary)"}}>No acceptance criteria reviewed.</div>}
+            </div>
+
+            <div style={card}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,flexWrap:"wrap",gap:8}}>
+                <H2>🔍 GAP Analysis <span style={{fontSize:13,fontWeight:400,color:"var(--color-text-secondary)"}}>({sortedGaps.length})</span></H2>
+                {selGaps.length>0&&<Btn v="primary" onClick={()=>doGapCases(selGaps)}>📝 Generate test cases for {selGaps.length} selected gap{selGaps.length!==1?"s":""}</Btn>}
+              </div>
+              {sortedGaps.map(g=><label key={g.id} style={{display:"flex",gap:10,padding:12,marginBottom:8,borderRadius:8,cursor:"pointer",border:"1px solid var(--color-border-tertiary)",borderLeft:"3px solid "+sevColor(g.severity)}}>
+                <input type="checkbox" checked={selGaps.includes(g.id)} onChange={()=>setSelGaps(s=>s.includes(g.id)?s.filter(x=>x!==g.id):[...s,g.id])} style={{marginTop:2}}/>
+                <div style={{flex:1}}>
+                  <div style={{display:"flex",gap:6,marginBottom:4,flexWrap:"wrap",alignItems:"center"}}><Tag c={sevTag(g.severity)}>{g.severity}</Tag><Tag>{g.category||"Gap"}</Tag>{g.suggestedType&&<Tag c={tcol(g.suggestedType)}>{g.suggestedType}</Tag>}</div>
+                  <div style={{fontSize:13.5}}>{g.description}</div>
+                </div>
+              </label>)}
+              {sortedGaps.length===0&&<div style={{fontSize:13,color:"var(--color-text-tertiary)"}}>No gaps identified.</div>}
+            </div>
+
+            <div style={card}>
+              <H2>⚠️ Risk Areas</H2>
+              {risksList.map((r,i)=><div key={i} style={{display:"flex",gap:8,alignItems:"center",padding:"6px 0"}}><Tag c={sevTag(r.severity)}>{r.severity}</Tag><span style={{fontSize:13.5}}>{r.description}</span></div>)}
+              {risksList.length===0&&<div style={{fontSize:13,color:"var(--color-text-tertiary)"}}>No specific risks identified.</div>}
+            </div>
+
+            <div style={card}>
+              <H2>💡 Recommendations</H2>
+              <ul style={{margin:0,paddingLeft:20,fontSize:13.5,lineHeight:1.8}}>{recs.map((r,i)=><li key={i}>{r}</li>)}</ul>
+              {recs.length===0&&<div style={{fontSize:13,color:"var(--color-text-tertiary)"}}>No recommendations.</div>}
+            </div>
+
+            <div style={card}>
+              <H2>📊 Test Coverage Estimate</H2>
+              {[{l:"Happy flows",v:cov.happyPct,c:"#4caf50"},{l:"Edge cases",v:cov.edgePct,c:"#f59e0b"},{l:"Negative cases",v:cov.negativePct,c:"#ef4444"},{l:"Automation",v:cov.automationPct,c:"#8b5cf6"}].map(b=><div key={b.l} style={{marginBottom:10}}>
+                <div style={{display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:4}}><span>{b.l}</span><span style={{fontWeight:600}}>{b.v??0}%</span></div>
+                <div style={{height:10,background:"var(--color-border-tertiary)",borderRadius:5,overflow:"hidden"}}><div style={{height:"100%",width:(b.v??0)+"%",background:b.c,borderRadius:5}}/></div>
+              </div>)}
+              {cov.note&&<div style={{fontSize:12,color:"var(--color-text-secondary)",marginTop:4}}>{cov.note}</div>}
+            </div>
+
+            <Confirm icon="📝" title="Would you like to write test cases?" onYes={()=>setPhase("ctype")} yesLabel="Yes, write test cases"/>
+          </div>;
+        })()}
 
         {!loading&&phase==="ctype"&&<div style={card}>
           <div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:16}}>Story: <b>{sid}</b></div><H2>Which test case types?</H2>
@@ -4224,7 +4224,7 @@ OVERALL STORY READINESS FOR QA:
       {phase!=="input"&&chat&&testKind==="functional"&&<div style={{width:290,flexShrink:0,display:"flex",flexDirection:"column",height:"calc(100vh - 120px)",position:"sticky",top:0}}>
         <div style={{...card,flex:1,display:"flex",flexDirection:"column",overflow:"hidden",padding:16}}>
           <div style={{fontWeight:500,fontSize:14,marginBottom:12,display:"flex",alignItems:"center",gap:8}}>🤖 QA Assistant <Tag c="blue">{sid}</Tag></div>
-          <div style={{flex:1,overflow:"auto"}}><AIChat proj={proj} sid={sid} sdata={sdata} cases={cases} gapText={gapText} result={result} sessionBugs={sessionBugs} coverageText={coverageText} platform={platform}/></div>
+          <div style={{flex:1,overflow:"auto"}}><AIChat proj={proj} sid={sid} sdata={sdata} cases={cases} gapData={gapData} result={result} sessionBugs={sessionBugs} coverageText={coverageText} platform={platform}/></div>
         </div>
       </div>}
       {(phase==="perfTest"||phase==="perfResult")&&perfChat&&testKind==="non-functional"&&<div style={{width:290,flexShrink:0,display:"flex",flexDirection:"column",height:"calc(100vh - 120px)",position:"sticky",top:0}}>
