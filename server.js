@@ -177,19 +177,32 @@ function decryptMemberCredentials(member) {
   } catch { return null; }
 }
 function loadServerDB() {
-  if (!fs.existsSync(DATA_FILE)) return { sessions: [], bugs: [], perfResults: [], coverage: [], members: [], adminPasswordHash: null, adminPasswordIsDefault: true };
-  try { return JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')); }
+  if (!fs.existsSync(DATA_FILE)) return { sessions: [], bugs: [], perfResults: [], coverage: [], members: [], projects: [], assignments: [], adminPasswordHash: null, adminPasswordIsDefault: true, adminUsername: 'admin', auditLog: [] };
+  try {
+    const d = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+    if (!d.adminUsername) d.adminUsername = 'admin';
+    if (!Array.isArray(d.auditLog)) d.auditLog = [];
+    if (!Array.isArray(d.projects)) d.projects = [];
+    if (!Array.isArray(d.assignments)) d.assignments = [];
+    return d;
+  }
   catch (e) {
     const backup = DATA_FILE + '.corrupt.' + Date.now();
     try { fs.copyFileSync(DATA_FILE, backup); } catch {}
     console.error('[DB] Corrupt database file — backed up to', backup, '— starting fresh:', e.message);
-    return { sessions: [], bugs: [], perfResults: [], coverage: [], members: [], adminPasswordHash: null, adminPasswordIsDefault: true };
+    return { sessions: [], bugs: [], perfResults: [], coverage: [], members: [], projects: [], assignments: [], adminPasswordHash: null, adminPasswordIsDefault: true, adminUsername: 'admin', auditLog: [] };
   }
 }
 function saveServerDB(db) {
   const tmp = DATA_FILE + '.tmp';
   fs.writeFileSync(tmp, JSON.stringify(db));
   fs.renameSync(tmp, DATA_FILE);
+}
+function appendAuditLog(action, details) {
+  if (!Array.isArray(serverDB.auditLog)) serverDB.auditLog = [];
+  serverDB.auditLog.push({ id: crypto.randomBytes(8).toString('hex'), ts: Date.now(), action, details: details || {} });
+  if (serverDB.auditLog.length > 1000) serverDB.auditLog = serverDB.auditLog.slice(-1000);
+  saveServerDB(serverDB);
 }
 let serverDB = loadServerDB();
 
@@ -1057,6 +1070,16 @@ function runK6(scriptPath) {
   });
 }
 
+/* ── Member token validator helper ─────────────────────────────────────── */
+const validateMemberToken = (req, expectedId) => {
+  const token = req.headers['x-member-token'];
+  const ms = token ? memberSessions.get(token) : null;
+  if (!ms || Date.now() - ms.createdAt > ADMIN_SESSION_TTL) return null;
+  const memberId = ms.memberId || ms.id;
+  if (expectedId && memberId !== expectedId) return null;
+  return memberId;
+};
+
 /* ── HTTP Server ────────────────────────────────────────────────────────── */
 const server = http.createServer((req, res) => {
   // Security headers on every response
@@ -1081,7 +1104,7 @@ const server = http.createServer((req, res) => {
   const host   = req.headers['host'];
   if (origin && host && origin.includes(host)) {
     res.setHeader('Access-Control-Allow-Origin',  origin);
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Session-Token, X-Admin-Token, X-Member-Token');
     res.setHeader('Vary', 'Origin');
   }
@@ -1141,6 +1164,13 @@ const server = http.createServer((req, res) => {
     } catch (e) {
       res.writeHead(500); res.end('Could not read app file: ' + e.message);
     }
+    return;
+  }
+
+  /* ── GET /api/health (no auth required) ── */
+  if (req.method === 'GET' && req.url === '/api/health') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(serverDB.dependencyStatus || { claude: false, playwright: false, k6: false }));
     return;
   }
 
@@ -1251,6 +1281,7 @@ const server = http.createServer((req, res) => {
           const sync = syncRepoCache(trimmed);
           if (!sync.ok) return { url: trimmed, name, attached: true, reachable: false, error: sync.error };
           const { context, truncated } = collectRepoContext(sync.dir);
+          try { fs.rmSync(sync.dir, { recursive: true, force: true }); } catch (e) {}
           return { url: trimmed, name, attached: true, reachable: true, context, truncated };
         };
         const frontend = checkOne(frontendRepoUrl);
@@ -1325,6 +1356,7 @@ const server = http.createServer((req, res) => {
         const member = { id: crypto.randomBytes(16).toString('hex'), name, email, role: role || 'QA Engineer', passwordHash: hashPasswordSecure(password), createdAt: Date.now() };
         serverDB.members.push(member);
         saveServerDB(serverDB);
+        appendAuditLog('member-created', { name });
         console.log('[Member] Created:', name);
         const { passwordHash, ...safe } = member;
         res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -1391,6 +1423,187 @@ const server = http.createServer((req, res) => {
       return;
     }
 
+    /* ── /api/members/:id/workspace (GET/POST/DELETE — member auth) ── */
+    if (/^\/api\/members\/[^/]+\/workspace$/.test(req.url)) {
+      const urlParts = req.url.split('/');
+      const mId = urlParts[3];
+      const authedId = validateMemberToken(req, mId);
+      if (!authedId) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Unauthorized' })); return; }
+      const mbr = (serverDB.members || []).find(m => m.id === mId);
+      if (!mbr) { res.writeHead(404, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Member not found' })); return; }
+      if (req.method === 'GET') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ workspace: mbr.workspaceState || null })); return;
+      }
+      if (req.method === 'POST') {
+        try { mbr.workspaceState = JSON.parse(body).workspaceState; } catch { mbr.workspaceState = null; }
+        saveServerDB(serverDB);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true })); return;
+      }
+      if (req.method === 'DELETE') {
+        delete mbr.workspaceState;
+        saveServerDB(serverDB);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true })); return;
+      }
+    }
+
+    /* ── /api/members/:id/stories/:sid (GET/POST/PUT/DELETE — member auth) ── */
+    if (/^\/api\/members\/[^/]+\/stories\/[^/]+$/.test(req.url)) {
+      const urlParts = req.url.split('/');
+      const mId = urlParts[3];
+      const sid = urlParts[5];
+      const authedId = validateMemberToken(req, mId);
+      if (!authedId) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Unauthorized' })); return; }
+      const mbr = (serverDB.members || []).find(m => m.id === mId);
+      if (!mbr) { res.writeHead(404, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Member not found' })); return; }
+      if (!Array.isArray(mbr.stories)) mbr.stories = [];
+      if (req.method === 'PUT') {
+        const idx = mbr.stories.findIndex(s => s.id === sid);
+        if (idx !== -1) { try { Object.assign(mbr.stories[idx], JSON.parse(body)); } catch {} }
+        saveServerDB(serverDB);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true })); return;
+      }
+      if (req.method === 'DELETE') {
+        mbr.stories = mbr.stories.filter(s => s.id !== sid);
+        saveServerDB(serverDB);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true })); return;
+      }
+    }
+
+    /* ── /api/members/:id/stories (GET/POST — member auth) ── */
+    if (/^\/api\/members\/[^/]+\/stories$/.test(req.url)) {
+      const mId = req.url.split('/')[3];
+      const authedId = validateMemberToken(req, mId);
+      if (!authedId) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Unauthorized' })); return; }
+      const mbr = (serverDB.members || []).find(m => m.id === mId);
+      if (!mbr) { res.writeHead(404, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Member not found' })); return; }
+      if (req.method === 'GET') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ stories: mbr.stories || [] })); return;
+      }
+      if (req.method === 'POST') {
+        try {
+          const story = JSON.parse(body).story || {};
+          const storyId = crypto.randomBytes(8).toString('hex');
+          if (!Array.isArray(mbr.stories)) mbr.stories = [];
+          mbr.stories.push({ ...story, id: storyId });
+          saveServerDB(serverDB);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ id: storyId }));
+        } catch (e) { res.writeHead(400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Invalid request' })); }
+        return;
+      }
+    }
+
+    /* ── /api/members/:id/categories/:cid (GET/POST/PUT/DELETE — member auth) ── */
+    if (/^\/api\/members\/[^/]+\/categories\/[^/]+$/.test(req.url)) {
+      const urlParts = req.url.split('/');
+      const mId = urlParts[3];
+      const cid = urlParts[5];
+      const authedId = validateMemberToken(req, mId);
+      if (!authedId) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Unauthorized' })); return; }
+      const mbr = (serverDB.members || []).find(m => m.id === mId);
+      if (!mbr) { res.writeHead(404, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Member not found' })); return; }
+      if (!Array.isArray(mbr.categories)) mbr.categories = [];
+      if (req.method === 'PUT') {
+        const cat = mbr.categories.find(c => c.id === cid);
+        if (cat) { try { cat.name = JSON.parse(body).name || cat.name; } catch {} }
+        saveServerDB(serverDB);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true })); return;
+      }
+      if (req.method === 'DELETE') {
+        mbr.categories = mbr.categories.filter(c => c.id !== cid);
+        saveServerDB(serverDB);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true })); return;
+      }
+    }
+
+    /* ── /api/members/:id/categories (GET/POST — member auth) ── */
+    if (/^\/api\/members\/[^/]+\/categories$/.test(req.url)) {
+      const mId = req.url.split('/')[3];
+      const authedId = validateMemberToken(req, mId);
+      if (!authedId) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Unauthorized' })); return; }
+      const mbr = (serverDB.members || []).find(m => m.id === mId);
+      if (!mbr) { res.writeHead(404, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Member not found' })); return; }
+      if (req.method === 'GET') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ categories: mbr.categories || [] })); return;
+      }
+      if (req.method === 'POST') {
+        try {
+          const catId = crypto.randomBytes(8).toString('hex');
+          if (!Array.isArray(mbr.categories)) mbr.categories = [];
+          mbr.categories.push({ id: catId, name: JSON.parse(body).name || '' });
+          saveServerDB(serverDB);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ id: catId }));
+        } catch (e) { res.writeHead(400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Invalid request' })); }
+        return;
+      }
+    }
+
+    /* ── /api/members/:id/notifications/read-all (PUT — member auth) ── */
+    if (req.method === 'PUT' && /^\/api\/members\/[^/]+\/notifications\/read-all$/.test(req.url)) {
+      const mId = req.url.split('/')[3];
+      const authedId = validateMemberToken(req, mId);
+      if (!authedId) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Unauthorized' })); return; }
+      const mbr = (serverDB.members || []).find(m => m.id === mId);
+      if (!mbr) { res.writeHead(404, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Member not found' })); return; }
+      (mbr.notifications || []).forEach(n => { n.read = true; });
+      saveServerDB(serverDB);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: true })); return;
+    }
+
+    /* ── /api/members/:id/notifications (GET/POST — member auth) ── */
+    if (/^\/api\/members\/[^/]+\/notifications$/.test(req.url)) {
+      const mId = req.url.split('/')[3];
+      const authedId = validateMemberToken(req, mId);
+      if (!authedId) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Unauthorized' })); return; }
+      const mbr = (serverDB.members || []).find(m => m.id === mId);
+      if (!mbr) { res.writeHead(404, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Member not found' })); return; }
+      if (req.method === 'GET') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ notifications: mbr.notifications || [] })); return;
+      }
+      if (req.method === 'POST') {
+        try {
+          const notif = JSON.parse(body);
+          if (!Array.isArray(mbr.notifications)) mbr.notifications = [];
+          mbr.notifications.push({ ...notif, id: crypto.randomBytes(8).toString('hex'), ts: Date.now() });
+          if (mbr.notifications.length > 100) mbr.notifications = mbr.notifications.slice(-100);
+          saveServerDB(serverDB);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: true }));
+        } catch (e) { res.writeHead(400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Invalid request' })); }
+        return;
+      }
+    }
+
+    /* ── /api/members/:id/perf-history (GET — member auth) ── */
+    if (req.method === 'GET' && /^\/api\/members\/[^/]+\/perf-history$/.test(req.url)) {
+      const mId = req.url.split('/')[3];
+      const authedId = validateMemberToken(req, mId);
+      if (!authedId) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Unauthorized' })); return; }
+      const results = (serverDB.perfResults || [])
+        .filter(r => r.memberId === mId || r.who === mId)
+        .sort((a, b) => (b.savedAt || b.ts || 0) - (a.savedAt || a.ts || 0))
+        .slice(0, 50);
+      const totalRuns = results.length;
+      const passCount = results.filter(r => r.perfResult?.passed || r.passed).length;
+      const p95s = results.map(r => r.perfResult?.p95 || r.p95).filter(v => typeof v === 'number');
+      const avgP95 = p95s.length ? Math.round(p95s.reduce((a, b) => a + b, 0) / p95s.length) : null;
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ results, stats: { totalRuns, passRate: totalRuns ? Math.round(passCount / totalRuns * 100) : 0, avgP95 } }));
+      return;
+    }
+
     /* ── /api/members/:id (PUT — admin edits member) ── */
     if (req.method === 'PUT' && req.url.startsWith('/api/members/')) {
       try {
@@ -1432,6 +1645,7 @@ const server = http.createServer((req, res) => {
         if (!serverDB.members) serverDB.members = [];
         serverDB.members = serverDB.members.filter(m => m.id !== memberId);
         saveServerDB(serverDB);
+        appendAuditLog('member-deleted', { id: memberId });
         console.log('[Member] Deleted:', memberId);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ ok: true }));
@@ -1450,7 +1664,12 @@ const server = http.createServer((req, res) => {
         res.end(JSON.stringify({ error: 'Too many login attempts. Please wait 15 minutes.' })); return;
       }
       try {
-        const { password } = JSON.parse(body);
+        const { username, password } = JSON.parse(body);
+        if (username !== undefined && username !== (serverDB.adminUsername || 'admin')) {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Invalid credentials' }));
+          return;
+        }
         if (!verifyPassword(password || '', serverDB.adminPasswordHash)) {
           res.writeHead(401, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'Invalid credentials' }));
@@ -1493,7 +1712,83 @@ const server = http.createServer((req, res) => {
         serverDB.adminPasswordHash = hashPasswordSecure(newPassword);
         serverDB.adminPasswordIsDefault = false;
         saveServerDB(serverDB);
+        appendAuditLog('admin-password-changed', {});
         console.log('[Admin] Password changed');
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true }));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Invalid request' }));
+      }
+      return;
+    }
+
+    /* ── /api/admin/change-username (POST — admin auth) ── */
+    if (req.method === 'POST' && req.url === '/api/admin/change-username') {
+      try {
+        const adminToken = req.headers['x-admin-token'];
+        if (!adminToken || !adminSessions.has(adminToken)) {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Unauthorized' })); return;
+        }
+        const { newUsername } = JSON.parse(body);
+        if (!newUsername || !/^[a-zA-Z0-9_]{3,32}$/.test(newUsername)) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Username must be 3-32 alphanumeric/underscore characters' })); return;
+        }
+        serverDB.adminUsername = newUsername;
+        appendAuditLog('admin-username-changed', { newUsername });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true }));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Invalid request' }));
+      }
+      return;
+    }
+
+    /* ── /api/admin/members/:id/generate-reset-token (POST — admin auth) ── */
+    if (req.method === 'POST' && /^\/api\/admin\/members\/[^/]+\/generate-reset-token$/.test(req.url)) {
+      try {
+        const adminToken = req.headers['x-admin-token'];
+        if (!adminToken || !adminSessions.has(adminToken)) {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Unauthorized' })); return;
+        }
+        const memberId = req.url.split('/')[4];
+        const member = (serverDB.members || []).find(m => m.id === memberId);
+        if (!member) { res.writeHead(404, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Member not found' })); return; }
+        const token = crypto.randomBytes(32).toString('hex');
+        member.resetToken = token;
+        member.resetTokenExpiry = Date.now() + 3600000;
+        saveServerDB(serverDB);
+        appendAuditLog('reset-token-generated', { memberId });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ token, expiresAt: member.resetTokenExpiry }));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Invalid request' }));
+      }
+      return;
+    }
+
+    /* ── /api/auth/reset-password (POST — public) ── */
+    if (req.method === 'POST' && req.url === '/api/auth/reset-password') {
+      try {
+        const { token, newPassword } = JSON.parse(body);
+        const member = (serverDB.members || []).find(m => m.resetToken === token && m.resetTokenExpiry > Date.now());
+        if (!member) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Invalid or expired reset token' })); return;
+        }
+        if (!newPassword || newPassword.length < 8) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Password must be at least 8 characters' })); return;
+        }
+        member.passwordHash = hashPasswordSecure(newPassword);
+        member.resetToken = null;
+        member.resetTokenExpiry = null;
+        saveServerDB(serverDB);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ ok: true }));
       } catch (e) {
@@ -1634,13 +1929,36 @@ const server = http.createServer((req, res) => {
 
     /* ── /api/sync (requires session) ── */
     if (req.method === 'POST' && req.url === '/api/sync') {
-      if (!getSession(req)) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Authentication required' })); return; }
+      const syncSession = getSession(req);
+      if (!syncSession) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Authentication required' })); return; }
       try {
         const payload = JSON.parse(body);
         const { type } = payload;
         if (!['session','bug','perf','coverage'].includes(type)) {
           res.writeHead(400, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'Invalid sync type' })); return;
+        }
+        // GAP-02: Project access control
+        const syncMemberId = syncSession.memberId;
+        if (syncMemberId && Array.isArray(serverDB.assignments) && serverDB.assignments.length > 0) {
+          const allowedProjectIds = new Set(
+            serverDB.assignments.filter(a => a.memberId === syncMemberId).map(a => a.projectId)
+          );
+          if (allowedProjectIds.size > 0) {
+            const recordsToCheck = [
+              ...(Array.isArray(payload.bugs) ? payload.bugs : []),
+              ...(Array.isArray(payload.sessions) ? payload.sessions : []),
+              ...(Array.isArray(payload.perfResults) ? payload.perfResults : []),
+              ...(Array.isArray(payload.coverage) ? payload.coverage : []),
+              ...(payload.projectId ? [payload] : [])
+            ];
+            for (const record of recordsToCheck) {
+              if (record.projectId && !allowedProjectIds.has(record.projectId)) {
+                res.writeHead(403, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Project access denied' })); return;
+              }
+            }
+          }
         }
         const item = { id: crypto.randomBytes(8).toString('hex'), ...payload, syncedAt: Date.now() };
         if      (type === 'session')  serverDB.sessions.unshift(item);
@@ -1652,8 +1970,13 @@ const server = http.createServer((req, res) => {
         });
         saveServerDB(serverDB);
         console.log('[Sync]', type, '-', payload.memberName, '/', payload.projectName);
+        // GAP-07: Cap warnings
+        const warnings = [];
+        if ((serverDB.sessions || []).length >= 450) warnings.push('Test sessions near storage cap (' + (serverDB.sessions || []).length + '/500)');
+        if ((serverDB.bugs || []).length >= 450) warnings.push('Bugs near storage cap (' + (serverDB.bugs || []).length + '/500)');
+        if ((serverDB.perfResults || []).length >= 450) warnings.push('Performance results near storage cap (' + (serverDB.perfResults || []).length + '/500)');
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ ok: true }));
+        res.end(JSON.stringify({ ok: true, warnings }));
       } catch (e) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'Invalid request' }));
@@ -2095,10 +2418,167 @@ Return ONLY valid JSON (no markdown wrapper, no extra text):
       return;
     }
 
+    /* ── /api/bugs/jira-sync (POST — member auth) ── */
+    if (req.method === 'POST' && req.url === '/api/bugs/jira-sync') {
+      try {
+        const memberToken = req.headers['x-member-token'];
+        const ms = memberToken ? memberSessions.get(memberToken) : null;
+        if (!ms || Date.now() - ms.createdAt > ADMIN_SESSION_TTL) {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Unauthorized' })); return;
+        }
+        const { memberId, jiraIssueKey, newStatus } = JSON.parse(body);
+        const member = (serverDB.members || []).find(m => m.id === memberId);
+        if (!member) { res.writeHead(404, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Member not found' })); return; }
+        const creds = decryptMemberCredentials(member);
+        if (!creds || !creds.jiraUrl) { res.writeHead(400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'No Jira credentials configured' })); return; }
+        const auth = Buffer.from(creds.jiraEmail + ':' + creds.jiraToken).toString('base64');
+        const statusMap = { 'Open': 'To Do', 'In Progress': 'In Progress', 'Resolved': 'Done', 'Closed': 'Done' };
+        const targetTransitionName = statusMap[newStatus];
+        if (!targetTransitionName) { res.writeHead(400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Invalid status' })); return; }
+        if (!/^[A-Z][A-Z0-9]{1,9}-\d{1,6}$/.test(String(jiraIssueKey || ''))) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Invalid issueKey format' })); return;
+        }
+        const transitionsData = await proxyJira(creds.jiraUrl, '/issue/' + jiraIssueKey + '/transitions', 'GET', auth, null);
+        const transitions = transitionsData.transitions || [];
+        const match = transitions.find(t => t.name === targetTransitionName || (t.to && t.to.name === targetTransitionName));
+        if (!match) { res.writeHead(400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Transition not available: ' + targetTransitionName })); return; }
+        await proxyJira(creds.jiraUrl, '/issue/' + jiraIssueKey + '/transitions', 'POST', auth, { transition: { id: match.id } });
+        console.log('[Jira] Status synced:', jiraIssueKey, '->', targetTransitionName);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true }));
+      } catch (e) {
+        console.error('[Jira] Sync error:', e.message);
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: e.message }));
+      }
+      return;
+    }
+
+    /* ── /api/admin/audit-log (GET — admin auth) ── */
+    if (req.method === 'GET' && req.url === '/api/admin/audit-log') {
+      const adminToken = req.headers['x-admin-token'];
+      if (!adminToken || !adminSessions.has(adminToken)) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Unauthorized' })); return;
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(([...(serverDB.auditLog || [])]).reverse().slice(0, 200)));
+      return;
+    }
+
+    /* ── /api/projects (GET/POST — admin auth for write, no auth for read) ── */
+    if (req.method === 'POST' && req.url === '/api/projects') {
+      try {
+        const adminToken = req.headers['x-admin-token'];
+        if (!adminToken || !adminSessions.has(adminToken)) {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Unauthorized' })); return;
+        }
+        const parsed = JSON.parse(body);
+        if (!parsed.name) { res.writeHead(400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'name is required' })); return; }
+        if (!Array.isArray(serverDB.projects)) serverDB.projects = [];
+        const project = {
+          id: crypto.randomBytes(16).toString('hex'),
+          name: parsed.name,
+          description: parsed.description || '',
+          language: (['ar','en','mixed'].includes(parsed.language)) ? parsed.language : 'ar',
+          frontendRepoUrl: parsed.frontendRepoUrl || '',
+          backendRepoUrl: parsed.backendRepoUrl || '',
+          createdAt: Date.now()
+        };
+        serverDB.projects.push(project);
+        saveServerDB(serverDB);
+        appendAuditLog('project-created', { name: parsed.name });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(project));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Invalid request' }));
+      }
+      return;
+    }
+
+    if (req.method === 'GET' && req.url === '/api/projects') {
+      const adminToken = req.headers['x-admin-token'];
+      if (!adminToken || !adminSessions.has(adminToken)) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Unauthorized' })); return;
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(serverDB.projects || []));
+      return;
+    }
+
+    /* ── /api/projects/:id (PUT/DELETE — admin auth) ── */
+    if (req.method === 'PUT' && /^\/api\/projects\/[^/]+$/.test(req.url)) {
+      try {
+        const adminToken = req.headers['x-admin-token'];
+        if (!adminToken || !adminSessions.has(adminToken)) {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Unauthorized' })); return;
+        }
+        const projId = req.url.split('/')[3];
+        if (!Array.isArray(serverDB.projects)) serverDB.projects = [];
+        const proj = serverDB.projects.find(p => p.id === projId);
+        if (!proj) { res.writeHead(404, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Project not found' })); return; }
+        const parsed = JSON.parse(body);
+        if (parsed.name !== undefined) proj.name = parsed.name;
+        if (parsed.description !== undefined) proj.description = parsed.description;
+        if (parsed.frontendRepoUrl !== undefined) proj.frontendRepoUrl = parsed.frontendRepoUrl;
+        if (parsed.backendRepoUrl !== undefined) proj.backendRepoUrl = parsed.backendRepoUrl;
+        if (parsed.language && ['ar','en','mixed'].includes(parsed.language)) proj.language = parsed.language;
+        saveServerDB(serverDB);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(proj));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Invalid request' }));
+      }
+      return;
+    }
+
+    if (req.method === 'DELETE' && /^\/api\/projects\/[^/]+$/.test(req.url)) {
+      try {
+        const adminToken = req.headers['x-admin-token'];
+        if (!adminToken || !adminSessions.has(adminToken)) {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Unauthorized' })); return;
+        }
+        const projId = req.url.split('/')[3];
+        if (!Array.isArray(serverDB.projects)) serverDB.projects = [];
+        serverDB.projects = serverDB.projects.filter(p => p.id !== projId);
+        saveServerDB(serverDB);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true }));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Invalid request' }));
+      }
+      return;
+    }
+
     res.writeHead(404); res.end();
   });
 });
 
+
+async function checkDependencies() {
+  const run = (cmd, args) => new Promise(resolve => {
+    const p = require('child_process').spawn(cmd, args, { shell: true, timeout: 8000 });
+    p.on('exit', code => resolve(code === 0));
+    p.on('error', () => resolve(false));
+  });
+  const claudeExe = process.env.CLAUDE_CLI_PATH || 'claude';
+  const [claudeOk, pwOk, k6Ok] = await Promise.all([
+    run(claudeExe, ['--version']),
+    run('npx', ['playwright', '--version']),
+    run('k6', ['version'])
+  ]);
+  serverDB.dependencyStatus = { claude: claudeOk, playwright: pwOk, k6: k6Ok };
+  saveServerDB(serverDB);
+}
 
 server.listen(PORT, () => {
   console.log('');
@@ -2114,4 +2594,8 @@ server.listen(PORT, () => {
   else console.warn('  AI engine: NOT AVAILABLE - AI features will fail until the Claude CLI is installed (see [AI] messages above).');
   console.log('  Press Ctrl+C to stop.');
   console.log('');
+  checkDependencies().catch(() => {});
+  // GAP-21: Clean up stale repo cache on startup
+  const repoCacheDir = path.join(os.tmpdir(), 'qa-platform-repo-cache');
+  try { if (fs.existsSync(repoCacheDir)) { fs.rmSync(repoCacheDir, { recursive: true, force: true }); } } catch (e) {}
 });
