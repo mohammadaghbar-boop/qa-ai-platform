@@ -229,6 +229,33 @@ async function callAI(messages, sys="", max=4000, _legacy="") {
   }
 }
 
+/* ─── Member storage helpers ─────────────────────────────────────────────── */
+const callMemberStorage = async (memberId, method, storagePath, body) => {
+  const token = sessionStorage.getItem('qa_member_token') || '';
+  const r = await fetch(API_BASE + '/api/members/' + memberId + storagePath, {
+    method,
+    headers: {'Content-Type':'application/json','X-Member-Token': token},
+    body: body ? JSON.stringify(body) : undefined
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+};
+
+const serverStorage = {
+  loadWorkspace: async (id) => { try { const r = await callMemberStorage(id,'GET','/workspace'); return r.workspace||null; } catch(e) { return null; } },
+  saveWorkspace: async (id, state) => { try { await callMemberStorage(id,'POST','/workspace',{workspaceState:state}); return true; } catch(e) { return false; } },
+  loadStories: async (id) => { try { const r = await callMemberStorage(id,'GET','/stories'); return r.stories||[]; } catch(e) { return []; } },
+  saveStory: async (id, story) => { try { const r = await callMemberStorage(id,'POST','/stories',{story}); return r.id; } catch(e) { return null; } },
+  updateStory: async (id, sid, updates) => { try { await callMemberStorage(id,'PUT','/stories/'+sid, updates); } catch(e) {} },
+  deleteStory: async (id, sid) => { try { await callMemberStorage(id,'DELETE','/stories/'+sid); } catch(e) {} },
+  loadCategories: async (id) => { try { const r = await callMemberStorage(id,'GET','/categories'); return r.categories||[]; } catch(e) { return []; } },
+  saveCategory: async (id, name) => { try { const r = await callMemberStorage(id,'POST','/categories',{name}); return r.id; } catch(e) { return null; } },
+  updateCategory: async (id, cid, name) => { try { await callMemberStorage(id,'PUT','/categories/'+cid,{name}); } catch(e) {} },
+  deleteCategory: async (id, cid) => { try { await callMemberStorage(id,'DELETE','/categories/'+cid); } catch(e) {} },
+  addNotification: async (id, notif) => { try { await callMemberStorage(id,'POST','/notifications',{notification:notif}); } catch(e) {} },
+  markAllRead: async (id) => { try { await callMemberStorage(id,'PUT','/notifications/read-all'); } catch(e) {} }
+};
+
 /* ─── Jira API ───────────────────────────────────────────────────────────── */
 async function callJira(proj, method, path, body=null) {
   let token = await _ensureSession();
@@ -257,11 +284,17 @@ async function callJira(proj, method, path, body=null) {
 async function syncToServer(type, payload) {
   try {
     const token = sessionStorage.getItem(SESSION_TOKEN_KEY);
-    await fetch(API_BASE + "/api/sync", {
+    const r = await fetch(API_BASE + "/api/sync", {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Session-Token": token || "" },
       body: JSON.stringify({ type, ...payload })
     });
+    if (r.ok) {
+      const syncResult = await r.json().catch(() => ({}));
+      if (syncResult.warnings && syncResult.warnings.length > 0) {
+        try { localStorage.setItem('qa_sync_warnings', JSON.stringify(syncResult.warnings)); } catch(e) {}
+      }
+    }
   } catch {}
 }
 
@@ -583,9 +616,12 @@ function NotifBell({userId}) {
   const [shown,setShown]=useState(NOTIF_PAGE);
   const btnRef=useRef(null);
   const now=Date.now();
-  const unread=DB.notifs.filter(n=>n.to===userId&&!n.read);
+  const thirtyDaysAgo = now - 30 * 24 * 60 * 60 * 1000;
+  const rawNotifs = DB.notifs.filter(n => n.to === userId);
+  const cleaned = rawNotifs.filter(n => n.at ? n.at > thirtyDaysAgo : true).slice(-100);
+  const unread=cleaned.filter(n=>!n.read);
   // Only show notifications from the last 7 days; fall back for legacy entries without `at`
-  const withinWeek=DB.notifs.filter(n=>n.to===userId&&(n.at?now-n.at<ONE_WEEK:true)).slice().reverse();
+  const withinWeek=cleaned.filter(n=>(n.at?now-n.at<ONE_WEEK:true)).slice().reverse();
   const visible=withinWeek.slice(0,shown);
   const hasMore=withinWeek.length>shown;
   const toggle=()=>{
@@ -940,6 +976,15 @@ function MembersPage() {
     }catch{setErr("Cannot reach server.");}
     setBusy(false);
   };
+  const [resetLinks,setResetLinks]=useState({});
+  const sendResetLink=async(id)=>{
+    try{
+      const r=await fetch(API_BASE+"/api/admin/members/"+id+"/generate-reset-token",{method:"POST",headers:{"X-Admin-Token":adminToken()}});
+      const d=await r.json();
+      if(!r.ok){alert(d.error||"Failed to generate reset token.");return;}
+      setResetLinks(p=>({...p,[id]:d.resetToken||d.token||""}));
+    }catch{alert("Cannot reach server.");}
+  };
   const ROLES=["Junior QA Engineer","Intermediate QA Engineer","Senior QA Engineer","QA Engineer Lead"];
   const th={textAlign:"left",padding:"8px 12px",borderBottom:"1px solid var(--color-border-tertiary)",fontSize:12,fontWeight:500,color:"var(--color-text-secondary)"};
   const td={padding:"10px 12px",borderBottom:"1px solid var(--color-border-tertiary)"};
@@ -969,7 +1014,7 @@ function MembersPage() {
       <table style={{width:"100%",borderCollapse:"collapse",fontSize:14}}>
         <thead><tr><th style={th}>Name</th><th style={th}>Role</th><th style={th}>Email</th><th style={th}>Project</th><th style={th}></th></tr></thead>
         <tbody>{list.map(m=>{ const ps=DB.assignments.filter(x=>x.memberId===m.id).map(a=>DB.projects.find(x=>x.id===a.projectId)).filter(Boolean);
-          return <tr key={m.id} style={editing===m.id?{background:"var(--color-background-subtle)"}:{}}><td style={td}><b>{m.name}</b></td><td style={td}><span style={{fontSize:13,color:"var(--color-text-secondary)"}}>{m.role}</span></td><td style={td}>{m.email}</td><td style={td}>{ps.length>0?ps.map(p=><Tag key={p.id} c="blue">{p.name}</Tag>):<span style={{color:"var(--color-text-tertiary)",fontSize:13}}>—</span>}</td><td style={td}><div style={{display:"flex",gap:8}}><Btn v="ghost" onClick={()=>startEdit(m)} disabled={busy}>Edit</Btn><Btn v="danger" onClick={()=>del(m.id)} disabled={busy}>Remove</Btn></div></td></tr>;
+          return <tr key={m.id} style={editing===m.id?{background:"var(--color-background-subtle)"}:{}}><td style={td}><b>{m.name}</b></td><td style={td}><span style={{fontSize:13,color:"var(--color-text-secondary)"}}>{m.role}</span></td><td style={td}>{m.email}</td><td style={td}>{ps.length>0?ps.map(p=><Tag key={p.id} c="blue">{p.name}</Tag>):<span style={{color:"var(--color-text-tertiary)",fontSize:13}}>—</span>}</td><td style={td}><div style={{display:"flex",gap:8,flexWrap:"wrap"}}><Btn v="ghost" onClick={()=>startEdit(m)} disabled={busy}>Edit</Btn><Btn v="danger" onClick={()=>del(m.id)} disabled={busy}>Remove</Btn>{resetLinks[m.id]?<div style={{display:"flex",gap:4,alignItems:"center"}}><input readOnly style={{fontSize:11,padding:"3px 6px",borderRadius:4,border:"1px solid var(--color-border-secondary)",background:"var(--color-background-secondary)",color:"var(--color-text-primary)",width:120}} value={resetLinks[m.id]}/><button onClick={()=>setResetLinks(p=>{const n={...p};delete n[m.id];return n;})} style={{fontSize:10,padding:"2px 5px",borderRadius:3,border:"none",background:"none",cursor:"pointer",color:"var(--color-text-danger)"}}>✕</button></div>:<Btn v="ghost" onClick={()=>sendResetLink(m.id)} disabled={busy}>Reset Link</Btn>}</div></td></tr>;
         })}</tbody>
       </table>}
     </div>
@@ -978,12 +1023,12 @@ function MembersPage() {
 
 function ProjectsPage() {
   const [list,setList]=useState([...DB.projects]);
-  const EMPTY_F={name:"",jiraProjKey:"",platform:"web",frontendRepoUrl:"",backendRepoUrl:""};
+  const EMPTY_F={name:"",jiraProjKey:"",platform:"web",frontendRepoUrl:"",backendRepoUrl:"",language:"ar"};
   const [f,setF]=useState({...EMPTY_F});
   const [editing,setEditing]=useState(null);
   const [testResult,setTestResult]=useState(null); const [testing,setTesting]=useState(false);
   const save=()=>{ if(!f.name) return; if(editing){Object.assign(DB.projects.find(x=>x.id===editing),f);setEditing(null);}else DB.projects.push({id:uid(),...f}); saveDB(); setList([...DB.projects]); setF({...EMPTY_F}); setTestResult(null); };
-  const edit=p=>{ setEditing(p.id); setF({name:p.name,jiraProjKey:p.jiraProjKey||"",platform:p.platform||"web",frontendRepoUrl:p.frontendRepoUrl||"",backendRepoUrl:p.backendRepoUrl||""}); setTestResult(null); };
+  const edit=p=>{ setEditing(p.id); setF({name:p.name,jiraProjKey:p.jiraProjKey||"",platform:p.platform||"web",frontendRepoUrl:p.frontendRepoUrl||"",backendRepoUrl:p.backendRepoUrl||"",language:p.language||"ar"}); setTestResult(null); };
   const testConnection=async()=>{
     if(!f.frontendRepoUrl.trim()&&!f.backendRepoUrl.trim()){ setTestResult({clientError:"Enter at least one repo URL first."}); return; }
     setTesting(true); setTestResult(null);
@@ -1008,6 +1053,7 @@ function ProjectsPage() {
         <div><Lbl>Name</Lbl><input style={inp} value={f.name} onChange={e=>setF(p=>({...p,name:e.target.value}))} placeholder="App QA"/></div>
         <div><Lbl>Platform</Lbl><select style={sel} value={f.platform} onChange={e=>setF(p=>({...p,platform:e.target.value}))}><option value="web">Web</option></select></div>
         <div><Lbl>Jira Project Key</Lbl><input style={inp} value={f.jiraProjKey} onChange={e=>setF(p=>({...p,jiraProjKey:e.target.value}))} placeholder="PROJ"/></div>
+        <div><Lbl>Language</Lbl><select style={sel} value={f.language||"ar"} onChange={e=>setF(p=>({...p,language:e.target.value}))}><option value="ar">Arabic RTL</option><option value="en">English LTR</option><option value="mixed">Mixed Language</option></select></div>
       </div>
       <div style={{fontSize:12,fontWeight:500,color:"var(--color-text-secondary)",marginBottom:8}}>Attached repos (optional) — enables automatic script generation &amp; execution, skipping manual Codegen recording</div>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
@@ -1135,6 +1181,15 @@ function DashboardPage() {
   const [perfMemberFilter,setPerfMemberFilter]=useState("All");
   const [covProjFilter,setCovProjFilter]=useState("All");
   const [covMemberFilter,setCovMemberFilter]=useState("All");
+  const [health,setHealth] = React.useState(null);
+  const [syncWarnings,setSyncWarnings] = React.useState(() => {
+    try { return JSON.parse(localStorage.getItem('qa_sync_warnings') || '[]'); } catch(e) { return []; }
+  });
+  React.useEffect(() => {
+    fetch(API_BASE + '/api/health', {
+      headers: {'X-Admin-Token': sessionStorage.getItem('qa_admin_token') || ''}
+    }).then(r => r.json()).then(setHealth).catch(() => {});
+  }, []);
   const fetchData=()=>{
     setLoading(true);
     const adminToken=sessionStorage.getItem(ADMIN_TOKEN_KEY)||"";
@@ -1192,6 +1247,19 @@ function DashboardPage() {
       {!loading&&!sd&&<span style={{fontSize:12,color:"var(--color-text-warning)"}}>⚠ Server data unavailable — start node server.js</span>}
       {!loading&&sd&&<button onClick={fetchData} style={{fontSize:12,padding:"4px 12px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",color:"var(--color-text-secondary)"}}>↻ Refresh</button>}
     </div>
+    {health && <div style={{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap"}}>
+      {[['Claude AI',health.claude],['Playwright',health.playwright],['k6',health.k6]].map(([name,ok]) =>
+        <div key={name} style={{display:"flex",alignItems:"center",gap:6,padding:"6px 12px",borderRadius:6,background:"var(--color-background-secondary)",fontSize:13,border:"1px solid var(--color-border-tertiary)"}}>
+          <span style={{width:8,height:8,borderRadius:"50%",background:ok?"#10B981":"#EF4444",display:"inline-block"}}/>
+          {name + (ok ? "" : " - NOT FOUND")}
+        </div>
+      )}
+    </div>}
+    {syncWarnings.length > 0 && <div style={{background:"#FEF3C7",border:"1px solid #F59E0B",borderRadius:8,padding:"10px 16px",marginBottom:16,fontSize:13,color:"#92400E"}}>
+      <strong>⚠ Storage Warning: </strong>
+      {syncWarnings.join(" · ")}
+      <button onClick={()=>{localStorage.removeItem("qa_sync_warnings");setSyncWarnings([]);}} style={{marginLeft:8,fontSize:11,color:"#92400E",background:"none",border:"none",cursor:"pointer",textDecoration:"underline"}}>Dismiss</button>
+    </div>}
     <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12,marginBottom:20}}>
       {cards.map(x=><div key={x.l} style={{...card,marginBottom:0,padding:18}}><div style={{fontSize:28,fontWeight:500,color:`var(--color-text-${x.c})`}}>{x.v}</div><div style={{fontSize:13,color:"var(--color-text-secondary)",marginTop:2}}>{x.l}</div></div>)}
     </div>
@@ -1447,6 +1515,13 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
   const [editingBugId,setEditingBugId]=useState(null); const [editBugForm,setEditBugForm]=useState({});
   const [toast,setToast]=useState(null);
   const showToast=(msg)=>{setToast(msg);setTimeout(()=>setToast(null),3000);};
+  const [syncStatus,setSyncStatus] = React.useState('idle');
+  const [genElapsed,setGenElapsed] = React.useState(0);
+  const genTimerRef = React.useRef(null);
+  const [showRejected,setShowRejected] = React.useState(false);
+  const [perfTab,setPerfTab] = React.useState('test');
+  const [perfHistory,setPerfHistory] = React.useState([]);
+  const [perfHistoryLoading,setPerfHistoryLoading] = React.useState(false);
 
   // ── Non-functional / performance test state ──────────────────────────────
   const PERF_FORM_DEFAULT={testType:"load",testName:"",method:"GET",apiUrl:"",expectedStatus:200,authType:"none",token:"",basicUsername:"",basicPassword:"",requestBody:"",vus:100,duration:"60s",ramp:"10s",p95Threshold:2000,csvUsers:null,csvFileName:"",csvError:"",variables:[],customHeaders:[]};
@@ -1574,7 +1649,17 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
   // Save workspace state on every change
   useEffect(()=>{
     if(phase==="input"||phase==="testType"){localStorage.removeItem(WS_SNAP);return;}
-    try{const uidFormSafe={...uidForm,figmaToken:""};localStorage.setItem(WS_SNAP,JSON.stringify({phase,testKind,sid,sdata,platform,ctypes,gapData,cases,scripts,tab,result,execLines,coverageText,sessionBugs,selectedForScripts,appUrl,uidForm:uidFormSafe,uidCases,uidVisualResult,uidFigmaImg,uidManualFigmaImg,uidJiraTicketKey,uidStoryId,uidScript,uidDemandName,uidSelectedForScript,uidJiraMode,uidStoryRequirements,uidStoryFiles,uidSvgFiles}));}catch{}
+    try{const uidFormSafe={...uidForm,figmaToken:""};const wsState={phase,testKind,sid,sdata,platform,ctypes,gapData,cases,scripts,tab,result,execLines,coverageText,sessionBugs,selectedForScripts,appUrl,uidForm:uidFormSafe,uidCases,uidVisualResult,uidFigmaImg,uidManualFigmaImg,uidJiraTicketKey,uidStoryId,uidScript,uidDemandName,uidSelectedForScript,uidJiraMode,uidStoryRequirements,uidStoryFiles,uidSvgFiles};localStorage.setItem(WS_SNAP,JSON.stringify(wsState));
+    setSyncStatus('syncing');
+    serverStorage.saveWorkspace(member.id, wsState).then(ok => {
+      setSyncStatus(ok ? 'ok' : 'failed');
+    });
+    try {
+      const bc = new BroadcastChannel('qa-ws-' + member.id);
+      bc.postMessage('updated');
+      bc.close();
+    } catch(e) {}
+    }catch{}
     // Also keep per-story cache up to date
     if(sid&&sdata)saveStoryToCache(sid,{phase,sdata,platform,ctypes,gapData,cases,needsClarification,scripts,result,sessionBugs,coverageText,appUrl});
   },[phase,sid,sdata,platform,ctypes,gapData,cases,scripts,tab,result,execLines,coverageText,sessionBugs,selectedForScripts,appUrl,uidCases,uidVisualResult,uidJiraTicketKey,uidStoryId,uidScript,uidDemandName,uidSelectedForScript,uidJiraMode,uidStoryRequirements,uidStoryFiles,uidSvgFiles]);
@@ -1594,6 +1679,30 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
     },2000);
     return()=>clearInterval(iv);
   },[codegenStatus,codegenSessionId]);
+
+  // GAP-09: Tab conflict detection
+  React.useEffect(() => {
+    if (!member?.id) return;
+    let bc;
+    try {
+      bc = new BroadcastChannel('qa-ws-' + member.id);
+      bc.onmessage = () => {
+        if (typeof showToast === 'function') showToast('Another tab updated your workspace.');
+      };
+    } catch(e) {}
+    return () => { try { if(bc) bc.close(); } catch(e) {} };
+  }, [member?.id]);
+
+  // GAP-19: Elapsed time counter
+  React.useEffect(() => {
+    if (loading) {
+      setGenElapsed(0);
+      genTimerRef.current = setInterval(() => setGenElapsed(s => s + 1), 1000);
+    } else {
+      clearInterval(genTimerRef.current);
+    }
+    return () => clearInterval(genTimerRef.current);
+  }, [loading]);
 
   const startCodegen=async()=>{
     setCodegenStatus("launching");
@@ -1879,6 +1988,12 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
   // Never rewrites/merges/duplicates existing cases, even if worded differently.
   const doFindGaps=async()=>{
     if(cases.length===0){alert("Generate or add test cases first — gap analysis compares against your existing list.");return;}
+    const pendingCases = cases.filter(c => !c.status || c.status === 'pending');
+    if (pendingCases.length > 0) {
+      if (!window.confirm(pendingCases.length + ' test case' + (pendingCases.length > 1 ? 's are' : ' is') + ' still pending review. For accurate gap analysis, review all cases first. Continue anyway?')) {
+        return;
+      }
+    }
     setLoading(true); setLmsg("Analyzing story for coverage gaps…");
     const ctx=sdata&&!sdata.sim?`Story ID: ${sid}\nSummary: "${sdata.summary}"\n\nFull Description / Acceptance Criteria / Comments:\n${sdata.description?.slice(0,20000)||"No description provided."}`:"Simulate a realistic feature story with 5 clear, distinct acceptance criteria covering different aspects of the feature.";
     const existingList=cases.map(c=>`${c.id} | ${c.type} | ${c.title}`).join("\n");
@@ -2347,6 +2462,8 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
           {testKind==="functional"&&sdata&&<Tag c={sdata.sim?"":"green"}>{sdata.sim?"AI simulation":"Jira ✓"}</Tag>}
           {testKind==="non-functional"&&(phase==="perfTest"||phase==="perfResult")&&<Tag c="amber">Performance</Tag>}
           {testKind==="ui-design"&&<Tag c="blue">UI Design Test</Tag>}
+          {syncStatus === 'syncing' && <span style={{fontSize:11,color:'#94A3B8'}}>Syncing...</span>}
+          {syncStatus === 'failed' && <span style={{fontSize:11,color:'#F59E0B',cursor:'pointer'}} title="Click to retry" onClick={()=>serverStorage.saveWorkspace(member.id,{})}>⚠ Sync failed</span>}
         </div>
       </div>
       <div style={{display:"flex",gap:8}}>
@@ -2365,7 +2482,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
     {SwitchProjModal}
     <div style={{display:"flex",gap:16}}>
       <div style={{flex:1,minWidth:0}}>
-        {loading&&<Loader msg={lmsg}/>}
+        {loading&&<Loader msg={lmsg+(genElapsed>3?' ('+genElapsed+'s)':'')}/>}
 
         {!loading&&phase==="project"&&<div>
           <H2 style={{marginBottom:16}}>Choose a project to start</H2>
@@ -2896,7 +3013,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
             setUidScriptLoading(true);setUidScriptError("");setUidScript({config:"",page:"",spec:""});
             try{
               const selected=uidCases.filter(c=>uidSelectedForScript.includes(c.id));
-              const r=await fetch(API_BASE+"/api/ui-design/generate-scripts",{method:"POST",headers:{"Content-Type":"application/json","X-Member-Token":sessionStorage.getItem(MEMBER_TOKEN_KEY)||""},body:JSON.stringify({testCases:selected,pageUrl:uidForm.pageUrl,figmaUrl:uidForm.figmaUrl||"",projectName:proj?.name||"Doroob",demandName:demand,jiraTicketKey:uidJiraTicketKey||""})});
+              const r=await fetch(API_BASE+"/api/ui-design/generate-scripts",{method:"POST",headers:{"Content-Type":"application/json","X-Member-Token":sessionStorage.getItem(MEMBER_TOKEN_KEY)||""},body:JSON.stringify({testCases:selected,pageUrl:uidForm.pageUrl,figmaUrl:uidForm.figmaUrl||"",projectName:proj?.name||"Doroob",demandName:demand,jiraTicketKey:uidJiraTicketKey||"",language:(proj&&proj.language)?proj.language:"ar"})});
               const d=await r.json();
               if(d.error)throw new Error(d.error);
               setUidScript({config:d.config||"",page:d.page||"",spec:d.spec||""});
@@ -3300,7 +3417,27 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
             s_(updates);
             setCurlErr("");
           };
-          return <div style={{display:"flex",gap:20,alignItems:"flex-start"}}>
+          const ptabBtn=(id,lbl)=><button onClick={()=>{
+            if(id==='history'&&perfHistory.length===0&&!perfHistoryLoading){
+              setPerfHistoryLoading(true);
+              const token=sessionStorage.getItem(MEMBER_TOKEN_KEY)||sessionStorage.getItem(SESSION_TOKEN_KEY)||"";
+              fetch(API_BASE+"/api/members/"+member.id+"/perf-history",{headers:{"X-Member-Token":token}}).then(r=>r.json()).then(d=>{setPerfHistory(Array.isArray(d.history)?d.history:[]);setPerfHistoryLoading(false);}).catch(()=>setPerfHistoryLoading(false));
+            }
+            setPerfTab(id);
+          }} style={{padding:"6px 16px",borderRadius:8,border:"1px solid "+(perfTab===id?"var(--color-text-info)":"var(--color-border-secondary)"),background:perfTab===id?"var(--color-background-info)":"transparent",cursor:"pointer",fontSize:13,fontWeight:perfTab===id?600:400,color:perfTab===id?"var(--color-text-info)":"var(--color-text-secondary)"}}>{lbl}</button>;
+          return <div>
+          <div style={{display:"flex",gap:8,marginBottom:16}}>{ptabBtn("test","Configure Test")}{ptabBtn("history","History")}</div>
+          {perfTab==="history"&&<div style={card}>
+            <H2 style={{marginBottom:12}}>Performance Test History</H2>
+            {perfHistoryLoading?<div style={{color:"var(--color-text-tertiary)",fontSize:13}}>Loading...</div>:perfHistory.length===0?<div style={{color:"var(--color-text-tertiary)",fontSize:13}}>No history yet. Run a test to see results here.</div>:
+            <div style={{overflowX:"auto"}}>
+              <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+                <thead><tr style={{borderBottom:"1px solid var(--color-border-secondary)"}}>{["Name","Method","URL","VUs","Duration","p95 (ms)","Threshold","Pass/Fail","Date"].map(h=><th key={h} style={{padding:"6px 10px",textAlign:"left",fontWeight:600,color:"var(--color-text-secondary)"}}>{h}</th>)}</tr></thead>
+                <tbody>{perfHistory.map((h,i)=><tr key={i} style={{borderBottom:"1px solid var(--color-border-tertiary)"}}><td style={{padding:"6px 10px"}}>{h.testName||"—"}</td><td style={{padding:"6px 10px"}}>{h.method||"GET"}</td><td style={{padding:"6px 10px",maxWidth:120,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={h.apiUrl||""}>{h.apiUrl||"—"}</td><td style={{padding:"6px 10px"}}>{h.vus||"—"}</td><td style={{padding:"6px 10px"}}>{h.duration||"—"}</td><td style={{padding:"6px 10px"}}>{h.p95!=null?h.p95:"—"}</td><td style={{padding:"6px 10px"}}>{h.p95Threshold?"≤"+h.p95Threshold+"ms":"—"}</td><td style={{padding:"6px 10px"}}><span style={{color:h.passed?"var(--color-text-success)":"var(--color-text-danger)",fontWeight:600}}>{h.passed?"✓ Pass":"✗ Fail"}</span></td><td style={{padding:"6px 10px",whiteSpace:"nowrap"}}>{h.at?new Date(h.at).toLocaleDateString():"—"}</td></tr>)}</tbody>
+              </table>
+            </div>}
+          </div>}
+          {perfTab==="test"&&<div style={{display:"flex",gap:20,alignItems:"flex-start"}}>
             {/* ── LEFT: form ── */}
             <div style={{flex:1,minWidth:0,display:"flex",flexDirection:"column",gap:0}}>
 
@@ -3490,6 +3627,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
                 </div>}
               </div>
             </div>
+          </div>}
           </div>;
         })()}
 
@@ -3706,16 +3844,26 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
           <Confirm icon="🔍" title="Would you like to review and edit the test cases?" desc="Approve, reject, and modify each case before proceeding." onYes={()=>{setEditOn(true);setPhase("review");}} onNo={()=>{setCases(cs=>cs.map(c=>({...c,status:"approved"})));setPhase("jira");}} yesLabel="Yes, review" noLabel="Approve all"/>
         </div>}
 
-        {!loading&&phase==="review"&&<div>
+        {!loading&&phase==="review"&&(()=>{
+          const rejectedCases=cases.filter(c=>c.status==="rejected");
+          const activeCases=cases.filter(c=>c.status!=="rejected");
+          const goToNextPhase=()=>{
+            if(proj&&proj.jiraProjKey){
+              const exportFirst=window.confirm("Export test cases to Jira before generating scripts? Click OK to go to Jira export, or Cancel to skip and generate scripts directly.");
+              if(exportFirst){setPhase("jira");return;}
+            }
+            setAppUrl("");setPhase("urlPrompt");
+          };
+          return <div>
           <div style={{...card,padding:"12px 20px",display:"flex",alignItems:"center",gap:16}}>
             <div style={{flex:1,fontSize:14}}>Story: <b>{sid}</b> · <Tag c="blue">web</Tag></div>
             <div style={{fontSize:13,display:"flex",gap:12,alignItems:"center"}}>
               <span style={{color:"var(--color-text-success)"}}>✓ {cases.filter(c=>c.status==="approved").length}</span>
-              <span style={{color:"var(--color-text-danger)"}}>✗ {cases.filter(c=>c.status==="rejected").length}</span>
+              <span style={{color:"var(--color-text-danger)"}}>✗ {rejectedCases.length}</span>
               <span style={{color:"var(--color-text-tertiary)"}}>⏳ {cases.filter(c=>c.status==="pending").length}</span>
             </div>
           </div>
-          {cases.map(c=><div key={c.id} style={{...card,borderLeft:"3px solid "+(c.status==="approved"?"var(--color-text-success)":c.status==="rejected"?"var(--color-text-danger)":"var(--color-border-secondary)")}}>
+          {activeCases.map(c=><div key={c.id} style={{...card,borderLeft:"3px solid "+(c.status==="approved"?"var(--color-text-success)":c.status==="rejected"?"var(--color-text-danger)":"var(--color-border-secondary)")}}>
             <div style={{display:"flex",gap:12}}>
               <div style={{flex:1}}>
                 <div style={{display:"flex",gap:8,marginBottom:10,flexWrap:"wrap",alignItems:"center"}}><Tag c="blue">{c.id}</Tag>{editOn?<select style={{padding:"2px 8px",borderRadius:12,border:"1px solid var(--color-border-secondary)",background:"var(--color-background-secondary)",color:"var(--color-text-primary)",fontSize:12,fontWeight:500,cursor:"pointer"}} value={c.type} onChange={e=>editC(c.id,"type",e.target.value)}><option value="happy">happy</option><option value="edge">edge</option><option value="negative">negative</option></select>:<Tag c={tcol(c.type)}>{c.type}</Tag>}{c.automatable===false&&<Tag>manual only</Tag>}{c.status==="approved"&&<Tag c="green">✓ approved</Tag>}{c.status==="rejected"&&<span style={{display:"inline-block",padding:"2px 9px",borderRadius:20,fontSize:12,fontWeight:500,background:"var(--color-background-danger)",color:"var(--color-text-danger)"}}>✗ rejected</span>}</div>
@@ -3737,7 +3885,19 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
               <div style={{display:"flex",flexDirection:"column",gap:8,minWidth:96}}><Btn v="success" onClick={()=>approve(c.id)}>✓ Approve</Btn><Btn v="danger" onClick={()=>reject(c.id)}>✗ Reject</Btn></div>
             </div>
           </div>)}
-          <div style={{marginBottom:16}}>
+          {rejectedCases.length > 0 && <div style={{marginTop:16}}>
+            <button onClick={()=>setShowRejected(o=>!o)} style={{fontSize:12,color:"#94A3B8",background:"none",border:"1px solid #94A3B8",borderRadius:4,padding:"3px 8px",cursor:"pointer"}}>
+              {(showRejected ? "Hide" : "Show") + " " + rejectedCases.length + " rejected case" + (rejectedCases.length > 1 ? "s" : "")}
+            </button>
+            {showRejected && <div style={{marginTop:8}}>
+              {rejectedCases.map(c => <div key={c.id} style={{opacity:0.6,borderLeft:"3px solid #EF4444",paddingLeft:8,marginBottom:8,display:"flex",alignItems:"center",gap:8}}>
+                <span style={{fontSize:11,color:"#EF4444"}}>Rejected</span>
+                <span style={{fontSize:13,flex:1}}>{c.title}</span>
+                <button onClick={()=>setCases(cs=>cs.map(x=>x.id===c.id?{...x,status:"pending"}:x))} style={{fontSize:11,padding:"2px 6px",borderRadius:3,border:"1px solid #94A3B8",background:"none",cursor:"pointer"}}>Restore</button>
+              </div>)}
+            </div>}
+          </div>}
+          <div style={{marginBottom:16,marginTop:16}}>
             <button onClick={()=>setShowAddCase(o=>!o)} style={{...ghostBtn,borderStyle:"dashed"}}>+ Add test case manually</button>
           </div>
           {showAddCase&&<div style={{...card,border:"2px dashed var(--color-border-secondary)",marginBottom:16}}>
@@ -3764,10 +3924,10 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
           </div>}
           <div style={{display:"flex",gap:10,marginBottom:16}}>
             {cases.filter(c=>c.status==="pending").length>0
-              ?<Btn v="primary" onClick={()=>{setCases(cs=>cs.map(c=>c.status==="pending"?{...c,status:"approved"}:c));setPhase("jira");}}>✓ Approve {cases.filter(c=>c.status==="pending").length} Remaining & Continue</Btn>
-              :<Btn v="primary" onClick={()=>setPhase("jira")}>Continue →</Btn>}
+              ?<Btn v="primary" onClick={()=>{setCases(cs=>cs.map(c=>c.status==="pending"?{...c,status:"approved"}:c));goToNextPhase();}}>✓ Approve {cases.filter(c=>c.status==="pending").length} Remaining & Continue</Btn>
+              :<Btn v="primary" onClick={goToNextPhase}>Continue →</Btn>}
           </div>
-        </div>}
+        </div>;})()}
 
         {!loading&&phase==="jira"&&<div>
           <div style={{...card,padding:"16px 20px"}}>
@@ -4258,6 +4418,23 @@ function LoginPage({onLogin}) {
   const [err,setErr]=useState("");
   const [remember,setRemember]=useState(!!saved);
   const [busy,setBusy]=useState(false);
+  const [showForgot,setShowForgot]=useState(false);
+  const [resetToken,setResetToken]=useState("");
+  const [newPwd,setNewPwd]=useState(""); const [confirmPwd,setConfirmPwd]=useState("");
+  const [resetErr,setResetErr]=useState(""); const [resetOk,setResetOk]=useState(false); const [resetBusy,setResetBusy]=useState(false);
+  const doReset=async()=>{
+    if(!resetToken.trim()||!newPwd||!confirmPwd){setResetErr("All fields are required.");return;}
+    if(newPwd!==confirmPwd){setResetErr("Passwords do not match.");return;}
+    if(newPwd.length<8){setResetErr("Password must be at least 8 characters.");return;}
+    setResetBusy(true); setResetErr("");
+    try{
+      const r=await fetch(API_BASE+"/api/auth/reset-password",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({token:resetToken.trim(),newPassword:newPwd})});
+      const d=await r.json();
+      if(!r.ok){setResetErr(d.error||"Reset failed.");setResetBusy(false);return;}
+      setResetOk(true);
+    }catch{setResetErr("Cannot reach server.");}
+    setResetBusy(false);
+  };
   const login=async()=>{
     if(mode==="admin"){
       if(email!=="admin"){setErr("Username must be 'admin'");return;}
@@ -4304,6 +4481,21 @@ function LoginPage({onLogin}) {
       {err&&<div style={{color:"var(--color-text-danger)",fontSize:13,marginBottom:12}}>{err}</div>}
       <button type="submit" disabled={busy} style={{width:"100%",padding:"8px 0",borderRadius:8,border:"none",background:"var(--color-text-info)",color:"#fff",cursor:busy?"not-allowed":"pointer",fontSize:14,fontWeight:500,opacity:busy?0.7:1}}>{busy?"Signing in…":"Sign in"}</button>
       </form>
+      {mode==="member"&&!showForgot&&<button onClick={()=>setShowForgot(true)} style={{background:"none",border:"none",cursor:"pointer",fontSize:12,color:"var(--color-text-tertiary)",marginTop:14,textDecoration:"underline"}}>Forgot password?</button>}
+      {mode==="member"&&showForgot&&<div style={{marginTop:16,paddingTop:16,borderTop:"1px solid var(--color-border-tertiary)"}}>
+        {resetOk?<div style={{color:"var(--color-text-success)",fontSize:13}}>✓ Password reset. You can now sign in with your new password.</div>:<div style={{display:"flex",flexDirection:"column",gap:8}}>
+          <div style={{fontSize:13,fontWeight:500,color:"var(--color-text-primary)"}}>Reset Password</div>
+          <div style={{fontSize:12,color:"var(--color-text-tertiary)"}}>Ask your admin for a reset token, then enter it below.</div>
+          <input style={inp} value={resetToken} onChange={e=>setResetToken(e.target.value)} placeholder="Reset token (from admin)"/>
+          <input type="password" style={inp} value={newPwd} onChange={e=>setNewPwd(e.target.value)} placeholder="New password (min. 8 chars)"/>
+          <input type="password" style={inp} value={confirmPwd} onChange={e=>setConfirmPwd(e.target.value)} placeholder="Confirm new password"/>
+          {resetErr&&<div style={{color:"var(--color-text-danger)",fontSize:12}}>{resetErr}</div>}
+          <div style={{display:"flex",gap:8}}>
+            <button onClick={doReset} disabled={resetBusy} style={{flex:1,padding:"8px 0",borderRadius:8,border:"none",background:"var(--color-text-info)",color:"#fff",cursor:resetBusy?"not-allowed":"pointer",fontSize:13,fontWeight:500,opacity:resetBusy?0.7:1}}>{resetBusy?"Resetting…":"Reset Password"}</button>
+            <button onClick={()=>{setShowForgot(false);setResetErr("");setResetToken("");setNewPwd("");setConfirmPwd("");}} style={{padding:"8px 14px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:13,color:"var(--color-text-secondary)"}}>Cancel</button>
+          </div>
+        </div>}
+      </div>}
     </div>
   </div>;
 }
@@ -4346,6 +4538,46 @@ function AdminChangePasswordModal({onClose,forced}) {
         <div style={{display:"flex",gap:8,justifyContent:"flex-end",marginTop:4}}>
           {!forced&&<button onClick={onClose} style={ghostBtn}>Cancel</button>}
           <Btn v="primary" onClick={submit} disabled={busy}>{busy?"Saving…":"Change Password"}</Btn>
+        </div>
+      </div>}
+    </div>
+  </div>;
+}
+
+/* ─── Admin Change Username Modal (GAP-18) ─────────────────────────────────── */
+function AdminChangeUsernameModal({onClose}) {
+  const [newUsername,setNewUsername]=useState("");
+  const [currentPwd,setCurrentPwd]=useState("");
+  const [err,setErr]=useState(""); const [ok,setOk]=useState(false); const [busy,setBusy]=useState(false);
+  const submit=async()=>{
+    if(!newUsername.trim()||!currentPwd){setErr("All fields are required.");return;}
+    if(newUsername.trim().length<3){setErr("Username must be at least 3 characters.");return;}
+    setBusy(true); setErr("");
+    try{
+      const adminToken=sessionStorage.getItem(ADMIN_TOKEN_KEY)||"";
+      const r=await fetch(API_BASE+"/api/admin/change-username",{method:"POST",headers:{"Content-Type":"application/json","X-Admin-Token":adminToken},body:JSON.stringify({newUsername:newUsername.trim(),currentPassword:currentPwd})});
+      const d=await r.json();
+      if(!r.ok){setErr(d.error||"Failed to change username.");setBusy(false);return;}
+      setOk(true);
+    }catch{setErr("Cannot reach server.");}
+    setBusy(false);
+  };
+  const ov={position:"fixed",inset:0,background:"rgba(0,0,0,0.6)",zIndex:2000,display:"flex",alignItems:"center",justifyContent:"center"};
+  const bx={background:"var(--color-background-primary)",borderRadius:14,padding:28,width:400,maxWidth:"90vw",boxShadow:"0 8px 32px rgba(0,0,0,0.22)"};
+  const ghostBtn={padding:"9px 20px",borderRadius:10,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:14,fontWeight:500,color:"var(--color-text-secondary)"};
+  return <div style={ov} onClick={onClose}>
+    <div style={bx} onClick={e=>e.stopPropagation()}>
+      <div style={{fontWeight:600,fontSize:16,marginBottom:16}}>👤 Change Admin Username</div>
+      {ok?<div>
+        <div style={{color:"var(--color-text-success)",fontSize:14,marginBottom:16}}>✓ Username changed successfully.</div>
+        <Btn v="primary" onClick={onClose}>Done</Btn>
+      </div>:<div style={{display:"flex",flexDirection:"column",gap:10}}>
+        <div><Lbl>New Username</Lbl><input style={inp} value={newUsername} onChange={e=>setNewUsername(e.target.value)} placeholder="e.g. qa-lead"/></div>
+        <div><Lbl>Current Password (to confirm)</Lbl><input type="password" style={inp} value={currentPwd} onChange={e=>setCurrentPwd(e.target.value)} placeholder="Your current admin password"/></div>
+        {err&&<div style={{color:"var(--color-text-danger)",fontSize:13}}>{err}</div>}
+        <div style={{display:"flex",gap:8,justifyContent:"flex-end",marginTop:4}}>
+          <button onClick={onClose} style={ghostBtn}>Cancel</button>
+          <Btn v="primary" onClick={submit} disabled={busy}>{busy?"Saving…":"Change Username"}</Btn>
         </div>
       </div>}
     </div>
@@ -4480,12 +4712,15 @@ function App() {
   const [user,setUser]=useState(()=>{const u=loadSession();if(u?.role==="member")_currentMemberId=u.id;return u;}); const [page,setPage]=useState(()=>{const u=loadSession();return u?.role==="admin"?"dashboard":"workspace";}); const [,tick]=useState(0);
   const [showConfig,setShowConfig]=useState(()=>{const u=loadSession();return !!(u?.role==="member"&&!sessionStorage.getItem(SESSION_TOKEN_KEY));});
   const [showChangePwd,setShowChangePwd]=useState(false);
+  const [showChangeUsername,setShowChangeUsername]=useState(false);
+  const [showOnboarding,setShowOnboarding]=useState(false);
   const [savedStories,setSavedStories]=useState(()=>[...DB.savedStories]);
   const [restoreTarget,setRestoreTarget]=useState(null);
   const [activeSid,setActiveSid]=useState(""); const [activeProj,setActiveProj]=useState(null);
   const [renamingId,setRenamingId]=useState(null); const [renameVal,setRenameVal]=useState("");
   const [deleteConfirmId,setDeleteConfirmId]=useState(null);
   const [renamingCatId,setRenamingCatId]=useState(null); const [renameCatVal,setRenameCatVal]=useState("");
+  const [storySearch,setStorySearch]=useState("");
   const renameCat=(id,name)=>{if(!name.trim())return;DB.categories=DB.categories.map(c=>c.id===id?{...c,name:name.trim()}:c);saveDB();refreshSaved();setRenamingCatId(null);};
   const [,forceUpdate]=useState(0);
   const [resetTrigger,setResetTrigger]=useState(0);
@@ -4520,6 +4755,8 @@ function App() {
     if(u.role==="admin"){loadMembersFromServer();}
     if(u.role==="member"){
       if(!u.hasSession){setShowConfig(true);}
+      const onboardedKey='qa_onboarded_'+u.id;
+      if(!localStorage.getItem(onboardedKey)){setShowOnboarding(true);}
     }
   };
   const handleLogout=()=>{localStorage.removeItem('qa_ws_'+_currentMemberId);_currentMemberId="";localStorage.removeItem(SESSION_KEY);sessionStorage.removeItem(SESSION_KEY);sessionStorage.removeItem(SESSION_TOKEN_KEY);sessionStorage.removeItem(ADMIN_TOKEN_KEY);sessionStorage.removeItem(MEMBER_TOKEN_KEY);setUser(null);setPage("workspace");setShowConfig(false);setShowChangePwd(false);};
@@ -4535,6 +4772,23 @@ function App() {
   return <div style={{fontFamily:"-apple-system,BlinkMacSystemFont,'Segoe UI','Inter',sans-serif",color:"var(--color-text-primary)",minHeight:"100vh",background:"#f1f5f9",display:"flex"}}>
     {showConfig&&user?.role==="member"&&<MemberConfigDialog memberId={user.id} onClose={()=>setShowConfig(false)}/>}
     {showChangePwd&&user?.role==="admin"&&<AdminChangePasswordModal forced={!!user.forceChangePwd} onClose={()=>{setShowChangePwd(false);setUser(u=>({...u,forceChangePwd:false}));}}/>}
+    {showChangeUsername&&user?.role==="admin"&&<AdminChangeUsernameModal onClose={()=>setShowChangeUsername(false)}/>}
+    {showOnboarding&&user?.role==="member"&&<div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.65)",zIndex:3000,display:"flex",alignItems:"center",justifyContent:"center"}}>
+      <div style={{background:"var(--color-background-primary)",borderRadius:16,padding:32,width:480,maxWidth:"92vw",boxShadow:"0 12px 48px rgba(0,0,0,0.3)"}}>
+        <div style={{fontWeight:700,fontSize:20,marginBottom:8}}>Welcome to QA AI Platform</div>
+        <div style={{fontSize:14,color:"var(--color-text-secondary)",lineHeight:1.7,marginBottom:20}}>
+          Here is a quick overview of your workspace:
+          <ul style={{paddingLeft:20,marginTop:10}}>
+            <li><b>Enter a story ID</b> to start generating test cases with AI.</li>
+            <li><b>Review &amp; approve</b> the generated cases before exporting.</li>
+            <li><b>Export to Jira</b> or generate automation scripts.</li>
+            <li>Use <b>Settings</b> in the sidebar to configure your Jira integration.</li>
+            <li>Your sessions are <b>auto-saved</b> — pick up right where you left off.</li>
+          </ul>
+        </div>
+        <Btn v="primary" onClick={()=>{localStorage.setItem('qa_onboarded_'+user.id,'1');setShowOnboarding(false);}}>Get Started</Btn>
+      </div>
+    </div>}
     <div style={{width:224,minHeight:"100vh",background:"#ffffff",borderRight:"1px solid var(--color-border-tertiary)",display:"flex",flexDirection:"column",flexShrink:0,boxShadow:"1px 0 0 rgba(15,23,42,0.06)"}}>
       <div style={{padding:"18px 20px 14px",borderBottom:"1px solid var(--color-border-tertiary)"}}>
         <div style={{fontWeight:700,fontSize:15,letterSpacing:"-0.01em",color:"var(--color-text-primary)"}}>QA AI Platform</div>
@@ -4549,8 +4803,9 @@ function App() {
             </div>;})}
         </div>)}
         {user.role==="member"&&savedStories.length>0&&(()=>{
-          const visibleStories=activeProj?savedStories.filter(s=>storyMatchesProject(s,activeProj.jiraProjKey,activeProj.id)):savedStories;
-          if(visibleStories.length===0)return null;
+          const projFiltered=activeProj?savedStories.filter(s=>storyMatchesProject(s,activeProj.jiraProjKey,activeProj.id)):savedStories;
+          const visibleStories=storySearch.trim()?projFiltered.filter(s=>(s.name||s.sid||"").toLowerCase().includes(storySearch.trim().toLowerCase())):projFiltered;
+          if(projFiltered.length===0)return null;
           const isActive=s=>s.testKind==="ui-design"?activeSid===("uid:"+s.id)&&page==="workspace":s.testKind==="non-functional"?activeSid===("perf:"+s.id)&&page==="workspace":s.sid===activeSid&&page==="workspace";
           const StoryCard=({s})=>(
             <div key={s.id} style={{borderRadius:7,padding:"8px 9px",background:isActive(s)?"var(--color-background-info)":"var(--color-background-primary)",border:isActive(s)?"1px solid var(--color-text-info)":"1px solid var(--color-border-tertiary)",cursor:renamingId===s.id?"default":"pointer",transition:"border-color 0.15s",borderLeft:isActive(s)?"3px solid var(--color-text-info)":"1px solid var(--color-border-tertiary)"}}
@@ -4584,6 +4839,8 @@ function App() {
           const uncategorized=visibleStories.filter(s=>!s.categoryId);
           return <div style={{padding:"6px 12px 12px"}}>
             <div style={{fontSize:11,fontWeight:500,color:"var(--color-text-tertiary)",textTransform:"uppercase",letterSpacing:"0.07em",padding:"10px 8px 6px"}}>Saved Stories</div>
+            {projFiltered.length > 4 && <input value={storySearch} onChange={e=>setStorySearch(e.target.value)} placeholder="Search stories..." style={{width:"100%",boxSizing:"border-box",fontSize:11,padding:"4px 8px",borderRadius:5,border:"1px solid var(--color-border-secondary)",background:"var(--color-background-secondary)",color:"var(--color-text-primary)",marginBottom:6,outline:"none"}}/>}
+            {visibleStories.length===0&&storySearch.trim()&&<div style={{fontSize:11,color:"var(--color-text-tertiary)",padding:"4px 8px"}}>No stories match.</div>}
             {grouped.map(({cat,stories})=>(
               <div key={cat.id} style={{marginBottom:10}}>
                 <div style={{fontSize:11,fontWeight:600,color:"var(--color-text-secondary)",padding:"2px 4px 5px",display:"flex",alignItems:"center",gap:4}}>
@@ -4625,7 +4882,8 @@ function App() {
         {user.role==="member"&&<button className="qa-btn" onClick={()=>setShowConfig(true)} style={{width:"100%",padding:"7px 0",borderRadius:9,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:13,color:"var(--color-text-secondary)",marginBottom:8,display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>
           {sessionStorage.getItem(SESSION_TOKEN_KEY)?<><span style={{color:"var(--color-text-success)"}}>●</span> Settings</>:<><span style={{color:"var(--color-text-warning)"}}>●</span> Settings</>}
         </button>}
-        {user.role==="admin"&&<button className="qa-btn" onClick={()=>setShowChangePwd(true)} style={{width:"100%",padding:"7px 0",borderRadius:9,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:13,color:"var(--color-text-secondary)",marginBottom:8}}>🔒 Change Password</button>}
+        {user.role==="admin"&&<button className="qa-btn" onClick={()=>setShowChangePwd(true)} style={{width:"100%",padding:"7px 0",borderRadius:9,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:13,color:"var(--color-text-secondary)",marginBottom:6}}>🔒 Change Password</button>}
+        {user.role==="admin"&&<button className="qa-btn" onClick={()=>setShowChangeUsername(true)} style={{width:"100%",padding:"7px 0",borderRadius:9,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:13,color:"var(--color-text-secondary)",marginBottom:8}}>👤 Change Username</button>}
         <button className="qa-btn" onClick={handleLogout} style={{width:"100%",padding:"8px 0",borderRadius:9,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:13,color:"var(--color-text-secondary)"}}>Sign out</button>
       </div>
     </div>
