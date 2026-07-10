@@ -160,9 +160,8 @@ loadDB();
 const uid = () => Math.random().toString(36).slice(2,8);
 const tod = () => new Date().toLocaleDateString();
 const ts  = () => new Date().toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"});
-const platDetect = t => /mobile|ios|android|\bapp\b|swipe/i.test(t) ? "mobile" : "web";
 const tcol = t => t==="happy"?"green":t==="edge"?"amber":"blue";
-const fwName = p => p==="mobile" ? "Appium" : "Playwright";
+const fwName = () => "Playwright";
 const pushNotif = (to,msg) => { DB.notifs.push({id:uid(),to,msg,read:false,ts:ts(),at:Date.now()}); saveDB(); };
 
 /* ─── Deployment helpers ─────────────────────────────────────────────────── */
@@ -1007,7 +1006,7 @@ function ProjectsPage() {
     <div style={card}><H2>{editing?"Edit":"New"} project</H2>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
         <div><Lbl>Name</Lbl><input style={inp} value={f.name} onChange={e=>setF(p=>({...p,name:e.target.value}))} placeholder="App QA"/></div>
-        <div><Lbl>Platform</Lbl><select style={sel} value={f.platform} onChange={e=>setF(p=>({...p,platform:e.target.value}))}><option value="web">Web</option><option value="mobile">Mobile</option><option value="both">Both</option></select></div>
+        <div><Lbl>Platform</Lbl><select style={sel} value={f.platform} onChange={e=>setF(p=>({...p,platform:e.target.value}))}><option value="web">Web</option></select></div>
         <div><Lbl>Jira Project Key</Lbl><input style={inp} value={f.jiraProjKey} onChange={e=>setF(p=>({...p,jiraProjKey:e.target.value}))} placeholder="PROJ"/></div>
       </div>
       <div style={{fontSize:12,fontWeight:500,color:"var(--color-text-secondary)",marginBottom:8}}>Attached repos (optional) — enables automatic script generation &amp; execution, skipping manual Codegen recording</div>
@@ -1035,7 +1034,7 @@ function ProjectsPage() {
         <tbody>{list.map(p=>{
           const memberCount=DB.assignments.filter(a=>a.projectId===p.id).length;
           const attachedCount=[p.frontendRepoUrl,p.backendRepoUrl].filter(Boolean).length;
-          return <tr key={p.id}><td style={td}><b>{p.name}</b></td><td style={td}><Tag c="blue">{p.jiraProjKey||"—"}</Tag></td><td style={td}><Tag c={p.platform==="mobile"?"amber":"blue"}>{p.platform}</Tag></td>
+          return <tr key={p.id}><td style={td}><b>{p.name}</b></td><td style={td}><Tag c="blue">{p.jiraProjKey||"—"}</Tag></td><td style={td}><Tag c="blue">{p.platform}</Tag></td>
             <td style={td}>{attachedCount>0?<Tag c="green">{attachedCount===2?"Frontend + Backend":p.frontendRepoUrl?"Frontend only":"Backend only"}</Tag>:<Tag>None</Tag>}</td>
             <td style={td}><span style={{fontSize:13,color:"var(--color-text-secondary)"}}>{memberCount} assigned</span></td>
             <td style={td}><div style={{display:"flex",gap:8}}><Btn v="ghost" onClick={()=>edit(p)}>Edit</Btn><Btn v="danger" onClick={()=>del(p.id)}>Remove</Btn></div></td>
@@ -1428,7 +1427,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
   const [gapData,setGapData]=useState(null); const [cases,setCases]=useState([]);
   const [needsClarification,setNeedsClarification]=useState([]);
   const [coverageSummary,setCoverageSummary]=useState("");
-  const [editOn,setEditOn]=useState(false); const [scripts,setScripts]=useState({web:"",ios:"",android:""});
+  const [editOn,setEditOn]=useState(false); const [scripts,setScripts]=useState({web:""});
   const [projFiles,setProjFiles]=useState(null); const [tab,setTab]=useState("web");
   const [execLines,setExecLines]=useState([]); const [result,setResult]=useState(null);
   const [loading,setLoading]=useState(false); const [lmsg,setLmsg]=useState(""); const [fetchError,setFetchError]=useState("");
@@ -1549,7 +1548,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
       const restoredPhase=s.phase==="running"?(s.result?"result":"scripts"):s.phase;
       setPhase(restoredPhase);setTestKind(s.testKind||"functional");setSid(s.sid||"");setSdata(s.sdata||null);setPlatform(s.platform||"web");
       setCtypes(s.ctypes||[]);setGapData(toGapData(s.gapData||s.gapText));setCases(s.cases||[]);
-      setScripts(s.scripts||{web:"",ios:"",android:""});setTab(s.tab||"web");
+      setScripts(s.scripts||{web:""});setTab("web");
       setResult(s.result||null);setExecLines(s.execLines||[]);
       setCoverageText(s.coverageText||"");setSessionBugs(s.sessionBugs||[]);
       setSelectedForScripts(s.selectedForScripts||[]);setAppUrl(s.appUrl||"");
@@ -1635,7 +1634,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
 
   const [switchTarget,setSwitchTarget]=React.useState(null);
   if (!proj) return <div style={card}><div style={{color:"var(--color-text-warning)",fontWeight:500}}>No project assigned. Contact your QA lead.</div></div>;
-  const doSwitchProj=(id)=>{setSelectedProjId(id);setPhase("testType");setTestKind("functional");setPerfForm(PERF_FORM_DEFAULT);setPerfResult(null);setPerfStoryId(null);setSid("");setSdata(null);setCases([]);setNeedsClarification([]);setCoverageSummary("");setResult(null);setExecLines([]);setScripts({web:"",ios:"",android:""});setHasSaved(false);setUidForm({pageUrl:"",figmaUrl:"",figmaToken:"",selectedNodeId:""});setUidCases([]);setUidVisualResult(null);setUidFigmaImg(null);setUidScreenshotImg(null);setUidFigmaFrames([]);setUidJiraStatus({});setUidManualFigmaImg(null);setUidJiraTicketKey("");setUidStoryId(null);setUidAiotestStatus({importing:false,done:false,error:""});setUidTicketSearch("");setUidTicketResults([]);setUidTicketSearching(false);};
+  const doSwitchProj=(id)=>{setSelectedProjId(id);setPhase("testType");setTestKind("functional");setPerfForm(PERF_FORM_DEFAULT);setPerfResult(null);setPerfStoryId(null);setSid("");setSdata(null);setCases([]);setNeedsClarification([]);setCoverageSummary("");setResult(null);setExecLines([]);setScripts({web:""});setHasSaved(false);setUidForm({pageUrl:"",figmaUrl:"",figmaToken:"",selectedNodeId:""});setUidCases([]);setUidVisualResult(null);setUidFigmaImg(null);setUidScreenshotImg(null);setUidFigmaFrames([]);setUidJiraStatus({});setUidManualFigmaImg(null);setUidJiraTicketKey("");setUidStoryId(null);setUidAiotestStatus({importing:false,done:false,error:""});setUidTicketSearch("");setUidTicketResults([]);setUidTicketSearching(false);};
   const switchProj=(id)=>{
     if(id===selectedProjId)return;
     if(sid){setSwitchTarget(id);return;}
@@ -1696,7 +1695,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
       setCases(cached.cases||[]);
       setNeedsClarification(cached.needsClarification||[]);
       setCtypes(cached.ctypes||[]);
-      setScripts(cached.scripts||{web:"",ios:"",android:""});
+      setScripts(cached.scripts||{web:""});
       setResult(cached.result||null);
       setSessionBugs(cached.sessionBugs||[]);
       setCoverageText(cached.coverageText||"");
@@ -1720,7 +1719,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
       }).filter(c=>c.text);
       const {flds,desc}=extractDesc(d);
       const sd={key:d.key,summary:flds.summary||sid,description:desc,labels:flds.labels||[],type:flds.issuetype?.name||"Story",status:flds.status?.name||"",assignee:flds.assignee?.displayName||"—",priority:flds.priority?.name||"Medium",comments};
-      setSdata(sd); const pp=proj.platform||"web"; setPlatform(pp==="both"?"web":pp);
+      setSdata(sd); setPlatform("web");
       setGapData(null); setCases([]); setCtypes([]); setNeedsClarification([]); setCoverageSummary(""); setResult(null); setSessionBugs([]); setCoverageText(""); setAppUrl("");
       setPhase("mode"); setLoading(false);
     } catch(e) {
@@ -1732,7 +1731,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
         setLoading(false); return;
       }
       setSdata({key:sid,summary:"Story "+sid,description:"",labels:[],type:"Story",status:"In Progress",assignee:"—",priority:"Medium",sim:true});
-      const pp=proj?.platform||"web"; setPlatform(pp==="both"?"web":pp);
+      setPlatform("web");
       setGapData(null); setCases([]); setCtypes([]); setNeedsClarification([]); setCoverageSummary(""); setResult(null); setSessionBugs([]); setCoverageText(""); setAppUrl("");
       setPhase("mode"); setLoading(false);
     }
@@ -1928,19 +1927,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
     setLoading(true);
     try {
       let newScripts,newTab,newFiles;
-      if(platform==="mobile"){
-        setLmsg(`Generating ${fwName(platform)} scripts for ${selCases.length} test cases…`);
-        const urlCtx=appUrl.trim()?`\nApp URL: ${appUrl.trim()}`:"";
-        const cl=makeCl(selCases);
-        const mobileRules=`\nCRITICAL RULES:\n1. Follow test case steps IN ORDER — every step maps to one driver interaction.\n2. NEVER use driver.pause() or any fixed delay — use await driver.waitUntil(() => el.isDisplayed(), {timeout:10000}) for waits.\n3. STRONG ASSERTIONS: expect(el).toHaveText(), expect(el).toHaveTextContaining(), expect(el).toBeDisplayed() with toHaveText together — not toBeDisplayed() alone.\n4. Final assertion in each test MUST validate the exact Expected Result.\n5. Every it() title MUST start with the exact TC ID.\n6. Output must be syntactically complete JavaScript — all braces/brackets closed.`;
-        const [iosR,andR]=await Promise.all([
-          callAI([{role:"user",content:`Generate a COMPLETE runnable Appium WebdriverIO test file for iOS, story ${sid}.${urlCtx}\nOutput ONLY JavaScript code — no markdown fences, no explanations.\n${mobileRules}\nTest cases:\n${cl}\nRequirements: describe/it blocks, XCUITest capabilities, accessibility id selectors, $('~id') or $('//XCUIElementType...') selectors, await driver.waitUntil() for waits, specific assertions (expect(el).toHaveText(), expect(el).toHaveTextContaining()), beforeEach/afterEach hooks, CommonJS require. Start directly with require statements.`}],SYS,8000,""),
-          callAI([{role:"user",content:`Generate a COMPLETE runnable Appium WebdriverIO test file for Android, story ${sid}.${urlCtx}\nOutput ONLY JavaScript code — no markdown fences, no explanations.\n${mobileRules}\nTest cases:\n${cl}\nRequirements: describe/it blocks, UiAutomator2 capabilities, accessibility id or UiSelector selectors, await driver.waitUntil() for waits, specific assertions (expect(el).toHaveText(), expect(el).toHaveTextContaining()), beforeEach/afterEach hooks, CommonJS require. Start directly with require statements.`}],SYS,8000,"")
-        ]);
-        const iosClean=stripMd(iosR),andClean=stripMd(andR);
-        newScripts={ios:iosClean,android:andClean,web:""}; newTab="ios";
-        newFiles={"wdio.ios.js":`exports.config={specs:["./tests/ios/*.js"],capabilities:[{platformName:"iOS","appium:automationName":"XCUITest"}],framework:"mocha",reporters:["spec"]};`,"wdio.android.js":`exports.config={specs:["./tests/android/*.js"],capabilities:[{platformName:"Android","appium:automationName":"UiAutomator2"}],framework:"mocha",reporters:["spec"]};`,[`tests/ios/${sid}.spec.js`]:iosClean,[`tests/android/${sid}.spec.js`]:andClean,"README.md":`# Appium Tests — ${sid}\n\nnpm install && npm run test:ios`};
-      } else {
+      {
         const baseUrl=appUrl.trim()||"http://localhost:3000";
         const codegenCtx=codegenScript.trim()?`\n\nMANDATORY — Recorded Playwright Codegen (use these exact locators, do not invent or substitute selectors):\n\`\`\`javascript\n${codegenScript}\n\`\`\`\nEvery selector that appears in the codegen recording MUST be reused in the generated tests. Do not replace recorded locators with generic alternatives.`:"";
         const repoCtxParts=[attachCheck?.frontend?.reachable&&attachCheck.frontend.context?`FRONTEND SOURCE (${attachCheck.frontend.name}):\n${attachCheck.frontend.context}`:"",attachCheck?.backend?.reachable&&attachCheck.backend.context?`BACKEND SOURCE (${attachCheck.backend.name}):\n${attachCheck.backend.context}`:""].filter(Boolean);
@@ -1949,7 +1936,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
         if(selCases.length<=BATCH_SIZE){
           setLmsg(`Generating Playwright scripts for ${selCases.length} test case${selCases.length===1?'':'s'}…`);
           const r=stripMd(await callAI([{role:"user",content:webPrompt(selCases)}],SYS,8000,""));
-          newScripts={web:r,ios:"",android:""}; newTab="web";
+          newScripts={web:r}; newTab="web";
           newFiles={"test.config.js":`module.exports={testDir:"./tests",use:{baseURL:"${baseUrl}",actionTimeout:15000,navigationTimeout:30000}};`,[`tests/${sid}.spec.js`]:r,"README.md":`# Web Tests — ${sid}\n\nnpm install && npm test`};
         } else {
           const batches=[];
@@ -1963,14 +1950,14 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
             scriptParts.push(clean);
           }
           const combined=scriptParts.join('\n\n');
-          newScripts={web:combined,ios:"",android:""}; newTab="web";
+          newScripts={web:combined}; newTab="web";
           newFiles={"test.config.js":`module.exports={testDir:"./tests",use:{baseURL:"${baseUrl}",actionTimeout:15000,navigationTimeout:30000}};`,[`tests/${sid}.spec.js`]:combined,"README.md":`# Web Tests — ${sid}\n\nnpm install && npm test`};
         }
       }
       setScripts(newScripts); setTab(newTab); setProjFiles(newFiles);
       setScriptCache(prev=>({...prev,[selKey]:{scripts:newScripts,tab:newTab,projFiles:newFiles}}));
       setFixed(false);
-      if(autoExecute&&platform!=="mobile"){ setLoading(false); await doRun(newFiles); return; }
+      if(autoExecute){ setLoading(false); await doRun(newFiles); return; }
       setPhase("autoReady");
     } catch(e){alert(e.message);}
     setLoading(false);
@@ -1979,14 +1966,11 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
   const doFix=async()=>{
     setLoading(true); setLmsg("Fixing scripts…");
     const failed=result?.failedCases||[];
-    const cur=platform==="mobile"?(tab==="ios"?scripts.ios:scripts.android):scripts.web;
+    const cur=scripts.web;
     try {
       const failedCl=failed.map(c=>`${c.id}: ${c.title}\n  Steps:\n${(c.steps||[]).map((s,i)=>`    ${i+1}. ${s}${(c.stepResults||[])[i]?`\n       → After this step: ${c.stepResults[i]}`:''}`).join('\n')}\n  Expected Result (must be asserted): ${c.expected}\n  Failure error: ${c._pwError||"TimeoutError"}`).join("\n\n");
       const r=stripMd(await callAI([{role:"user",content:`Fix the failing Playwright tests below. Return the COMPLETE fixed script — no markdown, no explanations.\n\nFailed test cases with errors:\n${failedCl}\n\nCurrent script:\n${cur}\n\nFix instructions:\n1. Replace every page.waitForTimeout() with await expect(locator).toBeVisible({timeout:10000}) or page.waitForLoadState('networkidle').\n2. Fix locators that timed out — use getByRole(), getByLabel(), getByPlaceholder(), getByText() alternatives.\n3. Every failing test MUST end with an assertion that validates its exact Expected Result using toHaveText(), toHaveURL(), toContainText(), or toHaveValue().\n4. Fix all syntax errors — ensure all braces/brackets are closed.\n5. Keep passing tests unchanged.\n6. If a failure is "page.waitForURL: Timeout exceeded" — replace page.waitForURL(...) entirely (function predicate, string glob, or regex form) with await expect(page).toHaveURL(/pattern/, {timeout:15000}). This SPA's client-side route changes never fire the navigation event waitForURL waits for, so it always times out even when the URL genuinely changed — there are no exceptions to this replacement.\n7. If a failure is a missing validation/error message ("element(s) not found" on a locator guessing a CSS class like '.error', '[class*=\"error\"]', '[role=\"alert\"]', '.p-toast-message'), replace the ENTIRE locator with page.getByText(/expected wording/i) alone — do not keep the CSS-class base selector even combined with .filter(), it matches zero real elements on this app.`}],SYS,8000,""));
-      if(platform==="mobile"){
-        if(tab==="ios"){setScripts(s=>({...s,ios:r}));setProjFiles(f=>({...f,[`tests/ios/${sid}.spec.js`]:r}));}
-        else{setScripts(s=>({...s,android:r}));setProjFiles(f=>({...f,[`tests/android/${sid}.spec.js`]:r}));}
-      }else{setScripts(s=>({...s,web:r}));setProjFiles(f=>({...f,[`tests/${sid}.spec.js`]:r}));}
+      setScripts(s=>({...s,web:r}));setProjFiles(f=>({...f,[`tests/${sid}.spec.js`]:r}));
       setFixed(true); setPhase("autoReady");
     } catch(e){alert(e.message);}
     setLoading(false);
@@ -2126,7 +2110,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
   const editS=(id,si,v)=>setCases(cs=>cs.map(c=>{if(c.id!==id)return c;const s=[...c.steps];s[si]=v;return{...c,steps:s};}));
   const addStep=id=>setCases(cs=>cs.map(c=>c.id===id?{...c,steps:[...(c.steps||[]),"New step"]}:c));
   const delStep=(id,si)=>setCases(cs=>cs.map(c=>c.id===id?{...c,steps:(c.steps||[]).filter((_,i)=>i!==si)}:c));
-  const reset=()=>{localStorage.removeItem(WS_SNAP);setPhase("project");setTestKind("functional");setPerfResult(null);setPerfForm(PERF_FORM_DEFAULT);setPerfChat(false);setSid("");setSdata(null);setPlatform("web");setCtypes([]);setReadyFilter("all");setGapData(null);setCases([]);setEditOn(false);setScripts({web:"",ios:"",android:""});setProjFiles(null);setExecLines([]);setResult(null);setJKey(null);setBugDone(null);setShowBugForm(false);setFixed(false);setChat(false);setShowAddCase(false);setSelectedForScripts([]);setCoverageText("");setSessionBugs([]);setHasSaved(false);setAppUrl("");setScriptCache({});setUidForm({pageUrl:"",figmaUrl:"",figmaToken:"",selectedNodeId:""});setUidCases([]);setUidVisualResult(null);setUidFigmaImg(null);setUidManualFigmaImg(null);setUidJiraTicketKey("");setUidStoryId(null);setPerfStoryId(null);setUidJiraStatus({});setUidAiotestStatus({importing:false,done:false,error:""});setUidReportComment("");setUidCommentStatus({sending:false,done:false,error:""});setCurlDraft("");setCurlErr("");};
+  const reset=()=>{localStorage.removeItem(WS_SNAP);setPhase("project");setTestKind("functional");setPerfResult(null);setPerfForm(PERF_FORM_DEFAULT);setPerfChat(false);setSid("");setSdata(null);setPlatform("web");setCtypes([]);setReadyFilter("all");setGapData(null);setCases([]);setEditOn(false);setScripts({web:""});setProjFiles(null);setExecLines([]);setResult(null);setJKey(null);setBugDone(null);setShowBugForm(false);setFixed(false);setChat(false);setShowAddCase(false);setSelectedForScripts([]);setCoverageText("");setSessionBugs([]);setHasSaved(false);setAppUrl("");setScriptCache({});setUidForm({pageUrl:"",figmaUrl:"",figmaToken:"",selectedNodeId:""});setUidCases([]);setUidVisualResult(null);setUidFigmaImg(null);setUidManualFigmaImg(null);setUidJiraTicketKey("");setUidStoryId(null);setPerfStoryId(null);setUidJiraStatus({});setUidAiotestStatus({importing:false,done:false,error:""});setUidReportComment("");setUidCommentStatus({sending:false,done:false,error:""});setCurlDraft("");setCurlErr("");};
   const resetPerf=()=>{setPerfForm(PERF_FORM_DEFAULT);setPerfResult(null);setPerfStoryId(null);setPerfChat(false);setHasSaved(false);setPhase("perfTest");setCurlDraft("");setCurlErr("");};
   const [saveModal,setSaveModal]=useState(null);
   // saveModal: null | {step:1,name:""} | {step:2,name:"",newCat:""}
@@ -2215,7 +2199,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
       return;
     }
     setTestKind("functional");
-    setSid(snap.sid);setSdata(snap.sdata);setPlatform(snap.platform);setCtypes(snap.ctypes||[]);setGapData(toGapData(snap.gapData||snap.gapText));setCases(snap.cases||[]);setScripts(snap.scripts||{web:"",ios:"",android:""});setResult(snap.result||null);setSessionBugs(snap.sessionBugs||[]);setCoverageText(snap.coverageText||"");setSelectedForScripts(snap.selectedForScripts||[]);setAppUrl(snap.appUrl||"");setExecLines([]);setJKey(null);setBugDone(null);setShowBugForm(false);setFixed(false);setEditOn(false);setChat(false);setShowAddCase(false);
+    setSid(snap.sid);setSdata(snap.sdata);setPlatform(snap.platform);setCtypes(snap.ctypes||[]);setGapData(toGapData(snap.gapData||snap.gapText));setCases(snap.cases||[]);setScripts(snap.scripts||{web:""});setResult(snap.result||null);setSessionBugs(snap.sessionBugs||[]);setCoverageText(snap.coverageText||"");setSelectedForScripts(snap.selectedForScripts||[]);setAppUrl(snap.appUrl||"");setExecLines([]);setJKey(null);setBugDone(null);setShowBugForm(false);setFixed(false);setEditOn(false);setChat(false);setShowAddCase(false);
     const lastPhase=snap.phase||(snap.coverageText?"coverage":snap.result?"result":snap.cases?.some(c=>c.status==="approved")?"review":"ctype");
     setPhase(lastPhase);
   };
@@ -2257,7 +2241,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
     if(i===4&&sdata){const et=[...new Set(cases.map(c=>c.type))];setCtypes(et.length>0?et:[]);setPhase("ctype");return;}
     if(i===5&&cases.length>0){setPhase("review");return;}
     if(i===6&&approved.length>0){setPhase("jira");return;}
-    if(i===7){setPhase((scripts.web||scripts.ios||scripts.android)?"autoReady":"urlPrompt");return;}
+    if(i===7){setPhase(scripts.web?"autoReady":"urlPrompt");return;}
     if(i===8&&result){setPhase("result");return;}
     if(i===9){setPhase("bugReport");return;}
     if(i===10){setPhase("coverage");return;}
@@ -2271,7 +2255,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
     setNewCase({title:"",type:"happy",platform:"web",preconditions:"",steps:[""],expected:"",automatable:true});
     setShowAddCase(false);
   };
-  const curScript=platform==="mobile"?(tab==="ios"?scripts.ios:scripts.android):scripts.web;
+  const curScript=scripts.web;
   const ghostBtn={padding:"9px 20px",borderRadius:10,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:14,fontWeight:500,color:"var(--color-text-secondary)",transition:"box-shadow 0.13s ease, transform 0.13s ease"};
 
   /* ── Save modal ── */
@@ -2332,7 +2316,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
       <div><div style={{fontSize:20,fontWeight:500,marginBottom:4}}>QA Workspace</div>
         <div style={{fontSize:13,color:"var(--color-text-secondary)",display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
           <span>Project: <b>{proj.name}</b></span><Tag c="blue">{proj.jiraProjKey}</Tag>
-          {testKind==="functional"&&phase!=="input"&&<Tag c={platform==="mobile"?"amber":"blue"}>{platform}</Tag>}
+          {testKind==="functional"&&phase!=="input"&&<Tag c="blue">web</Tag>}
           {testKind==="functional"&&sdata&&<Tag c={sdata.sim?"":"green"}>{sdata.sim?"AI simulation":"Jira ✓"}</Tag>}
           {testKind==="non-functional"&&(phase==="perfTest"||phase==="perfResult")&&<Tag c="amber">Performance</Tag>}
           {testKind==="ui-design"&&<Tag c="blue">UI Design Test</Tag>}
@@ -3550,7 +3534,6 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
               </div>
               :<div style={{fontSize:12,marginTop:6,color:"var(--color-text-warning)"}}>⚠ No description found in Jira — add one to improve GAP analysis and test case quality.</div>}
           </div>}
-          {proj.platform==="both"&&<div style={{...card,marginBottom:12}}><H2>Select platform for this story</H2><div style={{display:"flex",gap:12,marginTop:12}}>{[{v:"web",icon:"🌐",label:"Web",sub:"Playwright"},{v:"mobile",icon:"📱",label:"Mobile",sub:"Appium"}].map(o=><button key={o.v} onClick={()=>setPlatform(o.v)} style={{flex:1,padding:16,borderRadius:12,border:"2px solid "+(platform===o.v?"var(--color-text-info)":"var(--color-border-secondary)"),background:platform===o.v?"var(--color-background-info)":"var(--color-background-primary)",cursor:"pointer",textAlign:"left"}}><div style={{fontSize:22,marginBottom:4}}>{o.icon}</div><div style={{fontWeight:500,fontSize:14}}>{o.label}</div><div style={{fontSize:12,color:"var(--color-text-secondary)",marginTop:2}}>{o.sub}</div></button>)}</div></div>}
           <div style={card}><div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:16}}>Story: <b>{sid}</b></div><H2>What would you like to do?</H2>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
               {[
@@ -3698,7 +3681,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
 
         {!loading&&phase==="review"&&<div>
           <div style={{...card,padding:"12px 20px",display:"flex",alignItems:"center",gap:16}}>
-            <div style={{flex:1,fontSize:14}}>Story: <b>{sid}</b> · <Tag c={platform==="mobile"?"amber":"blue"}>{platform}</Tag></div>
+            <div style={{flex:1,fontSize:14}}>Story: <b>{sid}</b> · <Tag c="blue">web</Tag></div>
             <div style={{fontSize:13,display:"flex",gap:12,alignItems:"center"}}>
               <span style={{color:"var(--color-text-success)"}}>✓ {cases.filter(c=>c.status==="approved").length}</span>
               <span style={{color:"var(--color-text-danger)"}}>✗ {cases.filter(c=>c.status==="rejected").length}</span>
@@ -3735,7 +3718,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
               <div style={{gridColumn:"1/-1"}}><Lbl>Title <span style={{color:"var(--color-text-danger)"}}>*</span></Lbl><input style={{...inp,borderColor:newCaseErr&&!newCase.title.trim()?"var(--color-text-danger)":undefined}} value={newCase.title} onChange={e=>{setNewCase(p=>({...p,title:e.target.value}));if(newCaseErr)setNewCaseErr("");}} placeholder="e.g. Submit form with valid data"/></div>
               <div><Lbl>Type</Lbl><select style={sel} value={newCase.type} onChange={e=>setNewCase(p=>({...p,type:e.target.value}))}><option value="happy">Happy flow</option><option value="edge">Edge case</option><option value="negative">Negative</option></select></div>
-              <div><Lbl>Platform</Lbl><select style={sel} value={newCase.platform} onChange={e=>setNewCase(p=>({...p,platform:e.target.value}))}><option value="web">Web</option><option value="mobile">Mobile</option></select></div>
+              <div><Lbl>Platform</Lbl><select style={sel} value={newCase.platform} onChange={e=>setNewCase(p=>({...p,platform:e.target.value}))}><option value="web">Web</option></select></div>
               <div style={{gridColumn:"1/-1"}}><Lbl>Preconditions</Lbl><input style={inp} value={newCase.preconditions} onChange={e=>setNewCase(p=>({...p,preconditions:e.target.value}))} placeholder="e.g. User is logged in"/></div>
             </div>
             <Lbl>Steps</Lbl>
@@ -3761,7 +3744,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
 
         {!loading&&phase==="jira"&&<div>
           <div style={{...card,padding:"16px 20px"}}>
-            <div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:14}}>Story <b>{sid}</b> · <b>{approved.length}</b> approved cases · <Tag c={platform==="mobile"?"amber":"blue"}>{platform}</Tag></div>
+            <div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:14}}>Story <b>{sid}</b> · <b>{approved.length}</b> approved cases · <Tag c="blue">web</Tag></div>
             <div style={{display:"flex",gap:10}}>
               <Btn v="primary" onClick={()=>{exportExcel(cases,sid);setAppUrl("");setPhase("urlPrompt");}}>⬇ Export AIO Excel</Btn>
               <Btn v="ghost" onClick={()=>{exportCSV(cases,sid);setAppUrl("");setPhase("urlPrompt");}}>⬇ Export AIO CSV</Btn>
@@ -3795,11 +3778,11 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
               <Btn v="primary" onClick={()=>appUrl.trim()&&checkAttachment()} disabled={!appUrl.trim()}>
                 {attachedConfigured?"Continue →":codegenScript?"Generate Scripts with Recorded Locators →":"Continue to Script Generation →"}
               </Btn>
-              {!attachedConfigured&&platform!=="mobile"&&<button onClick={()=>appUrl.trim()&&startCodegen()} disabled={!appUrl.trim()||codegenStatus==="launching"} style={{padding:"8px 18px",borderRadius:8,border:"1px solid #0052CC",background:appUrl.trim()?"#0052CC":"var(--color-background-tertiary)",color:appUrl.trim()?"#fff":"var(--color-text-tertiary)",cursor:appUrl.trim()?"pointer":"not-allowed",fontSize:14,fontWeight:500,display:"flex",alignItems:"center",gap:8}}>
+              {!attachedConfigured&&<button onClick={()=>appUrl.trim()&&startCodegen()} disabled={!appUrl.trim()||codegenStatus==="launching"} style={{padding:"8px 18px",borderRadius:8,border:"1px solid #0052CC",background:appUrl.trim()?"#0052CC":"var(--color-background-tertiary)",color:appUrl.trim()?"#fff":"var(--color-text-tertiary)",cursor:appUrl.trim()?"pointer":"not-allowed",fontSize:14,fontWeight:500,display:"flex",alignItems:"center",gap:8}}>
                 {codegenStatus==="launching"?"Launching…":"🎭 Record with Playwright Codegen"}
               </button>}
             </div>
-            {!attachedConfigured&&platform!=="mobile"&&<div style={{marginTop:12,padding:"10px 14px",borderRadius:8,background:"var(--color-background-tertiary)",fontSize:12,color:"var(--color-text-secondary)",lineHeight:1.6}}>
+            {!attachedConfigured&&<div style={{marginTop:12,padding:"10px 14px",borderRadius:8,background:"var(--color-background-tertiary)",fontSize:12,color:"var(--color-text-secondary)",lineHeight:1.6}}>
               <b>💡 Playwright Codegen</b> opens a live browser at your URL. Perform your test actions manually — clicks, form fills, navigation — and the platform captures the exact locators to use in the generated scripts. Close the browser when done.
             </div>}
           </div>
@@ -3921,10 +3904,10 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
           {fixed&&<Banner icon="🔧" title="Scripts fixed" sub="Failures addressed." color="info"/>}
           {!autoExecute&&<Banner icon="📥" title="No project attached — download these scripts and run them locally against your own environment" sub="Auto-execution is only available when a frontend or backend repo is attached to this project." color="warning"/>}
           <div style={card}>
-            <div style={{display:"flex",justifyContent:"space-between",marginBottom:12,alignItems:"center"}}><div style={{fontWeight:500}}>Automation scripts</div><Tag c={platform==="mobile"?"amber":"blue"}>{fwName(platform)}</Tag></div>
-            {platform==="mobile"?<Tabs tabs={[{id:"ios",label:"iOS (Appium)"},{id:"android",label:"Android (Appium)"}]} active={tab} onChange={setTab}/>:<Tabs tabs={[{id:"web",label:"Web automation script"}]} active={tab} onChange={setTab}/>}
+            <div style={{display:"flex",justifyContent:"space-between",marginBottom:12,alignItems:"center"}}><div style={{fontWeight:500}}>Automation scripts</div><Tag c="blue">{fwName()}</Tag></div>
+            <Tabs tabs={[{id:"web",label:"Web automation script"}]} active="web" onChange={setTab}/>
             <pre style={{background:"var(--color-background-tertiary)",borderRadius:8,padding:16,fontSize:12,fontFamily:"monospace",lineHeight:1.6,overflow:"auto",maxHeight:360,whiteSpace:"pre-wrap",wordBreak:"break-all",margin:0,marginBottom:12}}>{curScript||"No script yet."}</pre>
-            <div style={{display:"flex",gap:8,flexWrap:"wrap"}}><button onClick={()=>navigator.clipboard?.writeText(curScript)} style={ghostBtn}>📋 Copy</button><button onClick={()=>dlFile(curScript,tab==="web"?sid+".spec.js":sid+"_"+tab+".test.js","text/javascript")} style={ghostBtn}>⬇ Download</button></div>
+            <div style={{display:"flex",gap:8,flexWrap:"wrap"}}><button onClick={()=>navigator.clipboard?.writeText(curScript)} style={ghostBtn}>📋 Copy</button><button onClick={()=>dlFile(curScript,sid+".spec.js","text/javascript")} style={ghostBtn}>⬇ Download</button></div>
           </div>
           <div style={{display:"flex",gap:10}}>
             <Btn v="primary" onClick={()=>setPhase("runAsk")}>▶ Run Tests</Btn>
@@ -4186,7 +4169,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
           return <div id="coverage-print-area">
             <div style={{...card,marginBottom:12}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:10}}>
-                <div style={{display:"flex",gap:8,alignItems:"center"}}><Tag c="blue">{sid}</Tag><span style={{fontWeight:600,fontSize:15}}>Coverage Report</span><Tag c={platform==="mobile"?"amber":"blue"}>{platform}</Tag></div>
+                <div style={{display:"flex",gap:8,alignItems:"center"}}><Tag c="blue">{sid}</Tag><span style={{fontWeight:600,fontSize:15}}>Coverage Report</span><Tag c="blue">web</Tag></div>
                 <div className="no-pdf" style={{display:"flex",gap:8}}>
                   <button onClick={()=>{const el=document.getElementById("coverage-print-area");const btns=el.querySelectorAll(".no-pdf");btns.forEach(b=>b.style.display="none");html2pdf().set({margin:10,filename:`Coverage_${sid}.pdf`,html2canvas:{scale:2,useCORS:true},jsPDF:{unit:"mm",format:"a4",orientation:"portrait"}}).from(el).save().then(()=>btns.forEach(b=>b.style.display=""));}} style={ghostBtn}>⬇ Download PDF</button>
                 </div>
