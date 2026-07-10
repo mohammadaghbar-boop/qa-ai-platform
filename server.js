@@ -1890,65 +1890,154 @@ Return ONLY valid JSON (no markdown wrapper, no extra text):
             `  TC-ID: ${tc.id}\n  Title: ${tc.title}\n  Priority: ${tc.priority||'Medium'}\n  Area: ${tc.area||'UI'}\n  Preconditions: ${tc.preconditions||'User is authenticated'}\n  Steps: ${(tc.steps||[]).join(' → ')}\n  Expected: ${tc.expected||''}`
           ).join('\n\n');
 
-          const prompt = `You are a world-class Senior QA Automation Engineer working on the ${projectName} platform. Your objective is NOT to write scripts as quickly as possible. Your objective is to write production-ready, maintainable, and reliable Playwright automation scripts that compare the live implementation against the Figma design, detect visual and functional defects, and reflect execution results back onto the test cases sheet.
+          const prompt = `# Principal QA Automation Architect — UI Design Test Script Generation
 
-PROJECT SETUP:
-Create a VS Code project named "doroob". Inside the project create a folder named "${demandName}". All Playwright scripts for this demand must be placed inside that folder.
-Folder structure:
-  doroob/
-    ${demandName}/
-      tests/
-      pages/
-      fixtures/
-      reports/
-  playwright.config.ts
-  package.json
-Use TypeScript. Use the Page Object Model pattern. Install: Playwright, Playwright Test, and visual comparison libraries if needed.
+You are a Principal QA Automation Architect and SDET building enterprise-grade Playwright and TypeScript automation scripts for the ${projectName} platform.
 
-CONTEXT:
+Your objective is NOT to write scripts as quickly as possible. Your objective is to write production-ready, maintainable, and reliable automation that compares the live implementation against the Figma design, detects visual and functional defects, and reflects execution results back onto the test cases sheet.
+
+---
+
+SOURCE OF TRUTH AND COMPARISON MODEL
+
+The test cases sheet defines what SHOULD happen — this is the expected result.
+The dev environment page shows what ACTUALLY happens — this is the actual result.
+The Figma design defines what the UI SHOULD look like visually.
+
+The automation job is to compare all three and surface any mismatch as a defect — never to encode current dev behavior as correct.
+
+Every sheet row's stated value including pixel sizes, hex colors, font weights, and behaviors becomes the hardcoded expected value in the assertion. The dev environment and Figma are used to locate elements and retrieve actual values at test time — never to determine what correct means.
+
+If the dev environment value differs from the sheet's stated expected value, flag it as a suspected defect. The test still asserts the sheet's original expected value so it fails and surfaces the bug — it does not self-correct.
+
+If a sheet row has no extractable concrete value, treat it as a qualitative assertion or mark it as BLOCKED with a clear reason. Never invent a value to make it testable.
+
+---
+
+CONTEXT FOR THIS GENERATION
+
+- Project: ${projectName}
+- Demand / Story: ${demandName}
 - Live Page URL: ${pageUrl || 'Not specified'}
 - Figma Design Source: ${figmaUrl || 'Not specified'}
 - Linked Jira Story: ${jiraTicketKey || 'Not linked'}
 - Platform: Arabic-only, RTL
 
-SCRIPT WRITING RULES:
-1. Every script begins with a clear description of what it validates.
-2. Every test has its own expected result.
-3. NEVER mark a test passed because the page loaded, a button exists, or an API returned HTTP 200. A test ONLY passes after all expected business behavior and design elements are fully verified.
-4. Each script covers:
-   - Functional validation per acceptance criteria and business rules.
-   - Figma design comparison: typography (family, size, weight, color hex, alignment), exact colors, layout/alignment, button labels and states, icons/images, spacing/padding, input styles and placeholders, error/success message styling, empty/loading states, RTL correctness (Arabic-only platform).
-   - Responsive behavior: desktop (1920x1080), tablet (768x1024), mobile (375x812).
-   - Cross-browser: Chrome, Firefox, Safari (webkit), Edge.
-5. NEVER use page.waitForTimeout() or any fixed delay. For dynamic waits use: await expect(locator).toBeVisible({timeout:10000}), page.waitForLoadState('networkidle'), or page.waitForSelector().
-6. STRONG assertions ONLY: toHaveText(), toHaveURL(), toContainText(), toHaveValue(), toBeChecked(), toHaveCount(), toHaveCSS() for design assertions.
-7. For design comparison assertions, use toHaveCSS() with exact values extracted from the Figma specs in the test case (e.g. toHaveCSS('background-color', 'rgb(...)'), toHaveCSS('font-size', '16px')).
+---
 
-STRICT PASS/FAIL CRITERIA — treat any of the following as a failure:
-- Broken layout or incorrect alignment vs Figma
-- Incorrect colors, fonts, or spacing vs exact Figma values
-- Missing/incorrect button labels
+PROJECT STRUCTURE
+
+Set up the automation project using the following structure:
+
+  doroob/
+    playwright.config.ts
+    package.json
+    tsconfig.json
+    .env
+    README.md
+    common/
+      helpers/
+      utils/
+      fixtures/
+    reports/
+    screenshots/
+      [browser]/[jira-key].png
+    traces/
+    demands/
+      ${demandName}/
+        pages/
+        components/
+        fixtures/
+        test-data/
+        utils/
+        tests/
+          unmapped/
+        reports/
+
+One story maps to one spec file named after its Jira key. Every spec must be independently runnable and traceable to its Jira key. Sheet rows with no Jira key are filed under the unmapped folder using a stable slug derived from the Summary text.
+
+---
+
+TEST COVERAGE REQUIREMENTS
+
+Every feature must be covered from the following perspectives:
+
+1. Functional validation — feature behaves according to the test cases sheet.
+2. Figma design comparison for every visible UI element:
+   - Layout and alignment
+   - Colors and typography using exact hex values
+   - Button labels and states
+   - Icons and images
+   - Spacing and padding in pixels
+   - Input field styles and placeholder text
+   - Error and success message styling
+   - Empty states and loading states
+3. Responsive behavior — Desktop 1920x1080, Tablet 768x1024, Mobile 375x812.
+4. Cross-browser — Chromium, Firefox, WebKit, Edge.
+5. RTL validation — assert computed direction CSS properties explicitly on directional containers. For mixed-direction content assert token order and punctuation placement separately.
+6. Boundary values, empty states, special characters, browser refresh, browser back and forward, multiple tabs, rapid repeated clicks, and duplicate submission wherever a sheet row implies these.
+
+---
+
+VISUAL ASSERTION RULES
+
+- Parse the exact expected value from the sheet Summary such as font-size 60px or color #1B8354.
+- Use the dev environment only to locate the correct selector.
+- Assert the dev-measured actual value equals the sheet's stated expected value.
+- Never inspect the dev page first and write the assertion to match what it currently shows.
+- The first passing run against a sheet row's stated expected value becomes the approved baseline screenshot stored per browser. Baselines are updated only on explicit user approval after a reviewed diff — never auto-updated on failure.
+
+---
+
+CODING STANDARDS
+
+- Follow SOLID, DRY, KISS, and YAGNI principles.
+- No duplicate locators, assertions, or helpers.
+- No business logic inside test files — tests read as plain action sequences of Navigate, Trigger, Verify, and Cleanup.
+- No hardcoded credentials, URLs, or test data.
+- No waitForTimeout unless truly unavoidable with a justifying comment. Use expect polling, locator.waitFor, network-idle, or explicit response waiting instead.
+- Locator priority: data-testid → getByRole → getByLabel → getByPlaceholder → getByText → CSS → XPath as last resort.
+- Shared components appearing across multiple stories implemented once in the components folder and imported everywhere — never duplicated.
+
+---
+
+STRICT PASS AND FAIL CRITERIA
+
+A test only passes after ALL expected business behavior and design elements are fully verified against the sheet. Treat any of the following as a test failure:
+
+- Any visual difference between the Figma design and the live implementation
+- Broken layout or incorrect alignment
+- Incorrect colors, fonts, or spacing compared to the sheet's stated values
+- Missing or incorrect button labels
 - Incorrect placeholder text or field labels
-- Error messages exposing technical info, stack traces, IDs, or HTTP errors
-- Any English or mixed Arabic/English text in the UI (Arabic-only platform)
-- RTL issues: incorrect alignment, chevron/arrow direction, icon mirroring
+- Error messages that expose technical information, stack traces, IDs, or HTTP errors
 - Incorrect navigation or unexpected redirects
 - Missing loading indicators
 - Incorrect or missing validation messages
-- Any visual or functional difference between the Figma design and the live implementation
+- RTL layout issues
+- Mixed language text where not expected
+- Anything that would confuse a real user
 
-BUG HUNTING MINDSET — in every test, challenge the implementation:
-- What could break? What assumptions is the developer making?
-- Can validation be bypassed? Can permissions be bypassed?
-- Can browser refresh break the flow? Can multiple tabs cause problems?
-- Can empty values cause issues?
-- Can the UI break on mobile or tablet?
-- Can RTL or mixed-direction content break?
-- Can session expiration cause problems?
-- Does the implementation match every element in the Figma design exactly?
+---
 
-TEST CASES TO IMPLEMENT:
+NON-NEGOTIABLE RULES
+
+- Never invent a value, Jira key, or requirement not in the sheet or visible on the dev environment page.
+- Never generate placeholder code or TODOs.
+- Never skip a sheet row without an explicit BLOCKED reason.
+- Never hardcode credentials, URLs, or test data.
+- Never mark a test Passed unless the sheet's expected value is confirmed against the dev environment.
+- Never adjust an expected value to match dev behavior — a mismatch is a defect to report, not a correction to make.
+- NEVER use page.waitForTimeout() or any fixed delay.
+- STRONG assertions ONLY: toHaveText(), toHaveURL(), toContainText(), toHaveValue(), toBeChecked(), toHaveCount(), toHaveCSS() for design assertions.
+
+---
+
+TEST CASES TO IMPLEMENT
+
 ${tcList}
+
+---
 
 Generate exactly THREE files.
 
@@ -1956,20 +2045,20 @@ FILE 1 — playwright.config.ts (at project root):
 Multi-browser: chromium, firefox, webkit (Safari), edge (use channel: 'msedge')
 Three viewports as projects: Desktop 1920x1080, Tablet 768x1024, Mobile 375x812
 baseURL: '${pageUrl || 'http://localhost:3000'}'
-reporter: [['html', {open:'never'}]]
-testDir: './${demandName}/tests'
+reporter: [['html', {open:'never'}], ['json', {outputFile:'reports/results.json'}]]
+testDir: './demands/${demandName}/tests'
 retries: 1 in CI, 0 locally
 use: { locale: 'ar', timezoneId: 'Asia/Riyadh', trace: 'on-first-retry', screenshot: 'only-on-failure' }
 
-FILE 2 — ${demandName}/pages/${safeSlug}.page.ts:
+FILE 2 — demands/${demandName}/pages/${safeSlug}.page.ts:
 Page Object class "${demandName.replace(/\s+/g,'').replace(/[^a-zA-Z0-9]/g,'')}Page"
 Import Page, Locator from @playwright/test
 Define every selector referenced in the test cases as a readonly Locator
 Encapsulate every action (click, fill, navigate, assert) as an async method
-Strict locator priority: getByRole > getByLabel > getByPlaceholder > getByTestId > getByText
+Strict locator priority: data-testid → getByRole → getByLabel → getByPlaceholder → getByText
 Include a verifyDesignToken(locator: Locator, property: string, expectedValue: string) helper that calls expect(locator).toHaveCSS(property, expectedValue)
 
-FILE 3 — ${demandName}/tests/${safeSlug}.spec.ts:
+FILE 3 — demands/${demandName}/tests/${safeSlug}.spec.ts:
 Import test, expect from @playwright/test
 Import the Page Object
 test.describe('${demandName}${jiraTicketKey?' — '+jiraTicketKey:''}', () => { ... })
@@ -1980,12 +2069,13 @@ For EVERY test:
   - Validate functional behavior step by step following the test case steps
   - Validate at least ONE design property from the test case using toHaveCSS() or toHaveText()
   - Final assertion MUST directly validate the exact expected result from the test case
+  - Add a comment citing the sheet row Summary and Jira key above each test
 
 Return ONLY valid JSON (no markdown wrapper, no extra text):
 {
   "config": "<full playwright.config.ts content>",
-  "page": "<full ${demandName}/pages/${safeSlug}.page.ts content>",
-  "spec": "<full ${demandName}/tests/${safeSlug}.spec.ts content>",
+  "page": "<full demands/${demandName}/pages/${safeSlug}.page.ts content>",
+  "spec": "<full demands/${demandName}/tests/${safeSlug}.spec.ts content>",
   "demandSlug": "${safeSlug}",
   "demandName": "${demandName}"
 }`;
