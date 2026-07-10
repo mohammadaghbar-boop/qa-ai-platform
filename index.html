@@ -1428,6 +1428,9 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
   const [needsClarification,setNeedsClarification]=useState([]);
   const [coverageSummary,setCoverageSummary]=useState("");
   const [editOn,setEditOn]=useState(false); const [scripts,setScripts]=useState({web:""});
+  // Cache of previously generated cases keyed by type — populated when a type is deselected
+  // so re-selecting it restores the exact cases without a redundant API call.
+  const [casesByType,setCasesByType]=useState({});
   const [projFiles,setProjFiles]=useState(null); const [tab,setTab]=useState("web");
   const [execLines,setExecLines]=useState([]); const [result,setResult]=useState(null);
   const [loading,setLoading]=useState(false); const [lmsg,setLmsg]=useState(""); const [fetchError,setFetchError]=useState("");
@@ -1720,7 +1723,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
       const {flds,desc}=extractDesc(d);
       const sd={key:d.key,summary:flds.summary||sid,description:desc,labels:flds.labels||[],type:flds.issuetype?.name||"Story",status:flds.status?.name||"",assignee:flds.assignee?.displayName||"—",priority:flds.priority?.name||"Medium",comments};
       setSdata(sd); setPlatform("web");
-      setGapData(null); setCases([]); setCtypes([]); setNeedsClarification([]); setCoverageSummary(""); setResult(null); setSessionBugs([]); setCoverageText(""); setAppUrl("");
+      setGapData(null); setCases([]); setCtypes([]); setCasesByType({}); setNeedsClarification([]); setCoverageSummary(""); setResult(null); setSessionBugs([]); setCoverageText(""); setAppUrl("");
       setPhase("mode"); setLoading(false);
     } catch(e) {
       if(jiraConfigured){
@@ -1732,7 +1735,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
       }
       setSdata({key:sid,summary:"Story "+sid,description:"",labels:[],type:"Story",status:"In Progress",assignee:"—",priority:"Medium",sim:true});
       setPlatform("web");
-      setGapData(null); setCases([]); setCtypes([]); setNeedsClarification([]); setCoverageSummary(""); setResult(null); setSessionBugs([]); setCoverageText(""); setAppUrl("");
+      setGapData(null); setCases([]); setCtypes([]); setCasesByType({}); setNeedsClarification([]); setCoverageSummary(""); setResult(null); setSessionBugs([]); setCoverageText(""); setAppUrl("");
       setPhase("mode"); setLoading(false);
     }
   };
@@ -1813,8 +1816,28 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
     const existingTypes=[...new Set(cases.map(c=>c.type))];
     const newTypes=selectedTypes.filter(t=>!existingTypes.includes(t));
     const keptCases=cases.filter(c=>selectedTypes.includes(c.type));
+
+    // Save deselected types to cache before they are removed from state
+    const deselectedTypes=existingTypes.filter(t=>!selectedTypes.includes(t));
+    const updatedCache={...casesByType};
+    deselectedTypes.forEach(t=>{const tc=cases.filter(c=>c.type===t);if(tc.length>0)updatedCache[t]=tc;});
+    if(deselectedTypes.length>0)setCasesByType(updatedCache);
+
     if(newTypes.length===0){setCases(keptCases);setPhase("ready");setReadyFilter("all");setLoading(false);return;}
-    setLmsg("Generating "+newTypes.map(t=>t+" flow").join(", ")+" in parallel…");
+
+    // Split new types into: restorable from cache vs genuinely new (need API)
+    const typesFromCache=newTypes.filter(t=>updatedCache[t]?.length>0);
+    const typesNeedingAPI=newTypes.filter(t=>!updatedCache[t]?.length);
+    const restoredFromCache=typesFromCache.flatMap(t=>updatedCache[t]);
+    const keptAndCached=[...keptCases,...restoredFromCache];
+
+    // All new types are already cached — restore without any API call
+    if(typesNeedingAPI.length===0){
+      const finalCases=keptAndCached.map((c,i)=>({...c,id:"TC-"+String(i+1).padStart(3,"0")}));
+      setCases(finalCases);setPhase("ready");setReadyFilter("all");setLoading(false);return;
+    }
+
+    setLmsg("Generating "+typesNeedingAPI.map(t=>t+" flow").join(", ")+" in parallel…");
     const ctx=sdata&&!sdata.sim?`Story ID: ${sid}\nSummary: "${sdata.summary}"\n\nFull Description / Acceptance Criteria:\n${sdata.description?.slice(0,20000)||"No description provided."}`:"Simulate a realistic feature story with 5 clear, distinct acceptance criteria covering different aspects of the feature.";
     const typeGuide={
       happy:"MAIN SUCCESS paths — valid inputs, correct credentials, expected user journeys, normal operations where everything works as designed.",
@@ -1823,22 +1846,26 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
     };
     try {
       const rawNew=[]; const rawClar=[];
-      for(let i=0;i<newTypes.length;i++){
-        const type=newTypes[i];
-        setLmsg(`Generating ${type} flow… (${i+1} of ${newTypes.length})`);
-        const keptCtx=keptCases.length>0?`\n\nKEPT CASES ALREADY IN THE LIST (do not duplicate these — see dedup rule 3):\n${keptCases.map(c=>`- [${c.type}] ${c.title}`).join("\n")}`:"";
+      for(let i=0;i<typesNeedingAPI.length;i++){
+        const type=typesNeedingAPI[i];
+        setLmsg(`Generating ${type} flow… (${i+1} of ${typesNeedingAPI.length})`);
+        const keptCtx=keptAndCached.length>0?`\n\nKEPT CASES ALREADY IN THE LIST (do not duplicate these — see dedup rule 3):\n${keptAndCached.map(c=>`- [${c.type}] ${c.title}`).join("\n")}`:"";
         const r=await callAI([{role:"user",content:`You are a senior QA engineer. Your task is to generate comprehensive, DEDUPLICATED ${type} test cases for the story below.\n\nPlatform: ${platform}\n${ctx}${keptCtx}\n\nTYPE: ${type.toUpperCase()} — ${typeGuide[type]||""}\n\nSTEP 1 — Extract ALL Acceptance Criteria:\nRead the full description above and number every acceptance criterion you find (AC-1, AC-2, AC-3, …). Do not skip any.\n\nSTEP 2 — Generate test cases:\nFor EACH AC you identified, draft candidate ${type} test cases that verify that AC, then apply the deduplication rules below before finalizing.\n${dedupRules}\n\nOther rules:\n- Every title must start with "Verify".\n- No duplicate test case titles.\n- Every AC must have at least one surviving test case — missing an AC is a defect, but a bloated near-duplicate list is also a defect.\n- automatable:false only for offline/camera/biometrics/hardware-dependent tests.\n- priority: one of "Critical", "High", "Medium", "Low" based on risk and importance.\n- description: one sentence describing what this test case validates.\n- testData: specific values, credentials, inputs, or (for merged parameterized checks) the full list of input variants needed (empty string if none).\n- preconditions: system state required before executing (e.g. "User is logged in as admin").\n- steps: array of action strings (what the tester does).\n- stepResults: array of expected results — SAME LENGTH as steps, one per step describing what should happen after that step.\n- expected: the overall final expected outcome of the test case.\n\nReturn ONLY valid JSON with no markdown or explanation, in this exact shape:\n{"cases":[{"id":"TC-001","title":"Verify ...","description":"...","type":"${type}","platform":"${platform}","priority":"High","preconditions":"...","testData":"...","steps":["Step 1","Step 2","Step 3"],"stepResults":["Expected after step 1","Expected after step 2","Expected after step 3"],"expected":"...","automatable":true}],"needsClarification":[{"item":"Short description of the untestable assumption","assumption":"What would have to be true for this to be testable"}]}`}],SYS,8000,proj.anthropicKey||"");
         const cleaned=r.replace(/```json|```/g,"").trim();
         const match=cleaned.match(/\{[\s\S]*\}/);
         if(!match) throw new Error("Invalid response for "+type+" cases. Make sure server.js is running.");
         const parsed=JSON.parse(match[0]);
-        rawNew.push(...(parsed.cases||[]).map(c=>({...c,type,status:"pending"})));
+        const newCases=(parsed.cases||[]).map(c=>({...c,type,status:"pending"}));
+        rawNew.push(...newCases);
+        // Update cache with freshly generated cases for this type
+        updatedCache[type]=newCases;
         rawClar.push(...(parsed.needsClarification||[]).map(x=>({...x,type})));
       }
+      if(typesNeedingAPI.length>0)setCasesByType(updatedCache);
       const norm=t=>t.toLowerCase().replace(/[^a-z0-9]/g," ").replace(/\s+/g," ").trim();
-      const seen=new Set(keptCases.map(c=>norm(c.title)));
+      const seen=new Set(keptAndCached.map(c=>norm(c.title)));
       const newDeduped=rawNew.filter(c=>{const k=norm(c.title);if(seen.has(k))return false;seen.add(k);return true;});
-      const finalCases=[...keptCases,...newDeduped].map((c,i)=>({...c,id:"TC-"+String(i+1).padStart(3,"0")}));
+      const finalCases=[...keptAndCached,...newDeduped].map((c,i)=>({...c,id:"TC-"+String(i+1).padStart(3,"0")}));
       setCases(finalCases);
       const clarSeen=new Set(needsClarification.map(x=>norm(x.item)));
       const clarDeduped=rawClar.filter(x=>{const k=norm(x.item);if(clarSeen.has(k))return false;clarSeen.add(k);return true;});
@@ -2110,7 +2137,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
   const editS=(id,si,v)=>setCases(cs=>cs.map(c=>{if(c.id!==id)return c;const s=[...c.steps];s[si]=v;return{...c,steps:s};}));
   const addStep=id=>setCases(cs=>cs.map(c=>c.id===id?{...c,steps:[...(c.steps||[]),"New step"]}:c));
   const delStep=(id,si)=>setCases(cs=>cs.map(c=>c.id===id?{...c,steps:(c.steps||[]).filter((_,i)=>i!==si)}:c));
-  const reset=()=>{localStorage.removeItem(WS_SNAP);setPhase("project");setTestKind("functional");setPerfResult(null);setPerfForm(PERF_FORM_DEFAULT);setPerfChat(false);setSid("");setSdata(null);setPlatform("web");setCtypes([]);setReadyFilter("all");setGapData(null);setCases([]);setEditOn(false);setScripts({web:""});setProjFiles(null);setExecLines([]);setResult(null);setJKey(null);setBugDone(null);setShowBugForm(false);setFixed(false);setChat(false);setShowAddCase(false);setSelectedForScripts([]);setCoverageText("");setSessionBugs([]);setHasSaved(false);setAppUrl("");setScriptCache({});setUidForm({pageUrl:"",figmaUrl:"",figmaToken:"",selectedNodeId:""});setUidCases([]);setUidVisualResult(null);setUidFigmaImg(null);setUidManualFigmaImg(null);setUidJiraTicketKey("");setUidStoryId(null);setPerfStoryId(null);setUidJiraStatus({});setUidAiotestStatus({importing:false,done:false,error:""});setUidReportComment("");setUidCommentStatus({sending:false,done:false,error:""});setCurlDraft("");setCurlErr("");};
+  const reset=()=>{localStorage.removeItem(WS_SNAP);setPhase("project");setTestKind("functional");setPerfResult(null);setPerfForm(PERF_FORM_DEFAULT);setPerfChat(false);setSid("");setSdata(null);setPlatform("web");setCtypes([]);setReadyFilter("all");setGapData(null);setCases([]);setCasesByType({});setEditOn(false);setScripts({web:""});setProjFiles(null);setExecLines([]);setResult(null);setJKey(null);setBugDone(null);setShowBugForm(false);setFixed(false);setChat(false);setShowAddCase(false);setSelectedForScripts([]);setCoverageText("");setSessionBugs([]);setHasSaved(false);setAppUrl("");setScriptCache({});setUidForm({pageUrl:"",figmaUrl:"",figmaToken:"",selectedNodeId:""});setUidCases([]);setUidVisualResult(null);setUidFigmaImg(null);setUidManualFigmaImg(null);setUidJiraTicketKey("");setUidStoryId(null);setPerfStoryId(null);setUidJiraStatus({});setUidAiotestStatus({importing:false,done:false,error:""});setUidReportComment("");setUidCommentStatus({sending:false,done:false,error:""});setCurlDraft("");setCurlErr("");};
   const resetPerf=()=>{setPerfForm(PERF_FORM_DEFAULT);setPerfResult(null);setPerfStoryId(null);setPerfChat(false);setHasSaved(false);setPhase("perfTest");setCurlDraft("");setCurlErr("");};
   const [saveModal,setSaveModal]=useState(null);
   // saveModal: null | {step:1,name:""} | {step:2,name:"",newCat:""}
@@ -3639,7 +3666,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
               <div><div style={{fontWeight:500,display:"flex",alignItems:"center",gap:6}}>{o.l}{hasCases&&<span style={{fontSize:11,color:"var(--color-text-success)",fontWeight:400}}>✓ {count} cases</span>}</div><div style={{fontSize:12,color:hasCases&&isChecked?"var(--color-text-success)":"var(--color-text-secondary)",marginTop:2}}>{hasCases&&isChecked?"Will be kept — uncheck to remove":hasCases&&!isChecked?"Will be removed":o.d}</div></div>
             </label>;});})()}
           </div>
-          {(()=>{const ect=[...new Set(cases.map(c=>c.type))];const sel=ctypes.includes("all")?["happy","edge","negative"]:ctypes;const hasNew=sel.some(t=>!ect.includes(t));return <Btn v="primary" onClick={()=>(ctypes.length>0||ect.length>0)&&doGen()} disabled={ctypes.length===0&&ect.length===0}>{hasNew?"Generate test cases →":"View generated cases →"}</Btn>;})()}
+          {(()=>{const ect=[...new Set(cases.map(c=>c.type))];const sel=ctypes.includes("all")?["happy","edge","negative"]:ctypes;const notInCases=sel.filter(t=>!ect.includes(t));const hasNew=notInCases.some(t=>!casesByType[t]?.length);return <Btn v="primary" onClick={()=>(ctypes.length>0||ect.length>0)&&doGen()} disabled={ctypes.length===0&&ect.length===0}>{hasNew?"Generate test cases →":"View generated cases →"}</Btn>;})()}
         </div>}
 
         {!loading&&phase==="ready"&&<div>
