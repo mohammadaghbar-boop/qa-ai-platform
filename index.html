@@ -1027,7 +1027,34 @@ function ProjectsPage() {
   const [f,setF]=useState({...EMPTY_F});
   const [editing,setEditing]=useState(null);
   const [testResult,setTestResult]=useState(null); const [testing,setTesting]=useState(false);
-  const save=()=>{ if(!f.name) return; if(editing){Object.assign(DB.projects.find(x=>x.id===editing),f);setEditing(null);}else DB.projects.push({id:uid(),...f}); saveDB(); setList([...DB.projects]); setF({...EMPTY_F}); setTestResult(null); };
+  const [saving,setSaving]=useState(false);
+  // GAP-02: load projects from server on mount and sync to global DB
+  useEffect(()=>{
+    fetch(API_BASE+"/api/projects",{headers:{"X-Admin-Token":adminToken()}})
+      .then(r=>r.ok?r.json():null)
+      .then(d=>{if(d){DB.projects=d;setList([...d]);}})
+      .catch(()=>{});
+  },[]);
+  const save=async()=>{
+    if(!f.name||saving) return;
+    setSaving(true);
+    try{
+      let r,d;
+      if(editing){
+        r=await fetch(API_BASE+"/api/projects/"+editing,{method:"PUT",headers:{"Content-Type":"application/json","X-Admin-Token":adminToken()},body:JSON.stringify(f)});
+        d=await r.json();
+        if(r.ok){ Object.assign(DB.projects.find(x=>x.id===editing)||{},d); setEditing(null); }
+        else{ alert(d.error||"Save failed"); }
+      }else{
+        r=await fetch(API_BASE+"/api/projects",{method:"POST",headers:{"Content-Type":"application/json","X-Admin-Token":adminToken()},body:JSON.stringify(f)});
+        d=await r.json();
+        if(r.ok){ DB.projects.push(d); }
+        else{ alert(d.error||"Save failed"); }
+      }
+      if(r.ok){ saveDB(); setList([...DB.projects]); setF({...EMPTY_F}); setTestResult(null); }
+    }catch(e){ alert("Cannot reach server: "+e.message); }
+    setSaving(false);
+  };
   const edit=p=>{ setEditing(p.id); setF({name:p.name,jiraProjKey:p.jiraProjKey||"",platform:p.platform||"web",frontendRepoUrl:p.frontendRepoUrl||"",backendRepoUrl:p.backendRepoUrl||"",language:p.language||"ar"}); setTestResult(null); };
   const testConnection=async()=>{
     if(!f.frontendRepoUrl.trim()&&!f.backendRepoUrl.trim()){ setTestResult({clientError:"Enter at least one repo URL first."}); return; }
@@ -1040,7 +1067,14 @@ function ProjectsPage() {
     }catch(e){ setTestResult({clientError:e.message}); }
     setTesting(false);
   };
-  const del=id=>{ DB.projects=DB.projects.filter(p=>p.id!==id); DB.assignments=DB.assignments.filter(a=>a.projectId!==id); saveDB(); setList([...DB.projects]); };
+  const del=async id=>{
+    if(!window.confirm("Delete this project? This will also remove all its member assignments.")) return;
+    try{
+      const r=await fetch(API_BASE+"/api/projects/"+id,{method:"DELETE",headers:{"X-Admin-Token":adminToken()}});
+      if(r.ok){ DB.projects=DB.projects.filter(p=>p.id!==id); DB.assignments=DB.assignments.filter(a=>a.projectId!==id); saveDB(); setList([...DB.projects]); }
+      else{ const d=await r.json(); alert(d.error||"Delete failed"); }
+    }catch(e){ alert("Cannot reach server: "+e.message); }
+  };
   const th={textAlign:"left",padding:"8px 12px",borderBottom:"1px solid var(--color-border-tertiary)",fontSize:12,fontWeight:500,color:"var(--color-text-secondary)"};
   const td={padding:"10px 12px",borderBottom:"1px solid var(--color-border-tertiary)"};
   return <div>
@@ -1072,7 +1106,7 @@ function ProjectsPage() {
             })}
         </div>}
       </div>
-      <div style={{display:"flex",gap:8}}><Btn v="primary" onClick={save}>{editing?"Save":"Add"}</Btn>{editing&&<button onClick={()=>{setEditing(null);setF({...EMPTY_F});setTestResult(null);}} style={{padding:"8px 18px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:14,color:"var(--color-text-secondary)"}}>Cancel</button>}</div>
+      <div style={{display:"flex",gap:8}}><Btn v="primary" onClick={save} disabled={saving}>{saving?"Saving…":editing?"Save":"Add"}</Btn>{editing&&<button onClick={()=>{setEditing(null);setF({...EMPTY_F});setTestResult(null);}} style={{padding:"8px 18px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:14,color:"var(--color-text-secondary)"}}>Cancel</button>}</div>
     </div>
     <div style={card}>{list.length===0?<div style={{color:"var(--color-text-tertiary)",fontSize:14}}>No projects.</div>:
       <table style={{width:"100%",borderCollapse:"collapse",fontSize:14}}>
@@ -1097,28 +1131,59 @@ function AssignmentsPage() {
   const [selProjs,setSelProjs]=useState([]);
   const [editing,setEditing]=useState(null); // memberId being edited
   const [editProjs,setEditProjs]=useState([]);
+  const [busy,setBusy]=useState(false);
   const toggleProj=(id,arr,set)=>set(arr.includes(id)?arr.filter(x=>x!==id):[...arr,id]);
-  const assign=()=>{
-    if(!mId||selProjs.length===0) return;
-    selProjs.forEach(pid=>{
-      if(!DB.assignments.some(a=>a.memberId===mId&&a.projectId===pid)) DB.assignments.push({memberId:mId,projectId:pid});
-    });
-    const m=DB.members.find(x=>x.id===mId);
-    const names=selProjs.map(pid=>DB.projects.find(p=>p.id===pid)?.name).filter(Boolean).join(", ");
-    if(m&&names) pushNotif(mId,"Assigned to: "+names);
-    saveDB(); setList([...DB.assignments]); setMId(""); setSelProjs([]);
+  // GAP-02: load assignments from server on mount
+  useEffect(()=>{
+    fetch(API_BASE+"/api/assignments",{headers:{"X-Admin-Token":adminToken()}})
+      .then(r=>r.ok?r.json():null)
+      .then(d=>{if(d){DB.assignments=d;setList([...d]);}})
+      .catch(()=>{});
+  },[]);
+  const putAssignments=async(memberId,projectIds)=>{
+    const r=await fetch(API_BASE+"/api/assignments/"+memberId,{method:"PUT",headers:{"Content-Type":"application/json","X-Admin-Token":adminToken()},body:JSON.stringify({projectIds})});
+    if(!r.ok){const d=await r.json();throw new Error(d.error||"Failed to save assignments");}
+  };
+  const assign=async()=>{
+    if(!mId||selProjs.length===0||busy) return;
+    setBusy(true);
+    try{
+      const existing=DB.assignments.filter(a=>a.memberId===mId).map(a=>a.projectId);
+      const merged=[...new Set([...existing,...selProjs])];
+      await putAssignments(mId,merged);
+      DB.assignments=DB.assignments.filter(a=>a.memberId!==mId);
+      merged.forEach(pid=>DB.assignments.push({memberId:mId,projectId:pid}));
+      const m=DB.members.find(x=>x.id===mId);
+      const names=selProjs.map(pid=>DB.projects.find(p=>p.id===pid)?.name).filter(Boolean).join(", ");
+      if(m&&names) pushNotif(mId,"Assigned to: "+names);
+      saveDB(); setList([...DB.assignments]); setMId(""); setSelProjs([]);
+    }catch(e){ alert(e.message); }
+    setBusy(false);
   };
   const startEdit=memberId=>{
     setEditing(memberId);
     setEditProjs(DB.assignments.filter(a=>a.memberId===memberId).map(a=>a.projectId));
   };
   const cancelEdit=()=>setEditing(null);
-  const saveEdit=()=>{
-    DB.assignments=DB.assignments.filter(a=>a.memberId!==editing);
-    editProjs.forEach(pid=>DB.assignments.push({memberId:editing,projectId:pid}));
-    saveDB(); setList([...DB.assignments]); setEditing(null);
+  const saveEdit=async()=>{
+    if(busy) return; setBusy(true);
+    try{
+      await putAssignments(editing,editProjs);
+      DB.assignments=DB.assignments.filter(a=>a.memberId!==editing);
+      editProjs.forEach(pid=>DB.assignments.push({memberId:editing,projectId:pid}));
+      saveDB(); setList([...DB.assignments]); setEditing(null);
+    }catch(e){ alert(e.message); }
+    setBusy(false);
   };
-  const delMember=memberId=>{ DB.assignments=DB.assignments.filter(a=>a.memberId!==memberId); saveDB(); setList([...DB.assignments]); };
+  const delMember=async memberId=>{
+    if(busy) return; setBusy(true);
+    try{
+      await putAssignments(memberId,[]);
+      DB.assignments=DB.assignments.filter(a=>a.memberId!==memberId);
+      saveDB(); setList([...DB.assignments]);
+    }catch(e){ alert(e.message); }
+    setBusy(false);
+  };
   // Group by member
   const grouped=DB.members.map(m=>({m,projects:DB.projects.filter(p=>list.some(a=>a.memberId===m.id&&a.projectId===p.id))})).filter(x=>x.projects.length>0);
   const chkStyle={display:"flex",alignItems:"center",gap:6,padding:"4px 0",fontSize:13,cursor:"pointer"};
@@ -1140,7 +1205,7 @@ function AssignmentsPage() {
           </label>)}
         </div>
       </div>}
-      <Btn v="primary" onClick={assign} disabled={!mId||selProjs.length===0}>Assign</Btn>
+      <Btn v="primary" onClick={assign} disabled={!mId||selProjs.length===0||busy}>{busy?"Saving…":"Assign"}</Btn>
     </div>}
     {editing&&(()=>{const m=DB.members.find(x=>x.id===editing);return(<div style={{...card,border:"2px solid var(--color-border-focus)",marginBottom:16}}><H2>Edit projects for {m?.name}</H2>
       <div style={{marginBottom:12}}>
@@ -1152,7 +1217,7 @@ function AssignmentsPage() {
           </label>)}
         </div>
       </div>
-      <div style={{display:"flex",gap:8}}><Btn v="primary" onClick={saveEdit}>Save changes</Btn><button onClick={cancelEdit} style={{padding:"8px 18px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:14,color:"var(--color-text-secondary)"}}>Cancel</button></div>
+      <div style={{display:"flex",gap:8}}><Btn v="primary" onClick={saveEdit} disabled={busy}>{busy?"Saving…":"Save changes"}</Btn><button onClick={cancelEdit} style={{padding:"8px 18px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:14,color:"var(--color-text-secondary)"}}>Cancel</button></div>
     </div>);})()}
     <div style={card}>{grouped.length===0?<div style={{color:"var(--color-text-tertiary)",fontSize:14}}>No assignments.</div>:
       <table style={{width:"100%",borderCollapse:"collapse",fontSize:14}}>
@@ -1161,7 +1226,7 @@ function AssignmentsPage() {
           <tr key={m.id} style={editing===m.id?{background:"var(--color-background-subtle)"}:{}}>
             <td style={td}><b>{m.name}</b><div style={{fontSize:12,color:"var(--color-text-secondary)",marginTop:2}}>{m.role}</div></td>
             <td style={td}><div style={{display:"flex",flexWrap:"wrap",gap:4}}>{projects.map(p=><Tag key={p.id} c="green">{p.name}</Tag>)}</div></td>
-            <td style={td}><div style={{display:"flex",gap:8}}><Btn v="ghost" onClick={()=>startEdit(m.id)}>Edit</Btn><Btn v="danger" onClick={()=>delMember(m.id)}>Remove</Btn></div></td>
+            <td style={td}><div style={{display:"flex",gap:8}}><Btn v="ghost" onClick={()=>startEdit(m.id)} disabled={busy}>Edit</Btn><Btn v="danger" onClick={()=>delMember(m.id)} disabled={busy}>Remove</Btn></div></td>
           </tr>
         )}</tbody>
       </table>}
@@ -1247,13 +1312,14 @@ function DashboardPage() {
       {!loading&&!sd&&<span style={{fontSize:12,color:"var(--color-text-warning)"}}>⚠ Server data unavailable — start node server.js</span>}
       {!loading&&sd&&<button onClick={fetchData} style={{fontSize:12,padding:"4px 12px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",color:"var(--color-text-secondary)"}}>↻ Refresh</button>}
     </div>
-    {health && <div style={{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap"}}>
+    {health && <div style={{display:"flex",gap:8,marginBottom:8,flexWrap:"wrap",alignItems:"center"}}>
       {[['Claude AI',health.claude],['Playwright',health.playwright],['k6',health.k6]].map(([name,ok]) =>
         <div key={name} style={{display:"flex",alignItems:"center",gap:6,padding:"6px 12px",borderRadius:6,background:"var(--color-background-secondary)",fontSize:13,border:"1px solid var(--color-border-tertiary)"}}>
           <span style={{width:8,height:8,borderRadius:"50%",background:ok?"#10B981":"#EF4444",display:"inline-block"}}/>
-          {name + (ok ? "" : " - NOT FOUND")}
+          {name + (ok ? "" : " — not found")}
         </div>
       )}
+      {health.k6TooOld && <div style={{fontSize:12,color:"#92400E",background:"#FEF3C7",border:"1px solid #F59E0B",borderRadius:6,padding:"4px 10px"}}>⚠ k6 {health.k6Version} too old — v0.46+ required</div>}
     </div>}
     {syncWarnings.length > 0 && <div style={{background:"#FEF3C7",border:"1px solid #F59E0B",borderRadius:8,padding:"10px 16px",marginBottom:16,fontSize:13,color:"#92400E"}}>
       <strong>⚠ Storage Warning: </strong>
@@ -1486,7 +1552,22 @@ function BarChart({data,title}) {
 // WS_STEPS and WS_IDX are defined inside Workspace (reactive on testKind)
 
 function Workspace({member,refreshSaved,restoreTarget,clearRestore,onActiveSid,onProjChange,resetTrigger}) {
-  const memberProjects=DB.assignments.filter(x=>x.memberId===member.id).map(a=>DB.projects.find(x=>x.id===a.projectId)).filter(Boolean);
+  // GAP-02: load assigned projects from server so members on any browser see their projects
+  const [serverProjects,setServerProjects]=React.useState(null);
+  React.useEffect(()=>{
+    const tok=sessionStorage.getItem(MEMBER_TOKEN_KEY)||"";
+    fetch(API_BASE+"/api/members/"+member.id+"/projects",{headers:{"X-Member-Token":tok}})
+      .then(r=>r.ok?r.json():null)
+      .then(d=>{
+        if(d&&Array.isArray(d)){
+          DB.projects=d;
+          DB.assignments=d.map(p=>({memberId:member.id,projectId:p.id}));
+          setServerProjects(d);
+        }
+      })
+      .catch(()=>{});
+  },[member.id]);
+  const memberProjects=serverProjects!==null?serverProjects:DB.assignments.filter(x=>x.memberId===member.id).map(a=>DB.projects.find(x=>x.id===a.projectId)).filter(Boolean);
   const [selectedProjId,setSelectedProjId]=React.useState(memberProjects[0]?.id||"");
   const proj=memberProjects.find(x=>x.id===selectedProjId)||memberProjects[0]||null;
 const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); const [sdata,setSdata]=useState(null);

@@ -309,17 +309,30 @@ function extractGitError(r) {
 }
 // Fast reachability check without a full clone. GIT_TERMINAL_PROMPT=0 stops git from
 // hanging on an interactive credential prompt for private/unreachable repos.
-function checkGitReachable(url) {
-  const { spawnSync } = require('child_process');
-  const r = spawnSync('git', ['ls-remote', '--exit-code', url, 'HEAD'], {
-    timeout: 12000,
-    env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
+// GAP-01: converted from spawnSync to async spawn so the event loop is never blocked.
+async function checkGitReachable(url) {
+  return new Promise((resolve) => {
+    const env = { ...process.env, GIT_TERMINAL_PROMPT: '0' };
+    let stderr = Buffer.alloc(0);
+    const p = spawn('git', ['ls-remote', '--exit-code', url, 'HEAD'], { env });
+    p.stderr.on('data', d => { stderr = Buffer.concat([stderr, d]); });
+    const timer = setTimeout(() => {
+      try { p.kill(); } catch {}
+      resolve({ ok: false, error: 'git operation timed out' });
+    }, 12000);
+    p.on('close', code => {
+      clearTimeout(timer);
+      if (code !== 0) resolve({ ok: false, error: extractGitError({ status: code, stderr }) });
+      else resolve({ ok: true });
+    });
+    p.on('error', err => {
+      clearTimeout(timer);
+      resolve({ ok: false, error: err.code === 'ENOENT' ? 'git is not installed on the server' : err.message });
+    });
   });
-  if (r.error || r.status !== 0) return { ok: false, error: extractGitError(r) };
-  return { ok: true };
 }
-function syncRepoCache(url) {
-  const { spawnSync } = require('child_process');
+// GAP-01: converted from spawnSync to async spawn so the event loop is never blocked.
+async function syncRepoCache(url) {
   const dir = repoCacheDirFor(url);
   const env = { ...process.env, GIT_TERMINAL_PROMPT: '0' };
   // Always re-clone fresh rather than `git pull` an existing shallow clone — shallow history
@@ -327,15 +340,32 @@ function syncRepoCache(url) {
   // histories" on a second pull, even against the exact same unchanged remote.
   try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
   fs.mkdirSync(dir, { recursive: true });
-  // core.longpaths=true: without it, Windows' 260-char MAX_PATH silently breaks checkout on
-  // repos with deeply nested paths ("unable to create file ...: Filename too long"), even
-  // though an interactive shell's git may succeed due to a different resolved gitconfig.
-  const r = spawnSync('git', ['-c', 'core.longpaths=true', 'clone', '--depth', '1', url, dir], { timeout: 120000, env });
-  if (r.error || r.status !== 0) {
-    try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
-    return { ok: false, error: 'Failed to clone repo: ' + extractGitError(r) };
-  }
-  return { ok: true, dir };
+  return new Promise((resolve) => {
+    let stderr = Buffer.alloc(0);
+    // core.longpaths=true: without it, Windows' 260-char MAX_PATH silently breaks checkout on
+    // repos with deeply nested paths ("unable to create file ...: Filename too long").
+    const p = spawn('git', ['-c', 'core.longpaths=true', 'clone', '--depth', '1', url, dir], { env });
+    p.stderr.on('data', d => { stderr = Buffer.concat([stderr, d]); });
+    const timer = setTimeout(() => {
+      try { p.kill(); } catch {}
+      try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
+      resolve({ ok: false, error: 'Failed to clone repo: git operation timed out' });
+    }, 120000);
+    p.on('close', code => {
+      clearTimeout(timer);
+      if (code !== 0) {
+        try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
+        resolve({ ok: false, error: 'Failed to clone repo: ' + extractGitError({ status: code, stderr }) });
+      } else {
+        resolve({ ok: true, dir });
+      }
+    });
+    p.on('error', err => {
+      clearTimeout(timer);
+      try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
+      resolve({ ok: false, error: 'Failed to clone repo: ' + (err.code === 'ENOENT' ? 'git is not installed on the server' : err.message) });
+    });
+  });
 }
 // Walk the cloned repo and build a size-capped text bundle for the AI prompt.
 function collectRepoContext(dir) {
@@ -656,12 +686,7 @@ function proxyJira(jiraUrl, jiraPath, method, auth, body) {
           try {
             const parsed = JSON.parse(data);
             // Debug: log description field info to server console
-            if (parsed && parsed.fields !== undefined) {
-              const desc = parsed.fields.description;
-              const rendered = parsed.renderedFields?.description;
-              console.log('[Jira] fields.description:', desc === null ? 'NULL' : desc === undefined ? 'UNDEFINED' : (typeof desc === 'string' ? `string(${desc.length})` : `ADF(${JSON.stringify(desc).length}b)`));
-              console.log('[Jira] renderedFields.description:', rendered == null ? 'ABSENT' : `html(${rendered.length})`);
-            }
+            // GAP-13: debug log removed
             resolve(parsed);
           }
           catch (e) { reject(new Error('Jira response parse error: ' + e.message)); }
@@ -1271,21 +1296,21 @@ const server = http.createServer((req, res) => {
       if (!isAdmin && !getSession(req)) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Authentication required' })); return; }
       try {
         const { frontendRepoUrl, backendRepoUrl } = JSON.parse(body);
-        const checkOne = (url) => {
+        const checkOne = async (url) => {
           if (!url || !String(url).trim()) return null;
           const trimmed = String(url).trim();
           const name = trimmed.replace(/\.git$/, '').split('/').filter(Boolean).pop() || trimmed;
           if (!isValidGitUrl(trimmed)) return { url: trimmed, name, attached: true, reachable: false, error: 'Invalid or disallowed repository URL — must be a public https:// Git URL' };
-          const reach = checkGitReachable(trimmed);
+          const reach = await checkGitReachable(trimmed);
           if (!reach.ok) return { url: trimmed, name, attached: true, reachable: false, error: reach.error };
-          const sync = syncRepoCache(trimmed);
+          const sync = await syncRepoCache(trimmed);
           if (!sync.ok) return { url: trimmed, name, attached: true, reachable: false, error: sync.error };
           const { context, truncated } = collectRepoContext(sync.dir);
           try { fs.rmSync(sync.dir, { recursive: true, force: true }); } catch (e) {}
           return { url: trimmed, name, attached: true, reachable: true, context, truncated };
         };
-        const frontend = checkOne(frontendRepoUrl);
-        const backend  = checkOne(backendRepoUrl);
+        const frontend = await checkOne(frontendRepoUrl);
+        const backend  = await checkOne(backendRepoUrl);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ frontend, backend }));
       } catch (e) {
@@ -1343,6 +1368,10 @@ const server = http.createServer((req, res) => {
         if (!name || !email || !password) {
           res.writeHead(400, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'name, email and password are required' })); return;
+        }
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Invalid email address format' })); return;
         }
         if (password.length < 8) {
           res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -1409,11 +1438,8 @@ const server = http.createServer((req, res) => {
         }
         const member = (serverDB.members || []).find(m => m.id === ms.memberId);
         const creds = member ? decryptMemberCredentials(member) : null;
-        if (!creds) {
-          res.writeHead(400, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'No credentials configured' })); return;
-        }
-        const sessionToken = createSession(ms.memberId, creds.jiraUrl, creds.jiraEmail, creds.jiraToken);
+        // GAP-04: allow refresh without Jira credentials — AI features still work; Jira calls fail independently
+        const sessionToken = createSession(ms.memberId, creds?.jiraUrl || '', creds?.jiraEmail || '', creds?.jiraToken || '');
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ sessionToken }));
       } catch (e) {
@@ -1731,12 +1757,23 @@ const server = http.createServer((req, res) => {
           res.writeHead(401, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'Unauthorized' })); return;
         }
-        const { newUsername } = JSON.parse(body);
+        const { newUsername, currentPassword } = JSON.parse(body);
+        if (!currentPassword) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Current password is required to change username' })); return;
+        }
+        // GAP-05: verify current password before allowing username change
+        const pwOk = await verifyPassword(currentPassword, serverDB.adminPasswordHash);
+        if (!pwOk) {
+          res.writeHead(403, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Incorrect current password' })); return;
+        }
         if (!newUsername || !/^[a-zA-Z0-9_]{3,32}$/.test(newUsername)) {
           res.writeHead(400, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'Username must be 3-32 alphanumeric/underscore characters' })); return;
         }
         serverDB.adminUsername = newUsername;
+        saveServerDB(serverDB); // GAP-07: explicit save, not relying on appendAuditLog side-effect
         appendAuditLog('admin-username-changed', { newUsername });
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ ok: true }));
@@ -2046,7 +2083,9 @@ const server = http.createServer((req, res) => {
         console.log('[UID] Taking screenshot of:', url);
         await new Promise((resolve, reject) => {
           const spawnEnv = { ...process.env, CI: '1', PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1' };
-          const proc = spawn('npx', ['playwright', 'screenshot', '--browser', 'chromium', '--full-page', url, outPath], { shell: process.platform === 'win32', env: spawnEnv });
+          // GAP-12: use playwrightCmd() for consistent binary resolution
+          const pwSs = playwrightCmd(['screenshot', '--browser', 'chromium', '--full-page', url, outPath]);
+          const proc = spawn(pwSs.cmd, pwSs.args, { shell: true, env: spawnEnv });
           let stderr = '';
           proc.stderr.on('data', d => stderr += d.toString());
           const timer = setTimeout(() => { try { proc.kill(); } catch {} reject(new Error('Screenshot timed out')); }, 90000);
@@ -2501,8 +2540,12 @@ Return ONLY valid JSON (no markdown wrapper, no extra text):
     }
 
     if (req.method === 'GET' && req.url === '/api/projects') {
+      // GAP-02: allow member tokens too so the workspace can load projects from server
       const adminToken = req.headers['x-admin-token'];
-      if (!adminToken || !adminSessions.has(adminToken)) {
+      const memberToken = req.headers['x-member-token'];
+      const isAdmin = adminToken && adminSessions.has(adminToken);
+      const isMember = memberToken && memberSessions.has(memberToken);
+      if (!isAdmin && !isMember) {
         res.writeHead(401, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'Unauthorized' })); return;
       }
@@ -2530,6 +2573,7 @@ Return ONLY valid JSON (no markdown wrapper, no extra text):
         if (parsed.backendRepoUrl !== undefined) proj.backendRepoUrl = parsed.backendRepoUrl;
         if (parsed.language && ['ar','en','mixed'].includes(parsed.language)) proj.language = parsed.language;
         saveServerDB(serverDB);
+        appendAuditLog('project-updated', { id: projId, name: proj.name }); // GAP-10
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(proj));
       } catch (e) {
@@ -2549,13 +2593,63 @@ Return ONLY valid JSON (no markdown wrapper, no extra text):
         const projId = req.url.split('/')[3];
         if (!Array.isArray(serverDB.projects)) serverDB.projects = [];
         serverDB.projects = serverDB.projects.filter(p => p.id !== projId);
+        if (!Array.isArray(serverDB.assignments)) serverDB.assignments = [];
+        serverDB.assignments = serverDB.assignments.filter(a => a.projectId !== projId);
         saveServerDB(serverDB);
+        appendAuditLog('project-deleted', { id: projId }); // GAP-10
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ ok: true }));
       } catch (e) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'Invalid request' }));
       }
+      return;
+    }
+
+    /* ── /api/assignments (GET/PUT — admin manages member→project assignments) ── */
+    // GAP-02: server-side assignments storage so members see their projects on any browser
+    if (req.method === 'GET' && req.url === '/api/assignments') {
+      const adminToken = req.headers['x-admin-token'];
+      if (!adminToken || !adminSessions.has(adminToken)) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Unauthorized' })); return; }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(serverDB.assignments || []));
+      return;
+    }
+
+    if (req.method === 'PUT' && /^\/api\/assignments\/[^/]+$/.test(req.url)) {
+      try {
+        const adminToken = req.headers['x-admin-token'];
+        if (!adminToken || !adminSessions.has(adminToken)) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Unauthorized' })); return; }
+        const memberId = req.url.split('/')[3];
+        const { projectIds } = JSON.parse(body);
+        if (!Array.isArray(projectIds)) { res.writeHead(400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'projectIds array required' })); return; }
+        if (!Array.isArray(serverDB.assignments)) serverDB.assignments = [];
+        serverDB.assignments = serverDB.assignments.filter(a => a.memberId !== memberId);
+        projectIds.forEach(pid => serverDB.assignments.push({ memberId, projectId: pid }));
+        saveServerDB(serverDB);
+        appendAuditLog('assignments-updated', { memberId, projectIds });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true }));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Invalid request' }));
+      }
+      return;
+    }
+
+    /* ── /api/members/:id/projects (GET — member auth, returns assigned projects) ── */
+    if (req.method === 'GET' && /^\/api\/members\/[^/]+\/projects$/.test(req.url)) {
+      const mId = req.url.split('/')[3];
+      const memberToken = req.headers['x-member-token'];
+      const ms = memberToken ? memberSessions.get(memberToken) : null;
+      const isAdmin = req.headers['x-admin-token'] && adminSessions.has(req.headers['x-admin-token']);
+      if (!isAdmin && (!ms || Date.now() - ms.createdAt > ADMIN_SESSION_TTL || (ms.memberId || ms.id) !== mId)) {
+        res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Unauthorized' })); return;
+      }
+      const assignments = (serverDB.assignments || []).filter(a => a.memberId === mId);
+      const projects = assignments.map(a => (serverDB.projects || []).find(p => p.id === a.projectId)).filter(Boolean);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(projects));
       return;
     }
 
@@ -2570,15 +2664,42 @@ async function checkDependencies() {
     p.on('exit', code => resolve(code === 0));
     p.on('error', () => resolve(false));
   });
-  const claudeExe = process.env.CLAUDE_CLI_PATH || 'claude';
-  const [claudeOk, pwOk, k6Ok] = await Promise.all([
+  // GAP-08: use resolveClaudeCli() so health check matches what AI calls actually use
+  const claudeExe = resolveClaudeCli() || process.env.CLAUDE_CLI_PATH || 'claude';
+  const pwCmd = playwrightCmd(['--version']);
+  // GAP-14: check k6 version and log warning if below v0.46
+  const k6VersionStr = await new Promise(resolve => {
+    const p = require('child_process').spawn('k6', ['version'], { shell: true, timeout: 8000 });
+    let out = '';
+    p.stdout.on('data', d => { out += d.toString(); });
+    p.on('exit', () => resolve(out.trim()));
+    p.on('error', () => resolve(''));
+  });
+  const k6Ok = !!k6VersionStr;
+  const k6VersionMatch = k6VersionStr.match(/v(\d+)\.(\d+)/);
+  const k6TooOld = k6VersionMatch && (parseInt(k6VersionMatch[1]) === 0 && parseInt(k6VersionMatch[2]) < 46);
+  if (k6TooOld) console.warn('[Deps] k6 version ' + k6VersionStr + ' is too old — k6 v0.46+ is required for performance tests to work.');
+  const [claudeOk, pwOk] = await Promise.all([
     run(claudeExe, ['--version']),
-    run('npx', ['playwright', '--version']),
-    run('k6', ['version'])
+    run(pwCmd.cmd, pwCmd.args)
   ]);
-  serverDB.dependencyStatus = { claude: claudeOk, playwright: pwOk, k6: k6Ok };
+  serverDB.dependencyStatus = { claude: claudeOk, playwright: pwOk, k6: k6Ok, k6TooOld: !!k6TooOld, k6Version: k6VersionStr || null };
   saveServerDB(serverDB);
 }
+
+// GAP-03: graceful shutdown — let in-flight requests drain before exiting
+process.on('SIGTERM', () => {
+  console.log('[Shutdown] SIGTERM received — closing server gracefully…');
+  server.close(() => {
+    console.log('[Shutdown] All connections closed. Exiting.');
+    process.exit(0);
+  });
+  setTimeout(() => { console.warn('[Shutdown] Forced exit after 10s drain timeout.'); process.exit(1); }, 10000);
+});
+process.on('SIGINT', () => {
+  console.log('\n[Shutdown] SIGINT received — shutting down…');
+  server.close(() => process.exit(0));
+});
 
 server.listen(PORT, () => {
   console.log('');
