@@ -1382,7 +1382,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
 
 DOMAIN AWARENESS:
 Identify domain-specific context from the story (authentication systems, payment flows, government services, industry regulations, country-specific rules, etc.) and apply relevant domain knowledge to your analysis.
-Example: If the story involves Nafath or Saudi government authentication, apply known domain rules such as National ID format (IDs starting with 1 = Saudi citizens, IDs starting with 2 = residents), token handling standards, and government service compliance expectations. Apply similar awareness for any other domain you detect.
+Example: if the story involves a regulated or specialized domain — e.g. payments (currency, rounding, PCI), identity/KYC (ID or document formats, token-handling standards), healthcare (privacy rules), or government services (compliance expectations) — apply that domain's known rules and constraints. Apply similar awareness for whatever domain you actually detect in the story.
 
 ANALYSIS CHECKLIST — systematically examine each category:
 1. FUNCTIONAL: Missing user flows, undefined success/failure behaviors, unspecified system responses
@@ -1395,7 +1395,7 @@ ANALYSIS CHECKLIST — systematically examine each category:
 8. SECURITY: Token handling, session management, redirect URI validation, authorization bypasses, sensitive data exposure, authentication and authorization flows. If the story involves SSO or OAuth, flag any gaps in security parameters in the redirect URL — specifically state, nonce, and code_challenge (PKCE).
 9. UI AND UX: Loading states, empty states, confirmation dialogs, navigation after action, responsive behavior
 10. NAVIGATION AND BROWSER BEHAVIOR: Back button behavior, page refresh, direct URL access, deep linking, browser history manipulation
-11. DEVICE AND ENVIRONMENT: Device-specific behavior — for example, if the flow depends on a mobile app (such as Nafath), what happens when the user is on desktop and does not have the app installed? Consider OS differences, app availability, and fallback behavior.
+11. DEVICE AND ENVIRONMENT: Device-specific behavior — for example, if the flow depends on an external mobile app (e.g. an authenticator, banking, or government app), what happens when the user is on desktop and does not have the app installed? Consider OS differences, app availability, and fallback behavior.
 
 REQUIRED REASONING PROCESS — follow these steps in order:
 
