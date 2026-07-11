@@ -105,7 +105,9 @@ function isValidJiraUrl(s) {
 }
 
 /* ── File-based data store (admin dashboard sync) ───────────────────────── */
-const DATA_DIR  = path.join(__dirname, 'data');
+// DATA_DIR env override lets tests run against an isolated data directory
+// without touching a member's real credentials and encryption key.
+const DATA_DIR  = process.env.DATA_DIR || path.join(__dirname, 'data');
 const DATA_FILE = path.join(DATA_DIR, 'qa-platform-db.json');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
@@ -1271,6 +1273,19 @@ const server = http.createServer((req, res) => {
         res.writeHead(400, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'Invalid request' }));
       }
+      return;
+    }
+
+    /* ── /api/session/probe (GET — reveals which creds are wired to the current session, NOT the values) ── */
+    if (req.method === 'GET' && req.url === '/api/session/probe') {
+      const session = getSession(req);
+      if (!session) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Authentication required' })); return; }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        memberId:    session.memberId,
+        hasJiraAuth: !!session.jiraAuth,
+        hasAioToken: !!session.aioToken
+      }));
       return;
     }
 
