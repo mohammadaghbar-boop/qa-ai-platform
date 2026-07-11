@@ -55,7 +55,7 @@ setInterval(() => {
   for (const [t, s] of sessions)      if (now - s.createdAt > API_SESSION_TTL)   sessions.delete(t);
   for (const [t, s] of adminSessions) if (now - s.createdAt > ADMIN_SESSION_TTL) adminSessions.delete(t);
   for (const [t, s] of memberSessions) if (now - (s.createdAt || 0) > ADMIN_SESSION_TTL) memberSessions.delete(t);
-}, 60 * 60 * 1000);
+}, 60 * 60 * 1000).unref();
 
 /* ── Configuration ──────────────────────────────────────────────────────── */
 const PORT              = parseInt(process.env.PORT) || 3456;
@@ -81,7 +81,7 @@ function checkRateLimit(ip) {
 setInterval(() => {
   const now = Date.now();
   for (const [ip, e] of loginAttempts) if (now > e.resetAt) loginAttempts.delete(ip);
-}, 5 * 60 * 1000);
+}, 5 * 60 * 1000).unref();
 
 /* ── Input validators & sanitizers ──────────────────────────────────────── */
 function sanitizeFilename(name) {
@@ -219,7 +219,7 @@ setInterval(() => {
       codegenSessions.delete(id);
     }
   }
-}, 30 * 60 * 1000);
+}, 30 * 60 * 1000).unref();
 
 /* ── Claude AI (direct Anthropic API — used when ANTHROPIC_API_KEY is set) ── */
 function callAnthropicAPI(messages, system, maxTokens=4000, model='') {
@@ -881,6 +881,21 @@ const server = http.createServer((req, res) => {
     };
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(safeDB));
+    return;
+  }
+
+  /* ── Serve shared browser-side lib (also required by Node unit tests) ── */
+  if (req.method === 'GET' && req.url === '/qa-lib.js') {
+    try {
+      const js = fs.readFileSync(path.join(__dirname, 'public', 'qa-lib.js'), 'utf8');
+      res.writeHead(200, {
+        'Content-Type': 'application/javascript; charset=utf-8',
+        'Cache-Control': 'no-store, no-cache, must-revalidate'
+      });
+      res.end(js);
+    } catch (e) {
+      res.writeHead(500); res.end('Could not read qa-lib.js: ' + e.message);
+    }
     return;
   }
 
