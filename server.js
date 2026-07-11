@@ -1276,19 +1276,6 @@ const server = http.createServer((req, res) => {
       return;
     }
 
-    /* ── /api/session/probe (GET — reveals which creds are wired to the current session, NOT the values) ── */
-    if (req.method === 'GET' && req.url === '/api/session/probe') {
-      const session = getSession(req);
-      if (!session) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Authentication required' })); return; }
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({
-        memberId:    session.memberId,
-        hasJiraAuth: !!session.jiraAuth,
-        hasAioToken: !!session.aioToken
-      }));
-      return;
-    }
-
     /* ── /api/ai ── */
     if (req.method === 'POST' && req.url === '/api/ai') {
       const session = getSession(req);
