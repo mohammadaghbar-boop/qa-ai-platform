@@ -398,7 +398,9 @@ function attachToJira(jiraUrl, issueKey, auth, files) {
 }
 
 /* ── AIO Tests Importer ─────────────────────────────────────────────────── */
-const AIO_BASE = 'https://tcms.aiojiraapps.com/aio-tcms/api/v1';
+// Shared AIO Tests cloud endpoint (same for all cloud instances). Override with
+// AIO_BASE_URL env var if a member's instance differs.
+const AIO_BASE = process.env.AIO_BASE_URL || 'https://tcms.aiojiraapps.com/aio-tcms/api/v1';
 const AIO_PRIORITY_MAP = {
   critical: 'Critical', highest: 'Critical', high: 'High', hi: 'High',
   medium: 'Medium', med: 'Medium', normal: 'Medium', low: 'Low', lowest: 'Lowest'
