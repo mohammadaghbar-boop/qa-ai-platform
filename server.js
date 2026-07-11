@@ -27,14 +27,15 @@ const path   = require('path');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 
-// In-memory session store: token -> { memberId, jiraUrl, jiraAuth, createdAt }
+// In-memory session store: token -> { memberId, jiraUrl, jiraAuth, aioToken, createdAt }
 const sessions = new Map();
-function createSession(memberId, jiraUrl, jiraEmail, jiraToken) {
+function createSession(memberId, jiraUrl, jiraEmail, jiraToken, aioToken) {
   const token = crypto.randomBytes(32).toString('hex');
   sessions.set(token, {
     memberId,
     jiraUrl:  jiraUrl  || '',
     jiraAuth: (jiraEmail && jiraToken) ? Buffer.from(jiraEmail + ':' + jiraToken).toString('base64') : '',
+    aioToken: aioToken || '',
     createdAt: Date.now()
   });
   return token;
@@ -394,6 +395,160 @@ function attachToJira(jiraUrl, issueKey, auth, files) {
     req.write(body);
     req.end();
   });
+}
+
+/* ── AIO Tests Importer ─────────────────────────────────────────────────── */
+const AIO_BASE = 'https://tcms.aiojiraapps.com/aio-tcms/api/v1';
+const AIO_PRIORITY_MAP = {
+  critical: 'Critical', highest: 'Critical', high: 'High', hi: 'High',
+  medium: 'Medium', med: 'Medium', normal: 'Medium', low: 'Low', lowest: 'Lowest'
+};
+
+// Thin AIO REST call. Returns {status, json, raw}. Never throws on HTTP errors (caller inspects status).
+function aioFetch(token, method, projectKey, subPath, bodyObj) {
+  return new Promise((resolve, reject) => {
+    const url = new URL(AIO_BASE + '/project/' + encodeURIComponent(projectKey) + subPath);
+    const payload = bodyObj ? JSON.stringify(bodyObj) : null;
+    const opts = {
+      hostname: url.hostname,
+      path:     url.pathname + url.search,
+      method:   method,
+      timeout:  REQ_TIMEOUT,
+      headers: {
+        'Authorization': 'AioAuth ' + token,
+        'Content-Type':  'application/json',
+        'Accept':        'application/json',
+        ...(payload ? { 'Content-Length': Buffer.byteLength(payload) } : {})
+      }
+    };
+    const req = https.request(opts, r => {
+      let data = ''; r.on('data', d => data += d);
+      r.on('end', () => {
+        let json = null; try { json = data ? JSON.parse(data) : null; } catch {}
+        resolve({ status: r.statusCode, json, raw: data });
+      });
+    });
+    req.on('timeout', () => { req.destroy(new Error('AIO request timed out')); });
+    req.on('error', reject);
+    if (payload) req.write(payload);
+    req.end();
+  });
+}
+
+// Orchestrates importing platform test cases into AIO Tests. Mirrors the reference
+// Python importer's payloads/endpoints. Returns a {created, skipped, failed, ...} summary.
+async function aioImport(session, opts) {
+  const { projectKey, parentFolder, storyKey, cases, dryRun } = opts;
+  const token = session.aioToken;
+  if (!token) throw new Error('AIO token not configured. Add it in Settings.');
+  if (!projectKey) throw new Error('AIO project key missing (set the Jira Project Key on the project).');
+  if (!Array.isArray(cases) || cases.length === 0) throw new Error('No approved cases to import.');
+
+  // 1) Verify connection + load priorities / script type / case type from project config.
+  const cfgRes = await aioFetch(token, 'GET', projectKey, '/config');
+  if (cfgRes.status === 401) throw new Error('AIO authentication failed (401). Check the AIO API token.');
+  if (cfgRes.status === 404) throw new Error(`AIO project '${projectKey}' not found (404). Check the project key.`);
+  if (cfgRes.status >= 400 || !cfgRes.json) throw new Error('AIO /config request failed (HTTP ' + cfgRes.status + ').');
+  const cfg = cfgRes.json;
+  const pickDefault = arr => { arr = arr || []; return arr.find(x => x.isDefault) || arr.find(x => !x.isArchived) || arr[0] || null; };
+  const priorities = {};
+  for (const p of (cfg.casePriorities || cfg.priorities || [])) {
+    const n = String(p.name || '').trim().toLowerCase(); const id = (p.ID != null ? p.ID : p.id);
+    if (n && id != null) priorities[n] = id;
+  }
+  const st = pickDefault(cfg.caseScriptTypes); const scriptType = (st && st.ID != null) ? { ID: st.ID } : null;
+  const ct = pickDefault(cfg.caseTypes);       const caseType   = (ct && ct.ID != null) ? { ID: ct.ID } : null;
+
+  // 2) Resolve target folder (READ-ONLY — this AIO instance can't create folders via API).
+  let folderId = null;
+  if (parentFolder) {
+    const fRes = await aioFetch(token, 'GET', projectKey, '/testcase/folder');
+    const flat = [];
+    const flatten = (nodes, parent) => {
+      for (const n of nodes || []) {
+        const fid = (n.ID != null ? n.ID : n.id); const name = n.name || n.title || '';
+        flat.push({ fid, name, parent });
+        flatten(n.children || n.subFolders || [], fid);
+      }
+    };
+    if (fRes.json) flatten(fRes.json, null);
+    const findF = (name, parent) => {
+      const hit = flat.find(f => String(f.name).trim().toLowerCase() === String(name).trim().toLowerCase()
+        && (parent == null || f.parent === parent));
+      return hit ? hit.fid : null;
+    };
+    const parentId = findF(parentFolder, null);
+    if (parentId != null) folderId = storyKey ? (findF(storyKey, parentId) != null ? findF(storyKey, parentId) : parentId) : parentId;
+  }
+
+  // 3) Resolve the Jira story to its numeric ID for the requirement link (best-effort).
+  let requirementId = null;
+  if (storyKey && session.jiraUrl && session.jiraAuth) {
+    try {
+      const issue = await proxyJira(session.jiraUrl, `/issue/${storyKey}?fields=id`, 'GET', session.jiraAuth);
+      if (issue && issue.id) requirementId = parseInt(issue.id, 10);
+    } catch { /* non-fatal — import without the link */ }
+  }
+
+  // 4) Dedup: collect existing case titles in the target folder.
+  const existing = new Set();
+  if (folderId != null) {
+    let startAt = 0; const pageSize = 100;
+    while (true) {
+      const lr = await aioFetch(token, 'GET', projectKey, `/testcase?startAt=${startAt}&maxResults=${pageSize}`);
+      if (!lr.json) break;
+      const items = Array.isArray(lr.json) ? lr.json : (lr.json.items || lr.json.testCases || []);
+      if (!Array.isArray(items) || items.length === 0) break;
+      for (const c of items) {
+        const f = c.folder || {}; const fid = (f && typeof f === 'object') ? f.ID : null;
+        if (fid === folderId) { const t = String(c.title || '').trim().toLowerCase(); if (t) existing.add(t); }
+      }
+      if (items.length < pageSize) break;
+      startAt += pageSize;
+    }
+  }
+
+  // 5) Create each case (multi-step payload built from the platform's per-step arrays).
+  const summary = { created: 0, skipped: 0, failed: 0, errors: [], folderId, requirementId, dryRun: !!dryRun, total: cases.length };
+  for (const c of cases) {
+    const title = String(c.title || '').trim();
+    if (!title) continue;
+    if (existing.has(title.toLowerCase())) { summary.skipped++; continue; }
+
+    const steps = Array.isArray(c.steps) ? c.steps : [];
+    const stepResults = Array.isArray(c.stepResults) ? c.stepResults : [];
+    const stepData = Array.isArray(c.stepData) ? c.stepData : [];
+    let stepObjs;
+    if (steps.length) {
+      stepObjs = steps.map((s, i) => ({
+        stepType: 'TEXT',
+        step: String(s || ''),
+        data: String(stepData[i] || ''),
+        expectedResult: String(stepResults[i] || (i === steps.length - 1 ? (c.expected || '') : ''))
+      }));
+    } else {
+      stepObjs = [{ stepType: 'TEXT', step: '', data: String(c.testData || ''), expectedResult: String(c.expected || '') }];
+    }
+
+    const prioName = AIO_PRIORITY_MAP[String(c.priority || '').trim().toLowerCase()] || 'Medium';
+    const payload = { title, precondition: c.preconditions || null, steps: stepObjs };
+    const pid = priorities[prioName.toLowerCase()];
+    payload.priority = (pid != null) ? { ID: pid } : { name: prioName };
+    if (folderId != null) { payload.folder = { ID: folderId }; payload.folderID = folderId; }
+    if (requirementId != null) payload.jiraRequirementIDs = [requirementId];
+    if (scriptType) payload.scriptType = scriptType;
+    if (caseType) payload.caseType = caseType;
+
+    if (dryRun) { summary.created++; existing.add(title.toLowerCase()); continue; }
+    try {
+      const cr = await aioFetch(token, 'POST', projectKey, '/testcase', payload);
+      if (cr.status === 200 || cr.status === 201) { summary.created++; existing.add(title.toLowerCase()); }
+      else { summary.failed++; summary.errors.push(`${c.id || title.slice(0, 30)}: HTTP ${cr.status} ${String(cr.raw || '').slice(0, 150)}`); }
+    } catch (e) {
+      summary.failed++; summary.errors.push(`${c.id || title.slice(0, 30)}: ${e.message}`);
+    }
+  }
+  return summary;
 }
 
 /* ── Playwright Test Runner ─────────────────────────────────────────────── */
@@ -1046,7 +1201,7 @@ const server = http.createServer((req, res) => {
         res.end(JSON.stringify({ error: 'Too many attempts. Please wait 15 minutes.' })); return;
       }
       try {
-        const { memberId, jiraUrl, jiraEmail, jiraToken } = JSON.parse(body);
+        const { memberId, jiraUrl, jiraEmail, jiraToken, aioToken } = JSON.parse(body);
         // Accept either a valid member token OR an existing session token (survives server restarts)
         const memberToken  = req.headers['x-member-token'];
         const sessionCheck = req.headers['x-session-token'];
@@ -1064,7 +1219,7 @@ const server = http.createServer((req, res) => {
           res.end(JSON.stringify({ error: 'Invalid Jira URL. Must be a public HTTPS address.' }));
           return;
         }
-        const sessionToken = createSession(memberId, jiraUrl, jiraEmail, jiraToken);
+        const sessionToken = createSession(memberId, jiraUrl, jiraEmail, jiraToken, aioToken);
         console.log('[Auth] Session created');
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ sessionToken }));
@@ -1139,6 +1294,30 @@ const server = http.createServer((req, res) => {
         res.end(JSON.stringify({ ok: true }));
       } catch (e) {
         console.error('[Jira] Attach error:', e.message);
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: e.message }));
+      }
+      return;
+    }
+
+    /* ── /api/aio/import ── */
+    if (req.method === 'POST' && req.url === '/api/aio/import') {
+      const session = getSession(req);
+      if (!session) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Authentication required' })); return; }
+      try {
+        const { projectKey, parentFolder, storyKey, cases, dryRun } = JSON.parse(body);
+        if (!session.aioToken) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'AIO token not configured. Open Settings and add your AIO Tests API token, then reconnect.' }));
+          return;
+        }
+        console.log('[AIO]  Import request —', (dryRun ? 'DRY-RUN ' : ''), (Array.isArray(cases) ? cases.length : 0), 'case(s), project', projectKey, 'story', storyKey || 'none');
+        const summary = await aioImport(session, { projectKey, parentFolder, storyKey, cases, dryRun });
+        console.log('[AIO]  Done — created', summary.created, 'skipped', summary.skipped, 'failed', summary.failed);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(summary));
+      } catch (e) {
+        console.error('[AIO]  Error:', e.message);
         res.writeHead(500, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: e.message }));
       }

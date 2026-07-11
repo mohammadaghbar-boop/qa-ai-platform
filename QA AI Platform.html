@@ -1230,6 +1230,37 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
   const SYS=`You are an expert QA engineer. All story data is already provided in the user message — do NOT use any external tools, do NOT access Jira, Atlassian, or any other service. Work only with the text provided. Project:"${proj?.name}" Platform:${proj?.platform||"web"}.`;
   const jiraConfigured=!!sessionStorage.getItem(SESSION_TOKEN_KEY);
   const approved=cases.filter(c=>c.status==="approved");
+
+  // Direct import of approved cases into AIO Tests (Jira). Runs a dry-run first, then confirms.
+  const doAioImport=async()=>{
+    if(approved.length===0){alert("No approved cases to import.");return;}
+    const projectKey=proj?.jiraProjKey||"";
+    if(!projectKey){alert("This project has no Jira Project Key set (needed as the AIO project key). Ask your QA Lead to add it.");return;}
+    const payload={projectKey,parentFolder:(proj?.aioParentFolder||"").trim()||null,storyKey:sid,cases:approved};
+    const token=await _ensureSession();
+    if(!token){alert("No active session. Open Settings and connect first.");return;}
+    const callImport=async(dryRun)=>{
+      const r=await fetch(API_BASE+"/api/aio/import",{method:"POST",headers:{"Content-Type":"application/json","X-Session-Token":token},body:JSON.stringify({...payload,dryRun})});
+      const d=await r.json();
+      if(!r.ok)throw new Error(d.error||"Import failed (HTTP "+r.status+")");
+      return d;
+    };
+    setLoading(true);setLmsg("AIO: running dry-run preview…");
+    try{
+      const pre=await callImport(true);
+      setLoading(false);
+      const folderMsg=pre.folderId!=null?`folder ID ${pre.folderId}`:"project root (no matching folder)";
+      const linkMsg=pre.requirementId!=null?`linked to ${sid}`:`NOT linked (story ID unresolved)`;
+      const ok=window.confirm(`AIO import preview for ${sid}:\n\n• ${pre.created} case(s) would be CREATED\n• ${pre.skipped} skipped as duplicates\n• Target: ${folderMsg}\n• Requirement: ${linkMsg}\n\nProceed with the real import?`);
+      if(!ok){setLmsg("");return;}
+      setLoading(true);setLmsg(`AIO: importing ${pre.created} case(s)…`);
+      const res=await callImport(false);
+      setLoading(false);
+      let msg=`AIO import complete for ${sid}:\n\n✓ created: ${res.created}\n↷ skipped (duplicate): ${res.skipped}\n✗ failed: ${res.failed}`;
+      if(res.failed>0&&res.errors?.length)msg+=`\n\nFirst errors:\n- ${res.errors.slice(0,5).join("\n- ")}`;
+      alert(msg);
+    }catch(e){setLoading(false);setLmsg("");alert("AIO import error:\n\n"+e.message);}
+  };
   const autoable=approved.filter(c=>c.automatable!==false);
   const manOnly=approved.filter(c=>c.automatable===false);
   const allDone=cases.length>0&&cases.every(c=>c.status!=="pending");
@@ -2249,11 +2280,13 @@ OVERALL STORY READINESS FOR QA:
         {!loading&&phase==="jira"&&<div>
           <div style={{...card,padding:"16px 20px"}}>
             <div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:14}}>Story <b>{sid}</b> · <b>{approved.length}</b> approved cases · <Tag c={platform==="mobile"?"amber":"blue"}>{platform}</Tag></div>
-            <div style={{display:"flex",gap:10}}>
+            <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+              <Btn v="success" onClick={doAioImport}>⬆ Import to AIO Tests</Btn>
               <Btn v="primary" onClick={()=>{exportExcel(cases,sid);setAppUrl("");setPhase("urlPrompt");}}>⬇ Export AIO Excel</Btn>
               <Btn v="ghost" onClick={()=>{exportCSV(cases,sid);setAppUrl("");setPhase("urlPrompt");}}>⬇ Export AIO CSV</Btn>
               <button onClick={()=>{setAppUrl("");setPhase("urlPrompt");}} style={ghostBtn}>Skip</button>
             </div>
+            <div style={{fontSize:12,color:"var(--color-text-tertiary)",marginTop:8}}>Direct import creates the approved cases in AIO Tests (needs your AIO API token in Settings). Runs a dry-run preview first.</div>
           </div>
         </div>}
 
@@ -2761,7 +2794,7 @@ function AdminChangePasswordModal({onClose,forced}) {
 /* ─── Root App ────────────────────────────────────────────────────────────── */
 /* ─── Member Config Dialog ────────────────────────────────────────────────── */
 function MemberConfigDialog({memberId, onClose}) {
-  const [f,setF]=useState({jiraUrl:"",jiraEmail:"",jiraToken:""});
+  const [f,setF]=useState({jiraUrl:"",jiraEmail:"",jiraToken:"",aioToken:""});
   const [testing,setTesting]=useState(false);
   const [testMsg,setTestMsg]=useState("");
   const [saving,setSaving]=useState(false);
@@ -2775,7 +2808,7 @@ function MemberConfigDialog({memberId, onClose}) {
       const mt=sessionStorage.getItem(MEMBER_TOKEN_KEY)||"";
       const st=sessionStorage.getItem(SESSION_TOKEN_KEY)||"";
       const cleanUrl=(()=>{try{return new URL(f.jiraUrl.trim()).origin;}catch{return f.jiraUrl.trim();}})();
-      const sr=await fetch(API_BASE+"/api/auth/session",{method:"POST",headers:{"Content-Type":"application/json","X-Member-Token":mt,"X-Session-Token":st},body:JSON.stringify({memberId,jiraUrl:cleanUrl,jiraEmail:f.jiraEmail,jiraToken:f.jiraToken})});
+      const sr=await fetch(API_BASE+"/api/auth/session",{method:"POST",headers:{"Content-Type":"application/json","X-Member-Token":mt,"X-Session-Token":st},body:JSON.stringify({memberId,jiraUrl:cleanUrl,jiraEmail:f.jiraEmail,jiraToken:f.jiraToken,aioToken:f.aioToken})});
       const sd=await sr.json();
       if(!sd.sessionToken)throw new Error("Could not create test session");
       const r=await fetch(API_BASE+"/api/jira",{method:"POST",headers:{"Content-Type":"application/json","X-Session-Token":sd.sessionToken},body:JSON.stringify({path:"/myself",method:"GET"})});
@@ -2790,14 +2823,27 @@ function MemberConfigDialog({memberId, onClose}) {
     setSaving(true);setSaveErr("");
     try{
       const mt=sessionStorage.getItem(MEMBER_TOKEN_KEY);
-      const r=await fetch(API_BASE+"/api/members/"+memberId+"/credentials",{
+      const cleanUrl=(()=>{try{return new URL(f.jiraUrl.trim()).origin;}catch{return f.jiraUrl.trim();}})();
+      // Persist Jira credentials (encrypted server-side) when provided.
+      if(f.jiraUrl&&f.jiraEmail&&f.jiraToken){
+        const r=await fetch(API_BASE+"/api/members/"+memberId+"/credentials",{
+          method:"POST",
+          headers:{"Content-Type":"application/json","X-Member-Token":mt||""},
+          body:JSON.stringify({jiraUrl:cleanUrl,jiraEmail:f.jiraEmail.trim(),jiraToken:f.jiraToken.trim()})
+        });
+        const d=await r.json();
+        if(!r.ok)throw new Error(d.error||"Save failed");
+      }
+      // Mint a session that carries BOTH Jira auth and the AIO token (in-memory, this session only).
+      const st=sessionStorage.getItem(SESSION_TOKEN_KEY)||"";
+      const sr=await fetch(API_BASE+"/api/auth/session",{
         method:"POST",
-        headers:{"Content-Type":"application/json","X-Member-Token":mt||""},
-        body:JSON.stringify({jiraUrl:(()=>{try{return new URL(f.jiraUrl.trim()).origin;}catch{return f.jiraUrl.trim();}})(),jiraEmail:f.jiraEmail.trim(),jiraToken:f.jiraToken.trim()})
+        headers:{"Content-Type":"application/json","X-Member-Token":mt||"","X-Session-Token":st},
+        body:JSON.stringify({memberId,jiraUrl:cleanUrl,jiraEmail:f.jiraEmail.trim(),jiraToken:f.jiraToken.trim(),aioToken:f.aioToken.trim()})
       });
-      const d=await r.json();
-      if(!r.ok)throw new Error(d.error||"Save failed");
-      if(d.sessionToken)sessionStorage.setItem(SESSION_TOKEN_KEY,d.sessionToken);
+      const sd=await sr.json();
+      if(!sr.ok)throw new Error(sd.error||"Session save failed");
+      if(sd.sessionToken)sessionStorage.setItem(SESSION_TOKEN_KEY,sd.sessionToken);
       onClose();
     }catch(e){setSaveErr(e.message);}
     setSaving(false);
@@ -2825,6 +2871,7 @@ function MemberConfigDialog({memberId, onClose}) {
         </div>
         <div><Lbl>Email</Lbl><input style={inp} value={f.jiraEmail} onChange={e=>sf({jiraEmail:e.target.value})} placeholder="you@company.com"/></div>
         <div><Lbl>API Token</Lbl><input type="password" style={inp} value={f.jiraToken} onChange={e=>sf({jiraToken:e.target.value})} placeholder="••••••"/><div style={{fontSize:11,color:"var(--color-text-tertiary)",marginTop:3}}>Get yours at id.atlassian.com → Security → API Tokens</div></div>
+        <div style={{borderTop:"1px solid var(--color-border-tertiary)",paddingTop:12,marginTop:2}}><Lbl>AIO Tests API Token <span style={{fontWeight:400,color:"var(--color-text-tertiary)"}}>— optional, enables direct import to AIO</span></Lbl><input type="password" style={inp} value={f.aioToken} onChange={e=>sf({aioToken:e.target.value})} placeholder="••••••"/><div style={{fontSize:11,color:"var(--color-text-tertiary)",marginTop:3}}>AIO Tests → My Settings → API Token → Manage API Token. Kept in this session only.</div></div>
         {f.jiraUrl&&f.jiraEmail&&f.jiraToken&&<div>
           <button onClick={testJira} disabled={testing} style={{padding:"6px 16px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:13,color:"var(--color-text-secondary)"}}>
             {testing?"Testing…":"Test Connection"}
