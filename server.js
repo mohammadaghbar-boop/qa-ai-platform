@@ -131,11 +131,12 @@ function decryptField(stored) {
   d.setAuthTag(Buffer.from(tagH, 'hex'));
   return d.update(Buffer.from(dataH, 'hex')) + d.final('utf8');
 }
-function encryptMemberCredentials(jiraUrl, jiraEmail, jiraToken) {
+function encryptMemberCredentials(jiraUrl, jiraEmail, jiraToken, aioToken) {
   return {
     jiraUrl:   jiraUrl   ? encryptField(jiraUrl)   : '',
     jiraEmail: jiraEmail ? encryptField(jiraEmail) : '',
-    jiraToken: jiraToken ? encryptField(jiraToken) : ''
+    jiraToken: jiraToken ? encryptField(jiraToken) : '',
+    aioToken:  aioToken  ? encryptField(aioToken)  : ''
   };
 }
 function decryptMemberCredentials(member) {
@@ -145,7 +146,8 @@ function decryptMemberCredentials(member) {
     return {
       jiraUrl:   c.jiraUrl   ? decryptField(c.jiraUrl)   : '',
       jiraEmail: c.jiraEmail ? decryptField(c.jiraEmail) : '',
-      jiraToken: c.jiraToken ? decryptField(c.jiraToken) : ''
+      jiraToken: c.jiraToken ? decryptField(c.jiraToken) : '',
+      aioToken:  c.aioToken  ? decryptField(c.aioToken)  : ''
     };
   } catch { return null; }
 }
@@ -406,6 +408,48 @@ const AIO_PRIORITY_MAP = {
   medium: 'Medium', med: 'Medium', normal: 'Medium', low: 'Low', lowest: 'Lowest'
 };
 
+// ── Pure helpers (exported for unit tests) ────────────────────────────────
+// Normalize an inbound priority string to an AIO canonical name (Medium by default).
+function aioResolvePriority(raw) {
+  return AIO_PRIORITY_MAP[String(raw || '').trim().toLowerCase()] || 'Medium';
+}
+// Dedup key for a case title — case-insensitive, whitespace-collapsed.
+function aioTitleKey(title) {
+  return String(title || '').trim().replace(/\s+/g, ' ').toLowerCase();
+}
+// Build the AIO step array from the platform's per-step arrays. Aligns lengths
+// (missing entries → ''), preserves order, and keeps the tail expected result if
+// per-step results are absent. Returns a single placeholder step for step-less cases.
+function aioBuildSteps(c) {
+  const steps = Array.isArray(c && c.steps) ? c.steps : [];
+  const stepResults = Array.isArray(c && c.stepResults) ? c.stepResults : [];
+  const stepData = Array.isArray(c && c.stepData) ? c.stepData : [];
+  if (!steps.length) {
+    return [{ stepType: 'TEXT', step: '', data: String((c && c.testData) || ''), expectedResult: String((c && c.expected) || '') }];
+  }
+  return steps.map((s, i) => ({
+    stepType: 'TEXT',
+    step: String(s || ''),
+    data: String(stepData[i] || ''),
+    expectedResult: String(stepResults[i] || (i === steps.length - 1 ? ((c && c.expected) || '') : ''))
+  }));
+}
+// Build the outbound AIO create-case payload. `priorityIdByName` is the
+// project-config priority-name→ID map; falls back to {name} when unknown.
+function aioBuildCasePayload(c, priorityIdByName, folderId, requirementId) {
+  const prioName = aioResolvePriority(c && c.priority);
+  const pid = priorityIdByName ? priorityIdByName[prioName.toLowerCase()] : undefined;
+  const payload = {
+    title: String((c && c.title) || '').trim(),
+    precondition: (c && c.preconditions) || null,
+    steps: aioBuildSteps(c),
+    priority: (pid != null) ? { ID: pid } : { name: prioName }
+  };
+  if (folderId != null) { payload.folder = { ID: folderId }; payload.folderID = folderId; }
+  if (requirementId != null) payload.jiraRequirementIDs = [requirementId];
+  return payload;
+}
+
 // Thin AIO REST call. Returns {status, json, raw}. Never throws on HTTP errors (caller inspects status).
 function aioFetch(token, method, projectKey, subPath, bodyObj) {
   return new Promise((resolve, reject) => {
@@ -503,7 +547,7 @@ async function aioImport(session, opts) {
       if (!Array.isArray(items) || items.length === 0) break;
       for (const c of items) {
         const f = c.folder || {}; const fid = (f && typeof f === 'object') ? f.ID : null;
-        if (fid === folderId) { const t = String(c.title || '').trim().toLowerCase(); if (t) existing.add(t); }
+        if (fid === folderId) { const t = aioTitleKey(c.title); if (t) existing.add(t); }
       }
       if (items.length < pageSize) break;
       startAt += pageSize;
@@ -515,29 +559,9 @@ async function aioImport(session, opts) {
   for (const c of cases) {
     const title = String(c.title || '').trim();
     if (!title) continue;
-    if (existing.has(title.toLowerCase())) { summary.skipped++; continue; }
+    if (existing.has(aioTitleKey(title))) { summary.skipped++; continue; }
 
-    const steps = Array.isArray(c.steps) ? c.steps : [];
-    const stepResults = Array.isArray(c.stepResults) ? c.stepResults : [];
-    const stepData = Array.isArray(c.stepData) ? c.stepData : [];
-    let stepObjs;
-    if (steps.length) {
-      stepObjs = steps.map((s, i) => ({
-        stepType: 'TEXT',
-        step: String(s || ''),
-        data: String(stepData[i] || ''),
-        expectedResult: String(stepResults[i] || (i === steps.length - 1 ? (c.expected || '') : ''))
-      }));
-    } else {
-      stepObjs = [{ stepType: 'TEXT', step: '', data: String(c.testData || ''), expectedResult: String(c.expected || '') }];
-    }
-
-    const prioName = AIO_PRIORITY_MAP[String(c.priority || '').trim().toLowerCase()] || 'Medium';
-    const payload = { title, precondition: c.preconditions || null, steps: stepObjs };
-    const pid = priorities[prioName.toLowerCase()];
-    payload.priority = (pid != null) ? { ID: pid } : { name: prioName };
-    if (folderId != null) { payload.folder = { ID: folderId }; payload.folderID = folderId; }
-    if (requirementId != null) payload.jiraRequirementIDs = [requirementId];
+    const payload = aioBuildCasePayload(c, priorities, folderId, requirementId);
     if (scriptType) payload.scriptType = scriptType;
     if (caseType) payload.caseType = caseType;
 
@@ -982,7 +1006,7 @@ const server = http.createServer((req, res) => {
         console.log('[Member] Login:', member.name);
         // Always create an API session — Jira creds used if saved, otherwise session still works for AI via CLI
         const creds = decryptMemberCredentials(member);
-        const sessionToken = createSession(member.id, creds?.jiraUrl||'', creds?.jiraEmail||'', creds?.jiraToken||'');
+        const sessionToken = createSession(member.id, creds?.jiraUrl||'', creds?.jiraEmail||'', creds?.jiraToken||'', creds?.aioToken||'');
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ token, member: { id: member.id, name: member.name, email: member.email, role: member.role }, sessionToken }));
       } catch (e) {
@@ -1042,12 +1066,15 @@ const server = http.createServer((req, res) => {
           res.writeHead(403, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'Forbidden' })); return;
         }
-        const { jiraUrl, jiraEmail, jiraToken } = JSON.parse(body);
+        const { jiraUrl, jiraEmail, jiraToken, aioToken } = JSON.parse(body);
         const member = (serverDB.members || []).find(m => m.id === memberId);
         if (!member) { res.writeHead(404, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Member not found' })); return; }
-        member.credentials = encryptMemberCredentials(jiraUrl || '', jiraEmail || '', jiraToken || '');
+        // Preserve any existing aioToken if caller omitted it (backward-compatible save).
+        const existing = decryptMemberCredentials(member) || {};
+        const nextAio = (aioToken != null) ? aioToken : (existing.aioToken || '');
+        member.credentials = encryptMemberCredentials(jiraUrl || '', jiraEmail || '', jiraToken || '', nextAio);
         saveServerDB(serverDB);
-        const sessionToken = createSession(memberId, jiraUrl, jiraEmail, jiraToken);
+        const sessionToken = createSession(memberId, jiraUrl, jiraEmail, jiraToken, nextAio);
         console.log('[Member] Credentials saved:', member.name);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ ok: true, sessionToken }));
@@ -1073,7 +1100,7 @@ const server = http.createServer((req, res) => {
           res.writeHead(400, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'No credentials configured' })); return;
         }
-        const sessionToken = createSession(ms.memberId, creds.jiraUrl, creds.jiraEmail, creds.jiraToken);
+        const sessionToken = createSession(ms.memberId, creds.jiraUrl, creds.jiraEmail, creds.jiraToken, creds.aioToken);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ sessionToken }));
       } catch (e) {
@@ -1381,7 +1408,8 @@ const server = http.createServer((req, res) => {
 });
 
 
-server.listen(PORT, () => {
+// Skip startup when this file is loaded via require() (e.g. from tests).
+if (require.main === module) server.listen(PORT, () => {
   console.log('');
   console.log('  QA AI Platform is running');
   console.log('  App  → http://localhost:' + PORT + '/');
@@ -1393,3 +1421,8 @@ server.listen(PORT, () => {
   console.log('  Press Ctrl+C to stop.');
   console.log('');
 });
+
+// Exported for unit tests. Not part of the runtime HTTP surface.
+if (typeof module !== 'undefined') {
+  module.exports = { aioResolvePriority, aioTitleKey, aioBuildSteps, aioBuildCasePayload };
+}
