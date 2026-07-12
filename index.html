@@ -4573,10 +4573,10 @@ function LoginPage({onLogin}) {
   };
   const login=async()=>{
     if(mode==="admin"){
-      if(email!=="admin"){setErr("Username must be 'admin'");return;}
+      if(!email.trim()){setErr("Username is required.");return;}
       setBusy(true);
       try{
-        const r=await fetch(API_BASE+"/api/admin/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({password:pass})});
+        const r=await fetch(API_BASE+"/api/admin/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({username:email,password:pass})});
         const d=await r.json();
         if(!r.ok){setErr(d.error||"Invalid password");setBusy(false);return;}
         sessionStorage.setItem(ADMIN_TOKEN_KEY,d.token);
