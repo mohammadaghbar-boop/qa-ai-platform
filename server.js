@@ -931,7 +931,7 @@ function runPlaywrightTests(files, onLine) {
 }
 
 /* ── Performance Test (k6) ─────────────────────────────────────────────── */
-function generateK6Script({ testType, method, apiUrl, vus, duration, ramp, p95Threshold, authType, token, basicUsername, basicPassword, requestBody, expectedStatus, csvUsers, variables, customHeaders }) {
+function generateK6Script({ testType, mode, method, apiUrl, steps, vus, duration, ramp, p95Threshold, authType, token, basicUsername, basicPassword, requestBody, expectedStatus, csvUsers, variables, customHeaders }) {
   const m    = ['get','post','put','patch','delete'].includes((method||'').toLowerCase()) ? (method||'GET').toLowerCase() : 'get';
   const vusN = parseInt(vus) || 100;
   const p95N = parseInt(p95Threshold) || 2000;
@@ -1011,6 +1011,117 @@ function generateK6Script({ testType, method, apiUrl, vus, duration, ramp, p95Th
     stages = `[{duration:'${safeRamp}',target:${vusN}},{duration:'${safeDur}',target:${vusN}},{duration:'${safeRamp}',target:0}]`;
   }
 
+  const hasCsvCreds = authType === 'csv' && Array.isArray(csvUsers) && csvUsers.length > 0;
+  const credsDecl = hasCsvCreds
+    ? `const __creds = ${JSON.stringify(csvUsers.map(u => Buffer.from((u.username || '') + ':' + (u.password || '')).toString('base64')))};\n`
+    : '';
+
+  // Per-VU cap on how many failure details get logged — the aggregate error
+  // rate/count already comes from k6's own http_req_failed metric regardless;
+  // this just bounds how much QA_FAIL:: detail runK6() has to parse out of
+  // stdout when a broken endpoint fails on every single request.
+  const FAIL_LOG_CAP = 50;
+  const failLogDecl = `let __failLogCount = 0;\nconst __FAIL_LOG_CAP = ${FAIL_LOG_CAP};`;
+  // Emitted right after each check() — reports the actual status/error k6 saw
+  // for that request so the UI can show *why* a check failed, not just that
+  // it did. QA_FAIL:: is a distinctive prefix runK6() greps out of stdout.
+  const failLogStmt = (resVar, exp, stepLabel) =>
+    `if (${resVar}.status !== ${exp} && __failLogCount < __FAIL_LOG_CAP) { __failLogCount++; console.log('QA_FAIL::' + JSON.stringify({step: ${stepLabel != null ? JSON.stringify(stepLabel) : 'null'}, expectedStatus: ${exp}, actualStatus: ${resVar}.status, statusText: ${resVar}.status_text || '', error: ${resVar}.error || ''})); }`;
+
+  // Flow mode: a named sequence of API calls executed in order within each VU
+  // iteration (k6 runs the default function's statements sequentially per
+  // iteration, so this is just N requests back-to-back — no extra library
+  // support needed). A step can optionally extract a field from its JSON
+  // response into a variable that later steps reference via {{name}}, e.g.
+  // a login step extracting a token used by every step after it.
+  const FLOW_STEP_CAP = 20;
+  const flowStepsValid = Array.isArray(steps)
+    ? steps.filter(s => s && String(s.url || '').trim()).slice(0, FLOW_STEP_CAP)
+    : [];
+  const isFlow = mode === 'flow' && flowStepsValid.length > 0;
+
+  if (isFlow) {
+    const EXTRACT_PATH_RE = /^[A-Za-z_$][A-Za-z0-9_$]*(\.[A-Za-z_$][A-Za-z0-9_$]*)*$/;
+    const seenExtract = new Set();
+    const extractNames = [];
+    flowStepsValid.forEach(s => {
+      const n = s.extractVar;
+      if (n && VAR_NAME_RE.test(n) && !RESERVED_VAR_NAMES.has(n) && !seenExtract.has(n)) {
+        seenExtract.add(n);
+        extractNames.push(n);
+      }
+    });
+    const knownNames = new Set([...safeVars.map(v => v.name), ...extractNames]);
+    // Same escaping rules as toScriptExpr above, but resolves against
+    // knownNames (global variables + every step's extracted variable) since
+    // a flow step's URL/body/headers may reference either.
+    const toFlowExpr = (str) => {
+      const s = String(str || '');
+      if (!knownNames.size) return JSON.stringify(s);
+      const escaped = s.replace(/\\/g, '\\\\').replace(/`/g, '\\`').replace(/\$\{/g, '\\${');
+      return '`' + escaped.replace(placeholderRe, (_, n) => knownNames.has(n) ? '${' + n + '}' : '') + '`';
+    };
+    const extractDecls = extractNames.map(n => `let ${n} = '';`).join('\n');
+
+    const stepsCode = flowStepsValid.map((s, i) => {
+      const sm = ['get', 'post', 'put', 'patch', 'delete'].includes((s.method || '').toLowerCase()) ? s.method.toLowerCase() : 'get';
+      const sExp = parseInt(s.expectedStatus) || 200;
+      const stepUrlRaw = String(s.url || '');
+      const stepUrlResolved = stepUrlRaw.replace(placeholderRe, (_, n) => varDefaults[n] ?? '');
+      const stepUrlTemplate = isValidHttpUrl(stepUrlResolved) ? stepUrlRaw : 'http://localhost';
+      const urlExprN = toFlowExpr(stepUrlTemplate);
+
+      const stepHeaderEntries = [
+        { name: 'Content-Type', expr: JSON.stringify('application/json') },
+        { name: 'Accept', expr: JSON.stringify('application/json') },
+      ];
+      if (authType === 'bearer' && token)
+        stepHeaderEntries.push({ name: 'Authorization', expr: JSON.stringify('Bearer ' + token) });
+      if (authType === 'basic' && basicUsername)
+        stepHeaderEntries.push({ name: 'Authorization', expr: JSON.stringify('Basic ' + Buffer.from(basicUsername + ':' + (basicPassword || '')).toString('base64')) });
+      safeHeaders.forEach(h => stepHeaderEntries.push({ name: h.name, expr: toFlowExpr(h.value) }));
+      const stepOwnHeaders = Array.isArray(s.customHeaders)
+        ? s.customHeaders.filter(h => h && HEADER_NAME_RE.test(h.name)).slice(0, 20)
+        : [];
+      stepOwnHeaders.forEach(h => stepHeaderEntries.push({ name: h.name, expr: toFlowExpr(h.value) }));
+      const stepHeadersExpr = '{' + stepHeaderEntries.map(h => JSON.stringify(h.name) + ':' + h.expr).join(',') + '}';
+
+      const stepBodyArg = ['post', 'put', 'patch'].includes(sm) && s.requestBody
+        ? `, ${toFlowExpr(s.requestBody)}`
+        : '';
+
+      const label = (s.name && String(s.name).trim()) || `Step ${i + 1} ${sm.toUpperCase()}`;
+      const headersVar = `headers${i}`;
+      const resVar = `res${i}`;
+      let code = `  group(${JSON.stringify(label)}, function () {\n`;
+      code += `    const ${headersVar} = ${stepHeadersExpr};\n`;
+      if (hasCsvCreds) code += `    ${headersVar}['Authorization'] = 'Basic ' + __creds[(__VU - 1) % __creds.length];\n`;
+      code += `    const ${resVar} = http.${sm}(${urlExprN}${stepBodyArg}, { headers: ${headersVar} });\n`;
+      code += `    check(${resVar}, { ${JSON.stringify('status ' + sExp)}: r => r.status === ${sExp} });\n`;
+      code += `    ${failLogStmt(resVar, sExp, label)}\n`;
+      if (s.extractVar && VAR_NAME_RE.test(s.extractVar) && !RESERVED_VAR_NAMES.has(s.extractVar) && s.extractPath && EXTRACT_PATH_RE.test(s.extractPath)) {
+        code += `    try { ${s.extractVar} = __getPath(${resVar}.json(), ${JSON.stringify(s.extractPath)}); } catch (e) {}\n`;
+      }
+      code += `  });`;
+      return code;
+    }).join('\n');
+
+    return `import http from 'k6/http';
+import { check, sleep, group } from 'k6';
+function __getPath(obj, path) { return path.split('.').reduce((o, k) => (o == null ? undefined : o[k]), obj); }
+${failLogDecl}
+${credsDecl}${varDecls}
+${extractDecls}
+export let options = {
+  stages: ${stages},
+  thresholds: { 'http_req_duration': ['p(95)<${p95N}'], 'http_req_failed': ['rate<0.05'] }
+};
+export default function () {
+${stepsCode}
+  sleep(1);
+}`;
+  }
+
   if (authType === 'csv' && Array.isArray(csvUsers) && csvUsers.length > 0) {
     const encodedCreds = csvUsers.map(u =>
       Buffer.from((u.username || '') + ':' + (u.password || '')).toString('base64')
@@ -1018,6 +1129,7 @@ function generateK6Script({ testType, method, apiUrl, vus, duration, ramp, p95Th
     return `import http from 'k6/http';
 import { check, sleep } from 'k6';
 const __creds = ${JSON.stringify(encodedCreds)};
+${failLogDecl}
 ${varDecls}
 export let options = {
   stages: ${stages},
@@ -1028,12 +1140,14 @@ export default function () {
   headers['Authorization'] = 'Basic ' + __creds[(__VU - 1) % __creds.length];
   const res = http.${m}(${urlExpr}${bodyArg}, { headers });
   check(res, { 'status ${exp}': r => r.status === ${exp} });
+  ${failLogStmt('res', exp, null)}
   sleep(1);
 }`;
   }
 
   return `import http from 'k6/http';
 import { check, sleep } from 'k6';
+${failLogDecl}
 ${varDecls}
 export let options = {
   stages: ${stages},
@@ -1042,8 +1156,28 @@ export let options = {
 export default function () {
   const res = http.${m}(${urlExpr}${bodyArg}, { headers: ${headersExpr} });
   check(res, { 'status ${exp}': r => r.status === ${exp} });
+  ${failLogStmt('res', exp, null)}
   sleep(1);
 }`;
+}
+
+// Parses the QA_FAIL:: lines the generated k6 script logs on every failed
+// check (see failLogStmt in generateK6Script) and groups identical failures
+// (same step + expected/actual status + error text) into counted buckets,
+// so "500 of these timed out" shows as one row instead of 500.
+function parseK6Failures(stdout) {
+  const groups = new Map();
+  for (const line of stdout.split('\n')) {
+    const idx = line.indexOf('QA_FAIL::');
+    if (idx === -1) continue;
+    let item;
+    try { item = JSON.parse(line.slice(idx + 'QA_FAIL::'.length)); } catch { continue; }
+    const key = [item.step || '', item.expectedStatus, item.actualStatus, item.error || ''].join('|');
+    const existing = groups.get(key);
+    if (existing) existing.count++;
+    else groups.set(key, { step: item.step || null, expectedStatus: item.expectedStatus, actualStatus: item.actualStatus, statusText: item.statusText || '', error: item.error || '', count: 1 });
+  }
+  return [...groups.values()].sort((a, b) => b.count - a.count).slice(0, 20);
 }
 
 function runK6(scriptPath) {
@@ -1051,7 +1185,9 @@ function runK6(scriptPath) {
     const summaryPath = scriptPath + '.summary.json';
     const proc = spawn('k6', ['run', '--summary-export', summaryPath, '--new-machine-readable-summary', '--no-color', scriptPath], { shell: true });
     let stderr = '';
+    let stdout = '';
     proc.stderr.on('data', d => stderr += d.toString());
+    proc.stdout.on('data', d => stdout += d.toString());
     proc.on('close', code => {
       try {
         if (!fs.existsSync(summaryPath))
@@ -1070,6 +1206,8 @@ function runK6(scriptPath) {
         const dur  = findMetric('http_req_duration');
         const req  = findMetric('http_reqs');
         const fail = findMetric('http_req_failed');
+        const failures = parseK6Failures(stdout);
+        if (failures.length) console.log('[Perf] failure groups:', JSON.stringify(failures));
         resolve({
           passed: code === 0,
           metrics: {
@@ -1083,7 +1221,8 @@ function runK6(scriptPath) {
             p95:           parseFloat((dur['p95'] || dur['p(95)'] || 0).toFixed(2)),
             p99:           parseFloat((dur['p99'] || dur['p(99)'] || 0).toFixed(2)),
             errorRate:     parseFloat(((fail.rate || 0) * 100).toFixed(2))
-          }
+          },
+          failures
         });
       } catch (e) { reject(new Error(e.message)); }
     });
@@ -1623,7 +1762,7 @@ const server = http.createServer((req, res) => {
         .slice(0, 50);
       const totalRuns = results.length;
       const passCount = results.filter(r => r.perfResult?.passed || r.passed).length;
-      const p95s = results.map(r => r.perfResult?.p95 || r.p95).filter(v => typeof v === 'number');
+      const p95s = results.map(r => r.metrics?.p95 ?? r.perfResult?.p95 ?? r.p95).filter(v => typeof v === 'number');
       const avgP95 = p95s.length ? Math.round(p95s.reduce((a, b) => a + b, 0) / p95s.length) : null;
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ results, stats: { totalRuns, passRate: totalRuns ? Math.round(passCount / totalRuns * 100) : 0, avgP95 } }));
