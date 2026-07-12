@@ -124,18 +124,26 @@ test('normalizeSteps: does not lose other case fields', () => {
 });
 
 // ── AIO export mapping ─────────────────────────────────────────────────
-test('aioType: maps platform layer → AIO Type value', () => {
-  assert.equal(QaLib.aioType('API'),        'API');
-  assert.equal(QaLib.aioType('Security'),   'Security');
-  assert.equal(QaLib.aioType('Functional'), 'Integration');
-  assert.equal(QaLib.aioType('UI'),         'Integration');
-  assert.equal(QaLib.aioType('Database'),   'Integration');
+test('aioType: nature takes priority over layer', () => {
+  assert.equal(QaLib.aioType('Functional', 'regression'), 'Regression');
+  assert.equal(QaLib.aioType('API',        'negative'),   'Negative');
+  assert.equal(QaLib.aioType('Database',   'boundary'),   'Negative');
+  assert.equal(QaLib.aioType('Functional', 'happy'),      'Functional');
+  assert.equal(QaLib.aioType('Functional', 'edge'),       'Functional');
 });
 
-test('aioType: unknown / missing → Integration', () => {
-  assert.equal(QaLib.aioType(''),          'Integration');
-  assert.equal(QaLib.aioType(null),        'Integration');
-  assert.equal(QaLib.aioType('WhoKnows'),  'Integration');
+test('aioType: layer refines when nature is neutral', () => {
+  assert.equal(QaLib.aioType('Security', 'happy'),     'Security');
+  assert.equal(QaLib.aioType('UI',       'edge'),      'UI');
+  assert.equal(QaLib.aioType('API',      'happy'),     'Functional');
+  assert.equal(QaLib.aioType('Database', 'happy'),     'Functional');
+  assert.equal(QaLib.aioType('Functional','happy'),    'Functional');
+});
+
+test('aioType: unknown / missing → Functional', () => {
+  assert.equal(QaLib.aioType('',        ''),     'Functional');
+  assert.equal(QaLib.aioType(null,      null),   'Functional');
+  assert.equal(QaLib.aioType('Unknown', 'edge'), 'Functional');
 });
 
 test('aioStatus: approved → Ready for Testing; anything else → Draft', () => {

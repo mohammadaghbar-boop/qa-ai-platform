@@ -66,13 +66,17 @@
   }
 
   // ── AIO Tests export mapping ──────────────────────────────────────────
-  // Map platform layer → AIO Tests "Type" field value. AIO's built-in type
-  // vocabulary has API and Security as first-class values; every other
-  // functional layer is imported as "Integration".
-  function aioType(layer) {
-    if (layer === 'API') return 'API';
-    if (layer === 'Security') return 'Security';
-    return 'Integration';
+  // Map platform (layer, nature) → project-standard AIO "Type" field value.
+  // Project standard: Functional | Negative | UI | Security | Performance | Regression
+  // Nature takes priority; layer refines when nature is neutral (happy/edge).
+  function aioType(layer, nature) {
+    var n = String(nature == null ? '' : nature).toLowerCase();
+    var l = String(layer  == null ? '' : layer);
+    if (n === 'regression')                  return 'Regression';
+    if (n === 'negative' || n === 'boundary') return 'Negative';
+    if (l === 'Security')                    return 'Security';
+    if (l === 'UI')                          return 'UI';
+    return 'Functional';
   }
 
   // Map platform approval status → AIO status label.
