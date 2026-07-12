@@ -2519,7 +2519,7 @@ Return ONLY valid JSON (no markdown wrapper, no extra text):
         if (!parsed.name) { res.writeHead(400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'name is required' })); return; }
         if (!Array.isArray(serverDB.projects)) serverDB.projects = [];
         const project = {
-          id: crypto.randomBytes(16).toString('hex'),
+          id: parsed.id || crypto.randomBytes(16).toString('hex'),
           name: parsed.name,
           description: parsed.description || '',
           language: (['ar','en','mixed'].includes(parsed.language)) ? parsed.language : 'ar',

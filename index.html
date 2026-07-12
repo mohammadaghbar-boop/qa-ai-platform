@@ -1028,11 +1028,29 @@ function ProjectsPage() {
   const [editing,setEditing]=useState(null);
   const [testResult,setTestResult]=useState(null); const [testing,setTesting]=useState(false);
   const [saving,setSaving]=useState(false);
+  const adminTok=()=>sessionStorage.getItem(ADMIN_TOKEN_KEY)||"";
   // GAP-02: load projects from server on mount and sync to global DB
   useEffect(()=>{
-    fetch(API_BASE+"/api/projects",{headers:{"X-Admin-Token":adminToken()}})
+    fetch(API_BASE+"/api/projects",{headers:{"X-Admin-Token":adminTok()}})
       .then(r=>r.ok?r.json():null)
-      .then(d=>{if(d){DB.projects=d;setList([...d]);}})
+      .then(async d=>{
+        if(!d) return;
+        if(d.length===0&&DB.projects.length>0){
+          // Server has no projects but localStorage does — auto-migrate (preserves IDs via parsed.id in server)
+          for(const p of DB.projects){
+            try{await fetch(API_BASE+"/api/projects",{method:"POST",headers:{"Content-Type":"application/json","X-Admin-Token":adminTok()},body:JSON.stringify(p)});}catch{}
+          }
+          // Migrate assignments grouped by member
+          const memberIds=[...new Set(DB.assignments.map(a=>a.memberId))];
+          for(const mId of memberIds){
+            const pids=DB.assignments.filter(a=>a.memberId===mId).map(a=>a.projectId);
+            try{await fetch(API_BASE+"/api/assignments/"+mId,{method:"PUT",headers:{"Content-Type":"application/json","X-Admin-Token":adminTok()},body:JSON.stringify({projectIds:pids})});}catch{}
+          }
+          const r2=await fetch(API_BASE+"/api/projects",{headers:{"X-Admin-Token":adminTok()}});
+          if(r2.ok){const migrated=await r2.json();DB.projects=migrated;setList([...migrated]);return;}
+        }
+        DB.projects=d;setList([...d]);
+      })
       .catch(()=>{});
   },[]);
   const save=async()=>{
@@ -1041,12 +1059,12 @@ function ProjectsPage() {
     try{
       let r,d;
       if(editing){
-        r=await fetch(API_BASE+"/api/projects/"+editing,{method:"PUT",headers:{"Content-Type":"application/json","X-Admin-Token":adminToken()},body:JSON.stringify(f)});
+        r=await fetch(API_BASE+"/api/projects/"+editing,{method:"PUT",headers:{"Content-Type":"application/json","X-Admin-Token":adminTok()},body:JSON.stringify(f)});
         d=await r.json();
         if(r.ok){ Object.assign(DB.projects.find(x=>x.id===editing)||{},d); setEditing(null); }
         else{ alert(d.error||"Save failed"); }
       }else{
-        r=await fetch(API_BASE+"/api/projects",{method:"POST",headers:{"Content-Type":"application/json","X-Admin-Token":adminToken()},body:JSON.stringify(f)});
+        r=await fetch(API_BASE+"/api/projects",{method:"POST",headers:{"Content-Type":"application/json","X-Admin-Token":adminTok()},body:JSON.stringify(f)});
         d=await r.json();
         if(r.ok){ DB.projects.push(d); }
         else{ alert(d.error||"Save failed"); }
@@ -1070,7 +1088,7 @@ function ProjectsPage() {
   const del=async id=>{
     if(!window.confirm("Delete this project? This will also remove all its member assignments.")) return;
     try{
-      const r=await fetch(API_BASE+"/api/projects/"+id,{method:"DELETE",headers:{"X-Admin-Token":adminToken()}});
+      const r=await fetch(API_BASE+"/api/projects/"+id,{method:"DELETE",headers:{"X-Admin-Token":adminTok()}});
       if(r.ok){ DB.projects=DB.projects.filter(p=>p.id!==id); DB.assignments=DB.assignments.filter(a=>a.projectId!==id); saveDB(); setList([...DB.projects]); }
       else{ const d=await r.json(); alert(d.error||"Delete failed"); }
     }catch(e){ alert("Cannot reach server: "+e.message); }
@@ -1126,6 +1144,7 @@ function ProjectsPage() {
 }
 
 function AssignmentsPage() {
+  const adminTok=()=>sessionStorage.getItem(ADMIN_TOKEN_KEY)||"";
   const [list,setList]=useState([...DB.assignments]);
   const [mId,setMId]=useState("");
   const [selProjs,setSelProjs]=useState([]);
@@ -1135,13 +1154,13 @@ function AssignmentsPage() {
   const toggleProj=(id,arr,set)=>set(arr.includes(id)?arr.filter(x=>x!==id):[...arr,id]);
   // GAP-02: load assignments from server on mount
   useEffect(()=>{
-    fetch(API_BASE+"/api/assignments",{headers:{"X-Admin-Token":adminToken()}})
+    fetch(API_BASE+"/api/assignments",{headers:{"X-Admin-Token":adminTok()}})
       .then(r=>r.ok?r.json():null)
       .then(d=>{if(d){DB.assignments=d;setList([...d]);}})
       .catch(()=>{});
   },[]);
   const putAssignments=async(memberId,projectIds)=>{
-    const r=await fetch(API_BASE+"/api/assignments/"+memberId,{method:"PUT",headers:{"Content-Type":"application/json","X-Admin-Token":adminToken()},body:JSON.stringify({projectIds})});
+    const r=await fetch(API_BASE+"/api/assignments/"+memberId,{method:"PUT",headers:{"Content-Type":"application/json","X-Admin-Token":adminTok()},body:JSON.stringify({projectIds})});
     if(!r.ok){const d=await r.json();throw new Error(d.error||"Failed to save assignments");}
   };
   const assign=async()=>{
@@ -1560,14 +1579,19 @@ function Workspace({member,refreshSaved,restoreTarget,clearRestore,onActiveSid,o
       .then(r=>r.ok?r.json():null)
       .then(d=>{
         if(d&&Array.isArray(d)){
-          DB.projects=d;
-          DB.assignments=d.map(p=>({memberId:member.id,projectId:p.id}));
+          // Only replace local data if server has actual projects assigned
+          if(d.length>0){
+            DB.projects=d;
+            DB.assignments=d.map(p=>({memberId:member.id,projectId:p.id}));
+          }
           setServerProjects(d);
         }
       })
       .catch(()=>{});
   },[member.id]);
-  const memberProjects=serverProjects!==null?serverProjects:DB.assignments.filter(x=>x.memberId===member.id).map(a=>DB.projects.find(x=>x.id===a.projectId)).filter(Boolean);
+  const _localProjects=DB.assignments.filter(x=>x.memberId===member.id).map(a=>DB.projects.find(x=>x.id===a.projectId)).filter(Boolean);
+  // Use server projects if loaded and non-empty; otherwise fall back to localStorage (preserves pre-migration data)
+  const memberProjects=(serverProjects&&serverProjects.length>0)?serverProjects:_localProjects;
   const [selectedProjId,setSelectedProjId]=React.useState(memberProjects[0]?.id||"");
   const proj=memberProjects.find(x=>x.id===selectedProjId)||memberProjects[0]||null;
 const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); const [sdata,setSdata]=useState(null);
@@ -1593,6 +1617,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
   const [selGaps,setSelGaps]=useState([]);
   const [scriptCache,setScriptCache]=useState({});
   const [showFullStory,setShowFullStory]=useState(false);
+  const [storyInputMode,setStoryInputMode]=useState("jira"); const [pasteSummary,setPasteSummary]=useState(""); const [pasteText,setPasteText]=useState(""); const [pasteErr,setPasteErr]=useState("");
   const [editingBugId,setEditingBugId]=useState(null); const [editBugForm,setEditBugForm]=useState({});
   const [toast,setToast]=useState(null);
   const showToast=(msg)=>{setToast(msg);setTimeout(()=>setToast(null),3000);};
@@ -1928,6 +1953,19 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
       setGapData(null); setCases([]); setCtypes([]); setCasesByType({}); setNeedsClarification([]); setCoverageSummary(""); setResult(null); setSessionBugs([]); setCoverageText(""); setAppUrl("");
       setPhase("mode"); setLoading(false);
     }
+  };
+
+  const usePastedStory=()=>{
+    if(!pasteText.trim()){setPasteErr("Paste the story description / acceptance criteria first.");return;}
+    if(!sid.trim()){setPasteErr("Enter a Story ID to identify this session (it does not need to exist in Jira).");return;}
+    setPasteErr("");
+    if(sdata?.key && sdata.key!==sid){
+      saveStoryToCache(sdata.key,{phase,sdata,platform,ctypes,gapData,cases,needsClarification,scripts,result,sessionBugs,coverageText,appUrl});
+    }
+    const sd={key:sid,summary:pasteSummary.trim()||"Story "+sid,description:pasteText.trim(),labels:[],type:"Story",status:"",assignee:"—",priority:"Medium",pasted:true};
+    setSdata(sd); setPlatform("web");
+    setGapData(null); setCases([]); setCtypes([]); setCasesByType({}); setNeedsClarification([]); setCoverageSummary(""); setResult(null); setSessionBugs([]); setCoverageText(""); setAppUrl("");
+    setPhase("mode");
   };
 
   const doGap=async()=>{
@@ -2538,9 +2576,9 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
     <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",marginBottom:16}}>
       <div><div style={{fontSize:20,fontWeight:500,marginBottom:4}}>QA Workspace</div>
         <div style={{fontSize:13,color:"var(--color-text-secondary)",display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
-          <span>Project: <b>{proj.name}</b></span><Tag c="blue">{proj.jiraProjKey}</Tag>
+          {proj&&<><span>Project: <b>{proj.name}</b></span><Tag c="blue">{proj.jiraProjKey}</Tag></>}
           {testKind==="functional"&&phase!=="input"&&<Tag c="blue">web</Tag>}
-          {testKind==="functional"&&sdata&&<Tag c={sdata.sim?"":"green"}>{sdata.sim?"AI simulation":"Jira ✓"}</Tag>}
+          {testKind==="functional"&&sdata&&<Tag c={sdata.sim?"":sdata.pasted?"blue":"green"}>{sdata.sim?"AI simulation":sdata.pasted?"Pasted story":"Jira ✓"}</Tag>}
           {testKind==="non-functional"&&(phase==="perfTest"||phase==="perfResult")&&<Tag c="amber">Performance</Tag>}
           {testKind==="ui-design"&&<Tag c="blue">UI Design Test</Tag>}
           {syncStatus === 'syncing' && <span style={{fontSize:11,color:'#94A3B8'}}>Syncing...</span>}
@@ -2567,6 +2605,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
 
         {!loading&&phase==="project"&&<div>
           <H2 style={{marginBottom:16}}>Choose a project to start</H2>
+          {memberProjects.length===0&&<div style={{...card,color:"var(--color-text-secondary)",fontSize:14,padding:24}}>{serverProjects===null?"Loading assigned projects…":"No projects have been assigned to you yet. Contact your QA Lead."}</div>}
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))",gap:16}}>
             {memberProjects.map(p=>{
               const projStories=DB.savedStories.filter(s=>storyMatchesProject(s,p.jiraProjKey,p.id));
@@ -2611,13 +2650,29 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
             <div style={{fontSize:12,fontWeight:500,color:"var(--color-text-secondary)",marginBottom:8}}>Recent stories</div>
             <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>{hist.slice().reverse().slice(0,5).map((h,i)=><button key={i} onClick={()=>setSid(h.sid)} style={{...ghostBtn,padding:"4px 10px",fontSize:12}}>{h.sid} {h.passed}P/{h.failed}F</button>)}</div>
           </div>}
-          <div style={card}><H2>Enter Jira story ID</H2>
-            <div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:12}}>{jiraConfigured?<Tag c="green">✓ Jira configured</Tag>:<Tag c="amber">No Jira — AI simulation</Tag>}</div>
-            <div style={{display:"flex",gap:12,alignItems:"flex-end"}}>
-              <div style={{flex:1}}><Lbl>Story ID</Lbl><input style={inp} value={sid} onChange={e=>{setSid(e.target.value);setFetchError("");}} placeholder={proj.jiraProjKey+"-123"} onKeyDown={e=>e.key==="Enter"&&sid&&doFetch()}/></div>
-              <Btn v="primary" onClick={()=>sid&&doFetch()}>Fetch story →</Btn>
+          <div style={card}>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:8}}>
+              <H2>{storyInputMode==="jira"?"Enter Jira story ID":"Paste story details"}</H2>
+              <div style={{display:"flex",gap:4,padding:3,borderRadius:9,background:"var(--color-background-secondary)",border:"1px solid var(--color-border-tertiary)",marginBottom:12}}>
+                <button onClick={()=>setStoryInputMode("jira")} style={{padding:"5px 12px",borderRadius:7,border:"none",background:storyInputMode==="jira"?"#ffffff":"transparent",color:storyInputMode==="jira"?"var(--color-text-primary)":"var(--color-text-secondary)",cursor:"pointer",fontSize:12,fontWeight:storyInputMode==="jira"?600:400}}>Fetch from Jira</button>
+                <button onClick={()=>setStoryInputMode("paste")} style={{padding:"5px 12px",borderRadius:7,border:"none",background:storyInputMode==="paste"?"#ffffff":"transparent",color:storyInputMode==="paste"?"var(--color-text-primary)":"var(--color-text-secondary)",cursor:"pointer",fontSize:12,fontWeight:storyInputMode==="paste"?600:400}}>Paste story text</button>
+              </div>
             </div>
-            {fetchError&&<div style={{marginTop:12,padding:"10px 14px",borderRadius:8,background:"var(--color-background-danger)",border:"1px solid var(--color-text-danger)",color:"var(--color-text-danger)",fontSize:13}}>⚠ {fetchError}</div>}
+            {storyInputMode==="jira"?<>
+              <div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:12}}>{jiraConfigured?<Tag c="green">✓ Jira configured</Tag>:<Tag c="amber">No Jira — AI simulation</Tag>}</div>
+              <div style={{display:"flex",gap:12,alignItems:"flex-end"}}>
+                <div style={{flex:1}}><Lbl>Story ID</Lbl><input style={inp} value={sid} onChange={e=>{setSid(e.target.value);setFetchError("");}} placeholder={proj.jiraProjKey+"-123"} onKeyDown={e=>e.key==="Enter"&&sid&&doFetch()}/></div>
+                <Btn v="primary" onClick={()=>sid&&doFetch()}>Fetch story →</Btn>
+              </div>
+              {fetchError&&<div style={{marginTop:12,padding:"10px 14px",borderRadius:8,background:"var(--color-background-danger)",border:"1px solid var(--color-text-danger)",color:"var(--color-text-danger)",fontSize:13}}>⚠ {fetchError}</div>}
+            </>:<>
+              <div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:12}}>No Jira access needed — paste the story text directly for projects that can't be linked to Jira.</div>
+              <div style={{marginBottom:12}}><Lbl>Story ID</Lbl><input style={inp} value={sid} onChange={e=>{setSid(e.target.value);setPasteErr("");}} placeholder={proj.jiraProjKey+"-123 (for reference only)"}/></div>
+              <div style={{marginBottom:12}}><Lbl>Summary (optional)</Lbl><input style={inp} value={pasteSummary} onChange={e=>setPasteSummary(e.target.value)} placeholder="Short title for this story"/></div>
+              <div style={{marginBottom:12}}><Lbl>Story description / acceptance criteria</Lbl><textarea style={{...inp,minHeight:160,resize:"vertical",fontFamily:"inherit"}} value={pasteText} onChange={e=>{setPasteText(e.target.value);setPasteErr("");}} placeholder="Paste the story description and acceptance criteria here…"/></div>
+              <Btn v="primary" onClick={usePastedStory}>Use this story →</Btn>
+              {pasteErr&&<div style={{marginTop:12,padding:"10px 14px",borderRadius:8,background:"var(--color-background-danger)",border:"1px solid var(--color-text-danger)",color:"var(--color-text-danger)",fontSize:13}}>⚠ {pasteErr}</div>}
+            </>}
           </div>
         </div>}
 
@@ -3766,7 +3821,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
           {sdata&&!sdata.sim&&<div style={{...card,background:"var(--color-background-success)",marginBottom:12}}>
             <div style={{fontWeight:500,marginBottom:6}}>{sdata.summary}</div>
             <div style={{display:"flex",gap:8,flexWrap:"wrap",fontSize:13,color:"var(--color-text-secondary)",alignItems:"center"}}>
-              <Tag c="blue">{sdata.type}</Tag><Tag c="amber">{sdata.status}</Tag><span>{sdata.assignee}</span><Tag c={sdata.priority==="High"?"red":"blue"}>{sdata.priority}</Tag>
+              <Tag c="blue">{sdata.type}</Tag>{sdata.status&&<Tag c="amber">{sdata.status}</Tag>}{!sdata.pasted&&<span>{sdata.assignee}</span>}<Tag c={sdata.priority==="High"?"red":"blue"}>{sdata.priority}</Tag>
               {(sdata.labels||[]).map((l,i)=><Tag key={i}>{l}</Tag>)}
             </div>
             {sdata.description
