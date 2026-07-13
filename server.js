@@ -2828,6 +2828,8 @@ Return ONLY valid JSON (no markdown wrapper, no extra text):
         const parsed = JSON.parse(body);
         if (parsed.name !== undefined) proj.name = parsed.name;
         if (parsed.description !== undefined) proj.description = parsed.description;
+        if (parsed.jiraProjKey !== undefined) proj.jiraProjKey = parsed.jiraProjKey;
+        if (parsed.platform !== undefined) proj.platform = parsed.platform;
         if (parsed.frontendRepoUrl !== undefined) proj.frontendRepoUrl = parsed.frontendRepoUrl;
         if (parsed.backendRepoUrl !== undefined) proj.backendRepoUrl = parsed.backendRepoUrl;
         if (parsed.language && ['ar','en','mixed'].includes(parsed.language)) proj.language = parsed.language;
