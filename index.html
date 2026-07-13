@@ -1852,6 +1852,25 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
   const allDone=cases.length>0&&cases.every(c=>c.status!=="pending");
 
   const [switchTarget,setSwitchTarget]=React.useState(null);
+  const [saveModal,setSaveModal]=useState(null);
+  React.useEffect(()=>{
+    if(onActiveSid){
+      if(testKind==="ui-design")onActiveSid(uidStoryId?"uid:"+uidStoryId:null);
+      else if(testKind==="non-functional")onActiveSid(perfStoryId?"perf:"+perfStoryId:null);
+      else onActiveSid(sid);
+    }
+  },[sid,testKind,uidStoryId,perfStoryId]);
+  React.useEffect(()=>{if(onProjChange)onProjChange(proj);},[selectedProjId]);
+  React.useEffect(()=>{if(restoreTarget){restoreStory(restoreTarget);if(clearRestore)clearRestore();}}, [restoreTarget]);
+  React.useEffect(()=>{if(resetTrigger>0)reset();},[resetTrigger]);
+  React.useEffect(()=>{
+    if(!sid||!sdata)return;
+    const existing=DB.savedStories.find(s=>s.sid===sid);
+    const snap={id:existing?.id||uid(),name:existing?.name||(sdata?.summary||sid),categoryId:existing?.categoryId||null,phase,sid,sdata,cases:[...cases],gapData,platform,ctypes:[...ctypes],scripts:{...scripts},result,sessionBugs:[...sessionBugs],coverageText,selectedForScripts:[...selectedForScripts],appUrl,savedAt:Date.now()};
+    if(existing){DB.savedStories=DB.savedStories.map(s=>s.sid===sid?snap:s);}
+    else{DB.savedStories.unshift(snap);}
+    saveDB();if(refreshSaved)refreshSaved();
+  },[phase,cases.length,result,coverageText]);
   if (!proj) return <div style={card}><div style={{color:"var(--color-text-warning)",fontWeight:500}}>No project assigned. Contact your QA lead.</div></div>;
   const doSwitchProj=(id)=>{setSelectedProjId(id);setPhase("testType");setTestKind("functional");setPerfForm(PERF_FORM_DEFAULT);setPerfResult(null);setPerfStoryId(null);setSid("");setSdata(null);setCases([]);setNeedsClarification([]);setCoverageSummary("");setResult(null);setExecLines([]);setScripts({web:""});setHasSaved(false);setUidForm({pageUrl:"",figmaUrl:"",figmaToken:"",selectedNodeId:""});setUidCases([]);setUidVisualResult(null);setUidFigmaImg(null);setUidScreenshotImg(null);setUidFigmaFrames([]);setUidJiraStatus({});setUidManualFigmaImg(null);setUidJiraTicketKey("");setUidStoryId(null);setUidAiotestStatus({importing:false,done:false,error:""});setUidTicketSearch("");setUidTicketResults([]);setUidTicketSearching(false);};
   const switchProj=(id)=>{
@@ -2404,7 +2423,6 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
   const delStep=(id,si)=>setCases(cs=>cs.map(c=>c.id===id?{...c,steps:(c.steps||[]).filter((_,i)=>i!==si)}:c));
   const reset=()=>{localStorage.removeItem(WS_SNAP);setPhase("project");setTestKind("functional");setPerfResult(null);setPerfForm(PERF_FORM_DEFAULT);setPerfChat(false);setSid("");setSdata(null);setPlatform("web");setCtypes([]);setReadyFilter("all");setGapData(null);setCases([]);setCasesByType({});setEditOn(false);setScripts({web:""});setProjFiles(null);setExecLines([]);setResult(null);setJKey(null);setBugDone(null);setShowBugForm(false);setFixed(false);setChat(false);setShowAddCase(false);setSelectedForScripts([]);setCoverageText("");setSessionBugs([]);setHasSaved(false);setAppUrl("");setScriptCache({});setUidForm({pageUrl:"",figmaUrl:"",figmaToken:"",selectedNodeId:""});setUidCases([]);setUidVisualResult(null);setUidFigmaImg(null);setUidManualFigmaImg(null);setUidJiraTicketKey("");setUidStoryId(null);setPerfStoryId(null);setUidJiraStatus({});setUidAiotestStatus({importing:false,done:false,error:""});setUidReportComment("");setUidCommentStatus({sending:false,done:false,error:""});setCurlDraft("");setCurlErr("");};
   const resetPerf=()=>{setPerfForm(PERF_FORM_DEFAULT);setPerfResult(null);setPerfStoryId(null);setPerfChat(false);setHasSaved(false);setPhase("perfTest");setCurlDraft("");setCurlErr("");};
-  const [saveModal,setSaveModal]=useState(null);
   // saveModal: null | {step:1,name:""} | {step:2,name:"",newCat:""}
   const openSaveModal=()=>{
     if(testKind==="ui-design"){
@@ -2495,24 +2513,6 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
     const lastPhase=snap.phase||(snap.coverageText?"coverage":snap.result?"result":snap.cases?.some(c=>c.status==="approved")?"review":"ctype");
     setPhase(lastPhase);
   };
-  React.useEffect(()=>{
-    if(onActiveSid){
-      if(testKind==="ui-design")onActiveSid(uidStoryId?"uid:"+uidStoryId:null);
-      else if(testKind==="non-functional")onActiveSid(perfStoryId?"perf:"+perfStoryId:null);
-      else onActiveSid(sid);
-    }
-  },[sid,testKind,uidStoryId,perfStoryId]);
-  React.useEffect(()=>{if(onProjChange)onProjChange(proj);},[selectedProjId]);
-  React.useEffect(()=>{if(restoreTarget){restoreStory(restoreTarget);if(clearRestore)clearRestore();}}, [restoreTarget]);
-  React.useEffect(()=>{if(resetTrigger>0)reset();},[resetTrigger]);
-  React.useEffect(()=>{
-    if(!sid||!sdata)return;
-    const existing=DB.savedStories.find(s=>s.sid===sid);
-    const snap={id:existing?.id||uid(),name:existing?.name||(sdata?.summary||sid),categoryId:existing?.categoryId||null,phase,sid,sdata,cases:[...cases],gapData,platform,ctypes:[...ctypes],scripts:{...scripts},result,sessionBugs:[...sessionBugs],coverageText,selectedForScripts:[...selectedForScripts],appUrl,savedAt:Date.now()};
-    if(existing){DB.savedStories=DB.savedStories.map(s=>s.sid===sid?snap:s);}
-    else{DB.savedStories.unshift(snap);}
-    saveDB();if(refreshSaved)refreshSaved();
-  },[phase,cases.length,result,coverageText]);
   const goToStep=i=>{
     const cur=WS_IDX[phase]??0; if(i>=cur||phase==="running") return;
     if(i===0){setPhase("project");return;}
