@@ -17,7 +17,9 @@ jobs:
         with:
           node-version: "20"
 
-      # Test suite is dependency-free (Node built-in `node:test`, `assert`,
-      # `child_process`, `http`). No `npm install` needed.
+      # session.integration.test.js spawns the real server, which requires dotenv.
+      - name: Install production dependencies
+        run: npm install --omit=dev
+
       - name: Run unit + integration tests
         run: node --test tests/aio.test.js tests/qa-lib.test.js tests/session.integration.test.js
