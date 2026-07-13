@@ -1596,7 +1596,7 @@ function Workspace({member,refreshSaved,restoreTarget,clearRestore,onActiveSid,o
   const [selectedProjId,setSelectedProjId]=React.useState(memberProjects[0]?.id||"");
   const proj=memberProjects.find(x=>x.id===selectedProjId)||memberProjects[0]||null;
 const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); const [sdata,setSdata]=useState(null);
-  const [platform,setPlatform]=useState("web"); const [ctypes,setCtypes]=useState([]);
+  const [platform,setPlatform]=useState("web"); const [ctypes,setCtypes]=useState([]); const [genModel,setGenModel]=useState("claude-sonnet-5");
   const [readyFilter,setReadyFilter]=useState("all");
   const [gapData,setGapData]=useState(null); const [cases,setCases]=useState([]);
   const [needsClarification,setNeedsClarification]=useState([]);
@@ -2041,7 +2041,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
   const dedupRules=`\nDEDUPLICATION RULES — apply before finalizing the list:\n1. SEMANTIC DEDUP, NOT JUST TEXT DEDUP. Before adding a case, check if it asserts the SAME underlying (trigger + expected outcome) pair as an existing/kept case, even if worded differently. "Verify X is visible only when status is Y", "Verify X is not available when status is not Y", and "Verify X cannot happen when status is Z (Z != Y)" are the SAME test — generate ONE case with the positive assertion. Only add a separate negative case if the negative path has a genuinely different mechanism (different error message, different response code, different UI treatment) — not just the logical inverse of the same check.\n2. ONE CANONICAL CASE PER RULE. For each AC/business rule/exception, generate exactly ONE case unless it has genuinely distinct sub-behaviors (3 different named error messages for 3 different triggers = 3 cases; 1 trigger and 1 outcome restated 4 ways = 1 case).\n3. Before adding a case, check it against every case already in the list (including the KEPT CASES below): does an existing case test the same (component, trigger, expected result)? If yes, does the new one exercise a genuinely distinct boundary/data variant/failure mode? If it only restates the same tuple with different phrasing or a trivial variation, DISCARD it.\n4. MERGE PARAMETERIZED CHECKS. If several candidates differ only in input value (min length, max length, special chars, empty, whitespace-only, etc. all testing the same field-rendering/validation behavior), do NOT generate separate cases — generate ONE case whose testData/steps describe the full set of input variants to try.\n5. FLAG, DON'T GUESS, undefined requirements. If a candidate case would assert behavior not explicitly stated in the story (list sort order, max attachment count, exact timing of a status change, etc.), do NOT generate it as a normal case — instead add it to needsClarification with the assumption it's making, so a human confirms the requirement exists first.\n6. Before finalizing, do an internal pass: group drafts by (component + trigger + expected-outcome-category) and collapse each group to its single best-worded canonical case.`;
   const doGen=async()=>{
     setLoading(true);
-    const selectedTypes=ctypes.includes("all")?["happy","edge","negative"]:ctypes;
+    const selectedTypes=ctypes.includes("all")?["happy","edge","boundary","negative","regression"]:ctypes;
     const existingTypes=[...new Set(cases.map(c=>c.type))];
     const newTypes=selectedTypes.filter(t=>!existingTypes.includes(t));
     const keptCases=cases.filter(c=>selectedTypes.includes(c.type));
@@ -2079,7 +2079,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
         const type=typesNeedingAPI[i];
         setLmsg(`Generating ${type} flow… (${i+1} of ${typesNeedingAPI.length})`);
         const keptCtx=keptAndCached.length>0?`\n\nKEPT CASES ALREADY IN THE LIST (do not duplicate these — see dedup rule 3):\n${keptAndCached.map(c=>`- [${c.type}] ${c.title}`).join("\n")}`:"";
-        const r=await callAI([{role:"user",content:`You are a senior QA engineer. Your task is to generate comprehensive, DEDUPLICATED ${type} test cases for the story below.\n\nPlatform: ${platform}\n${ctx}${keptCtx}\n\nTYPE: ${type.toUpperCase()} — ${typeGuide[type]||""}\n\nSTEP 1 — Extract ALL Acceptance Criteria:\nRead the full description above and number every acceptance criterion you find (AC-1, AC-2, AC-3, …). Do not skip any.\n\nSTEP 2 — Generate test cases:\nFor EACH AC you identified, draft candidate ${type} test cases that verify that AC, then apply the deduplication rules below before finalizing.\n${dedupRules}\n\nSTEP 3 — ARCHITECTURAL RISK PATTERNS (apply only when relevant; skip entirely if the pattern is not present in the story):\nMany simple CRUD or single-system UI stories will trigger none of these — that is correct and expected.\n\nEXTERNAL DEPENDENCY: If the story names a third-party service, gateway, identity provider, or notification provider — cover: (a) unavailability/timeout, (b) declined/rejected response, (c) external call succeeds but a subsequent internal step fails (partial success).\n\nMULTI-HOP WORKFLOWS: If the workflow spans more than one system — cover: what happens if step N succeeds but step N+1 fails? (partial success, reconciliation, retry behavior.)\n\nASYNCHRONOUS / EVENT-DRIVEN: If webhooks, queues, or background jobs are involved — cover: delivery failure and duplicate delivery (idempotency: same event delivered twice must not create duplicate effect).\n\nCONCURRENT OPERATIONS: If multiple users, devices, or requests can act on the same resource simultaneously — cover: race condition and duplicate submission (same action sent twice rapidly).\n\nSERVER-SIDE VALIDATION: If the story defines business rules enforced via user input (amounts, thresholds, limits) — cover: server rejects the violation regardless of what the client sends (bypass test).\n\nSTATE-CHANGING OPERATIONS: If the story creates, updates, transfers, or deletes critical state (balances, status, inventory) — cover: partial failure leaves consistent state; retried operation is idempotent.\n\nDATA PERSISTENCE AND AUDIT: If the story records transactions, history, or audit trails — verify: all required fields persisted with correct values and record visible in downstream views.\n\nREGRESSION — STATE PROPAGATION: If the workflow updates state consumed by other features — cover: those downstream workflows observe the updated state correctly.\n\nOther rules:\n- Every title must start with "Verify".\n- No duplicate test case titles.\n- Every AC must have at least one surviving test case — missing an AC is a defect, but a bloated near-duplicate list is also a defect.\n- automatable:false only for offline/camera/biometrics/hardware-dependent tests.\n- priority: one of "Critical", "High", "Medium", "Low" based on risk and importance.\n- description: one sentence describing what this test case validates.\n- testData: specific values, credentials, inputs, or (for merged parameterized checks) the full list of input variants needed (empty string if none).\n- preconditions: system state required before executing (e.g. "User is logged in as admin").\n- steps: array of action strings (what the tester does).\n- stepResults: array of expected results — SAME LENGTH as steps, one per step describing what should happen after that step.\n- expected: the overall final expected outcome of the test case.\n\nReturn ONLY valid JSON with no markdown or explanation, in this exact shape:\n{"cases":[{"id":"TC-001","title":"Verify ...","description":"...","type":"${type}","platform":"${platform}","priority":"High","preconditions":"...","testData":"...","steps":["Step 1","Step 2","Step 3"],"stepResults":["Expected after step 1","Expected after step 2","Expected after step 3"],"expected":"...","automatable":true}],"needsClarification":[{"item":"Short description of the untestable assumption","assumption":"What would have to be true for this to be testable"}]}`}],SYS,8000,proj.anthropicKey||"");
+        const r=await callAI([{role:"user",content:`You are a senior QA engineer. Your task is to generate comprehensive, DEDUPLICATED ${type} test cases for the story below.\n\nPlatform: ${platform}\n${ctx}${keptCtx}\n\nTYPE: ${type.toUpperCase()} — ${typeGuide[type]||""}\n\nSTEP 1 — Extract ALL Acceptance Criteria:\nRead the full description above and number every acceptance criterion you find (AC-1, AC-2, AC-3, …). Do not skip any.\n\nSTEP 2 — Generate test cases:\nFor EACH AC you identified, draft candidate ${type} test cases that verify that AC, then apply the deduplication rules below before finalizing.\n${dedupRules}\n\nSTEP 3 — ARCHITECTURAL RISK PATTERNS (apply only when relevant; skip entirely if the pattern is not present in the story):\nMany simple CRUD or single-system UI stories will trigger none of these — that is correct and expected.\n\nEXTERNAL DEPENDENCY: If the story names a third-party service, gateway, identity provider, or notification provider — cover: (a) unavailability/timeout, (b) declined/rejected response, (c) external call succeeds but a subsequent internal step fails (partial success).\n\nMULTI-HOP WORKFLOWS: If the workflow spans more than one system — cover: what happens if step N succeeds but step N+1 fails? (partial success, reconciliation, retry behavior.)\n\nASYNCHRONOUS / EVENT-DRIVEN: If webhooks, queues, or background jobs are involved — cover: delivery failure and duplicate delivery (idempotency: same event delivered twice must not create duplicate effect).\n\nCONCURRENT OPERATIONS: If multiple users, devices, or requests can act on the same resource simultaneously — cover: race condition and duplicate submission (same action sent twice rapidly).\n\nSERVER-SIDE VALIDATION: If the story defines business rules enforced via user input (amounts, thresholds, limits) — cover: server rejects the violation regardless of what the client sends (bypass test).\n\nSTATE-CHANGING OPERATIONS: If the story creates, updates, transfers, or deletes critical state (balances, status, inventory) — cover: partial failure leaves consistent state; retried operation is idempotent.\n\nDATA PERSISTENCE AND AUDIT: If the story records transactions, history, or audit trails — verify: all required fields persisted with correct values and record visible in downstream views.\n\nREGRESSION — STATE PROPAGATION: If the workflow updates state consumed by other features — cover: those downstream workflows observe the updated state correctly.\n\nOther rules:\n- Every title must start with "Verify".\n- No duplicate test case titles.\n- Every AC must have at least one surviving test case — missing an AC is a defect, but a bloated near-duplicate list is also a defect.\n- automatable:false only for offline/camera/biometrics/hardware-dependent tests.\n- automationTarget: the preferred tool (e.g. "Playwright", "Appium", "k6", "SQL") when automatable=true; empty string when automatable=false.\n- priority: one of "Critical", "High", "Medium", "Low" based on risk and importance.\n- description: one sentence describing what this test case validates.\n- testData: specific values, credentials, inputs, or (for merged parameterized checks) the full list of input variants needed (empty string if none).\n- preconditions: system state required before executing (e.g. "User is logged in as admin").\n- steps: array of action strings (what the tester does).\n- stepResults: array of expected results — SAME LENGTH as steps, one per step describing what should happen after that step.\n- expected: the overall final expected outcome of the test case.\n\nWORKFLOW-FIRST DESIGN: Build test cases around complete business workflows rather than individual acceptance criteria or UI components. Do not create standalone validation-only test cases if the same validation can naturally be performed within an existing workflow without reducing failure isolation.\n\nReturn ONLY valid JSON with no markdown or explanation, in this exact shape:\n{"cases":[{"id":"TC-001","title":"Verify ...","description":"...","type":"${type}","platform":"${platform}","priority":"High","preconditions":"...","testData":"...","steps":["Step 1","Step 2","Step 3"],"stepResults":["Expected after step 1","Expected after step 2","Expected after step 3"],"expected":"...","automatable":true,"automationTarget":"Playwright"}],"needsClarification":[{"item":"Short description of the untestable assumption","assumption":"What would have to be true for this to be testable"}]}`}],SYS,8000,proj.anthropicKey||"",genModel);
         const cleaned=r.replace(/```json|```/g,"").trim();
         const match=cleaned.match(/\{[\s\S]*\}/);
         if(!match) throw new Error("Invalid response for "+type+" cases. Make sure server.js is running.");
@@ -2106,6 +2106,36 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
   // Gap-fill mode: given the story + the FULL existing case list (any type, any origin —
   // generated, manually added, imported), add ONLY new cases that close real coverage gaps.
   // Never rewrites/merges/duplicates existing cases, even if worded differently.
+  const doAioImport=async()=>{
+    if(approved.length===0){alert("No approved cases to import.");return;}
+    const projectKey=proj?.jiraProjKey||"";
+    if(!projectKey){alert("This project has no Jira Project Key set (needed as the AIO project key). Ask your QA Lead to add it.");return;}
+    const payload={projectKey,parentFolder:(proj?.aioParentFolder||"").trim()||null,storyKey:sid,cases:approved};
+    const token=sessionStorage.getItem(SESSION_TOKEN_KEY)||"";
+    if(!token){alert("No active session. Open Settings and connect first.");return;}
+    const callImport=async(dryRun)=>{
+      const r=await fetch(API_BASE+"/api/aio/import",{method:"POST",headers:{"Content-Type":"application/json","X-Session-Token":token},body:JSON.stringify({...payload,dryRun})});
+      const d=await r.json();
+      if(!r.ok)throw new Error(d.error||"Import failed (HTTP "+r.status+")");
+      return d;
+    };
+    setLoading(true);setLmsg("AIO: running dry-run preview…");
+    try{
+      const pre=await callImport(true);
+      setLoading(false);
+      const folderMsg=pre.folderId!=null?`folder ID ${pre.folderId}`:"project root (no matching folder)";
+      const linkMsg=pre.requirementId!=null?`linked to ${sid}`:`NOT linked (story ID unresolved)`;
+      const ok=window.confirm(`AIO import preview for ${sid}:\n\n• ${pre.created} case(s) would be CREATED\n• ${pre.skipped} skipped as duplicates\n• Target: ${folderMsg}\n• Requirement: ${linkMsg}\n\nProceed with the real import?`);
+      if(!ok){setLmsg("");return;}
+      setLoading(true);setLmsg(`AIO: importing ${pre.created} case(s)…`);
+      const res=await callImport(false);
+      setLoading(false);
+      let msg=`AIO import complete for ${sid}:\n\n✓ created: ${res.created}\n↷ skipped (duplicate): ${res.skipped}\n✗ failed: ${res.failed}`;
+      if(res.failed>0&&res.errors?.length)msg+=`\n\nFirst errors:\n- ${res.errors.slice(0,5).join("\n- ")}`;
+      alert(msg);
+    }catch(e){setLoading(false);setLmsg("");alert("AIO import error:\n\n"+e.message);}
+  };
+
   const doFindGaps=async()=>{
     if(cases.length===0){alert("Generate or add test cases first — gap analysis compares against your existing list.");return;}
     const pendingCases = cases.filter(c => !c.status || c.status === 'pending');
@@ -3936,12 +3966,20 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
         {!loading&&phase==="ctype"&&<div style={card}>
           <div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:16}}>Story: <b>{sid}</b></div><H2>Which test case types?</H2>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:20}}>
-            {(()=>{const ect=[...new Set(cases.map(c=>c.type))];return [{k:"happy",l:"Happy flow",d:"Core successful journeys"},{k:"edge",l:"Edge cases",d:"Boundary values"},{k:"negative",l:"Negative cases",d:"Error handling"},{k:"all",l:"All of the above",d:"Full coverage"}].map(o=>{const hasCases=o.k==="all"?false:ect.includes(o.k);const isDisabled=ctypes.includes("all")&&o.k!=="all";const count=hasCases?cases.filter(c=>c.type===o.k).length:0;const isChecked=ctypes.includes(o.k);return <label key={o.k} style={{display:"flex",gap:10,padding:14,borderRadius:10,border:"1px solid "+(hasCases&&isChecked?"var(--color-text-success)":isChecked?"var(--color-text-info)":"var(--color-border-secondary)"),background:hasCases&&isChecked?"var(--color-background-success)":isChecked?"var(--color-background-info)":isDisabled?"var(--color-background-tertiary)":"var(--color-background-primary)",cursor:isDisabled?"not-allowed":"pointer",opacity:isDisabled?0.45:1}}>
+            {(()=>{const ect=[...new Set(cases.map(c=>c.type))];return [{k:"happy",l:"Happy flow",d:"Core successful journeys"},{k:"edge",l:"Edge cases",d:"Unusual but valid states"},{k:"boundary",l:"Boundary cases",d:"At/near documented limits"},{k:"negative",l:"Negative cases",d:"Error & auth handling"},{k:"regression",l:"Regression cases",d:"Existing behavior still works"},{k:"all",l:"All of the above",d:"Full coverage (all layers)"}].map(o=>{const hasCases=o.k==="all"?false:ect.includes(o.k);const isDisabled=ctypes.includes("all")&&o.k!=="all";const count=hasCases?cases.filter(c=>c.type===o.k).length:0;const isChecked=ctypes.includes(o.k);return <label key={o.k} style={{display:"flex",gap:10,padding:14,borderRadius:10,border:"1px solid "+(hasCases&&isChecked?"var(--color-text-success)":isChecked?"var(--color-text-info)":"var(--color-border-secondary)"),background:hasCases&&isChecked?"var(--color-background-success)":isChecked?"var(--color-background-info)":isDisabled?"var(--color-background-tertiary)":"var(--color-background-primary)",cursor:isDisabled?"not-allowed":"pointer",opacity:isDisabled?0.45:1}}>
               <input type="checkbox" checked={isChecked} disabled={isDisabled} onChange={()=>{if(o.k==="all"){setCtypes(p=>p.includes("all")?[]:["all"]);}else{setCtypes(p=>{const w=p.filter(x=>x!=="all"&&x!==o.k);return p.includes(o.k)?w:[...w,o.k];});}}} style={{marginTop:2}}/>
               <div><div style={{fontWeight:500,display:"flex",alignItems:"center",gap:6}}>{o.l}{hasCases&&<span style={{fontSize:11,color:"var(--color-text-success)",fontWeight:400}}>✓ {count} cases</span>}</div><div style={{fontSize:12,color:hasCases&&isChecked?"var(--color-text-success)":"var(--color-text-secondary)",marginTop:2}}>{hasCases&&isChecked?"Will be kept — uncheck to remove":hasCases&&!isChecked?"Will be removed":o.d}</div></div>
             </label>;});})()}
           </div>
-          {(()=>{const ect=[...new Set(cases.map(c=>c.type))];const sel=ctypes.includes("all")?["happy","edge","negative"]:ctypes;const notInCases=sel.filter(t=>!ect.includes(t));const hasNew=notInCases.some(t=>!casesByType[t]?.length);return <Btn v="primary" onClick={()=>(ctypes.length>0||ect.length>0)&&doGen()} disabled={ctypes.length===0&&ect.length===0}>{hasNew?"Generate test cases →":"View generated cases →"}</Btn>;})()}
+          <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16,flexWrap:"wrap"}}>
+            <span style={{fontSize:13,color:"var(--color-text-secondary)"}}>Generation model</span>
+            <select style={{...sel,width:"auto",minWidth:200}} value={genModel} onChange={e=>setGenModel(e.target.value)}>
+              <option value="claude-sonnet-5">Sonnet 5 — balanced (recommended)</option>
+              <option value="claude-opus-4-7">Opus 4.7 — max quality (slower)</option>
+              <option value="claude-haiku-4-5">Haiku 4.5 — fastest draft</option>
+            </select>
+          </div>
+          {(()=>{const ect=[...new Set(cases.map(c=>c.type))];const sel=ctypes.includes("all")?["happy","edge","boundary","negative","regression"]:ctypes;const notInCases=sel.filter(t=>!ect.includes(t));const hasNew=notInCases.some(t=>!casesByType[t]?.length);return <Btn v="primary" onClick={()=>(ctypes.length>0||ect.length>0)&&doGen()} disabled={ctypes.length===0&&ect.length===0}>{hasNew?"Generate test cases →":"View generated cases →"}</Btn>;})()}
         </div>}
 
         {!loading&&phase==="ready"&&<div>
@@ -4072,6 +4110,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
             <div style={{display:"flex",gap:10}}>
               <Btn v="primary" onClick={()=>{exportExcel(cases,sid);setAppUrl("");setPhase("urlPrompt");}}>⬇ Export AIO Excel</Btn>
               <Btn v="ghost" onClick={()=>{exportCSV(cases,sid);setAppUrl("");setPhase("urlPrompt");}}>⬇ Export AIO CSV</Btn>
+              <Btn v="success" onClick={doAioImport}>⬆ Import to AIO Tests</Btn>
               <button onClick={()=>{setAppUrl("");setPhase("urlPrompt");}} style={ghostBtn}>Skip</button>
             </div>
           </div>
@@ -4725,7 +4764,7 @@ function AdminChangeUsernameModal({onClose}) {
 /* ─── Member Config Dialog ────────────────────────────────────────────────── */
 const FIGMA_TOKEN_KEY = id => `qa_figma_token_${id}`;
 function MemberConfigDialog({memberId, onClose}) {
-  const [f,setF]=useState({jiraUrl:"",jiraEmail:"",jiraToken:"",figmaToken:""});
+  const [f,setF]=useState({jiraUrl:"",jiraEmail:"",jiraToken:"",aioToken:"",figmaToken:""});
   const [testing,setTesting]=useState(false);
   const [testMsg,setTestMsg]=useState("");
   const [saving,setSaving]=useState(false);
@@ -4768,6 +4807,12 @@ function MemberConfigDialog({memberId, onClose}) {
       if(r.status===401){setSaveErr("Session expired — please sign out and sign back in.");setSaving(false);return;}
       if(!r.ok)throw new Error(d.error||"Save failed");
       if(d.sessionToken)sessionStorage.setItem(SESSION_TOKEN_KEY,d.sessionToken);
+      // Mint a new session carrying the AIO token so import works immediately without re-login.
+      const st=sessionStorage.getItem(SESSION_TOKEN_KEY)||"";
+      const cleanUrl=(()=>{try{return new URL(f.jiraUrl.trim()).origin;}catch{return f.jiraUrl.trim();}})();
+      const sr=await fetch(API_BASE+"/api/auth/session",{method:"POST",headers:{"Content-Type":"application/json","X-Member-Token":mt||"","X-Session-Token":st},body:JSON.stringify({memberId,jiraUrl:cleanUrl,jiraEmail:f.jiraEmail.trim(),jiraToken:f.jiraToken.trim(),aioToken:f.aioToken.trim()})});
+      const sd=await sr.json();
+      if(sd.sessionToken)sessionStorage.setItem(SESSION_TOKEN_KEY,sd.sessionToken);
       // Save Figma token locally (not sent to server — stays in browser)
       if(f.figmaToken.trim())localStorage.setItem(FIGMA_TOKEN_KEY(memberId),f.figmaToken.trim());
       else localStorage.removeItem(FIGMA_TOKEN_KEY(memberId));
@@ -4804,6 +4849,11 @@ function MemberConfigDialog({memberId, onClose}) {
           </button>
           {testMsg&&<div style={{marginTop:6,fontSize:12,color:testMsg.startsWith("✓")?"var(--color-text-success)":"var(--color-text-danger)"}}>{testMsg}</div>}
         </div>}
+        <div style={{borderTop:"1px solid var(--color-border-tertiary)",paddingTop:12,marginTop:2}}>
+          <Lbl>AIO Tests API Token <span style={{fontWeight:400,color:"var(--color-text-tertiary)"}}>— optional, enables direct import to AIO Tests</span></Lbl>
+          <input type="password" style={inp} value={f.aioToken} onChange={e=>sf({aioToken:e.target.value})} placeholder="••••••"/>
+          <div style={{fontSize:11,color:"var(--color-text-tertiary)",marginTop:3}}>Get yours from AIO Tests → Profile → API Token.</div>
+        </div>
         <div style={{borderTop:"1px solid var(--color-border-tertiary)",paddingTop:14,marginTop:4}}>
           <div style={{fontWeight:600,fontSize:14,marginBottom:2}}>🎨 Figma (optional)</div>
           <div style={{fontSize:12,color:"var(--color-text-tertiary)",marginBottom:10}}>Required for UI Design Testing. Stored only in your browser.</div>
