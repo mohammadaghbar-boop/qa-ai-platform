@@ -8,8 +8,11 @@ RUN apk add --no-cache bash curl \
 
 WORKDIR /app
 
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
+
 COPY server.js .
-COPY "QA AI Platform.html" .
+COPY index.html .
 
 EXPOSE 3456
 
