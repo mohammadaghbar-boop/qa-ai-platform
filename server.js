@@ -2781,6 +2781,8 @@ Return ONLY valid JSON (no markdown wrapper, no extra text):
           id: parsed.id || crypto.randomBytes(16).toString('hex'),
           name: parsed.name,
           description: parsed.description || '',
+          jiraProjKey: parsed.jiraProjKey || '',
+          platform: parsed.platform || 'web',
           language: (['ar','en','mixed'].includes(parsed.language)) ? parsed.language : 'ar',
           frontendRepoUrl: parsed.frontendRepoUrl || '',
           backendRepoUrl: parsed.backendRepoUrl || '',

@@ -22,4 +22,4 @@ jobs:
         run: npm install --omit=dev
 
       - name: Run unit + integration tests
-        run: node --test tests/aio.test.js tests/qa-lib.test.js tests/session.integration.test.js
+        run: node --test tests/aio.test.js tests/qa-lib.test.js tests/session.integration.test.js tests/projects.integration.test.js tests/generation-contract.test.js
