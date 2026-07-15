@@ -2102,7 +2102,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
       const match=cleaned.match(/\{[\s\S]*\}/);
       if(!match) throw new Error("Invalid response generating test cases. Make sure server.js is running.");
       const parsed=JSON.parse(match[0]);
-      const rawNew=(parsed.cases||[]).map(c=>({...c,type:typesNeedingAPI.includes(c.type)?c.type:typesNeedingAPI[0],status:"pending"}));
+      const rawNew=(parsed.cases||[]).map(c=>({...c,type:typesNeedingAPI.includes(c.type)?c.type:typesNeedingAPI[0],priority:c.priority||"Medium",status:"pending"}));
       const rawClar=(parsed.needsClarification||[]).map(x=>({...x}));
       typesNeedingAPI.forEach(t=>{const tc=rawNew.filter(c=>c.type===t);if(tc.length>0)updatedCache[t]=tc;});
       setCasesByType({...updatedCache});
