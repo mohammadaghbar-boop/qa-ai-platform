@@ -133,3 +133,17 @@ test('logout clears auth tokens from both storages', () => {
   assert.match(fn[0], /localStorage\.removeItem\(MEMBER_TOKEN_KEY\)/);
   assert.match(fn[0], /localStorage\.removeItem\(SESSION_TOKEN_KEY\)/);
 });
+
+// ── "New story" / start-over must always be available (fixes "can't undo") ──
+test('New story button is not gated behind hasSaved', () => {
+  const btn = html.match(/<button onClick=\{startNewStory\}[^>]*>↩ New story<\/button>/);
+  assert.ok(btn, 'New story button must use the startNewStory handler');
+  // The old gating ("Save first to enable" / disabled unless hasSaved) must be gone
+  assert.ok(!/↩ New story/.test(html) || !/Save first to enable/.test(html),
+    'New story must no longer show "Save first to enable" gating');
+  assert.match(html, /const startNewStory=\(\)=>\{/, 'startNewStory handler must exist');
+  // It must confirm before discarding unsaved work
+  const fn = html.match(/const startNewStory=\(\)=>\{[\s\S]*?\n  \};/);
+  assert.ok(fn, 'startNewStory body must be found');
+  assert.match(fn[0], /window\.confirm/, 'startNewStory must confirm before discarding unsaved work');
+});

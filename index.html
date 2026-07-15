@@ -2519,6 +2519,14 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
     }
     reset();
   };
+  // "New story" / start-over — always available so the user can discard the current
+  // work and start fresh (previously gated behind hasSaved, which trapped users who
+  // ran e.g. gap analysis but hadn't saved). Confirm first when there is unsaved work.
+  const startNewStory=()=>{
+    if(phase==="coverage"){saveAndReset();return;}
+    if(!hasSaved&&!window.confirm("Discard the current story and start over? Any unsaved work in this session will be lost."))return;
+    reset();
+  };
   const restoreStory=snap=>{
     if(snap.testKind==="ui-design"){
       setTestKind("ui-design");
@@ -2661,7 +2669,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
       </div>
       <div style={{display:"flex",gap:8}}>
         {testKind==="functional"&&phase!=="input"&&sid&&<button onClick={openSaveModal} style={ghostBtn} title="Save current session to history">💾 Save</button>}
-        {testKind==="functional"&&phase!=="input"&&sid&&<button onClick={phase==="coverage"?saveAndReset:reset} disabled={phase!=="coverage"&&!hasSaved} title={phase==="coverage"?"Start a new story":hasSaved?"Start a new story":"Save first to enable"} style={{...ghostBtn,opacity:(phase==="coverage"||hasSaved)?1:0.4,cursor:(phase==="coverage"||hasSaved)?"pointer":"not-allowed"}}>↩ New story</button>}
+        {testKind==="functional"&&phase!=="input"&&sid&&<button onClick={startNewStory} title="Start a new story" style={ghostBtn}>↩ New story</button>}
         {testKind==="functional"&&phase!=="input"&&<button onClick={()=>setChat(o=>!o)} style={ghostBtn}>{chat?"Hide chat":"🤖 AI Chat"}</button>}
         {testKind==="non-functional"&&(phase==="perfTest"||phase==="perfResult")&&<button onClick={openSaveModal} disabled={!perfForm.testName.trim()} title="Save this test session to history" style={{...ghostBtn,opacity:perfForm.testName.trim()?1:0.4,cursor:perfForm.testName.trim()?"pointer":"not-allowed"}}>💾 Save</button>}
         {testKind==="non-functional"&&(phase==="perfTest"||phase==="perfResult")&&<button onClick={resetPerf} style={ghostBtn} title="Start a new performance test">↩ New Test</button>}
