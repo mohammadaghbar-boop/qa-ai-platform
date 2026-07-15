@@ -108,3 +108,28 @@ test('admin platform dropdown offers web, mobile, and both', () => {
   assert.match(html, /<option value="web">Web<\/option><option value="mobile">Mobile<\/option><option value="both">Web \+ Mobile<\/option>/,
     'platform select must include Web, Mobile, and Web + Mobile');
 });
+
+// ── Remember-Me token durability (fixes "Could not create test session") ────
+test('auth tokens are mirrored to localStorage and rehydrated on load', () => {
+  // Login must persist the member token via the helper (mirrors to localStorage in remember mode)
+  assert.match(html, /persistMemberToken\(d\.token,remember\)/,
+    'member login must persist token through persistMemberToken');
+  // A rehydrate step must copy the localStorage mirror back into sessionStorage on load
+  assert.match(html, /_hydrateAuthTokens/,
+    'a token rehydration step must exist so reopened sessions can mint API sessions');
+  assert.match(html, /function persistSessionToken/,
+    'persistSessionToken helper must exist');
+  // Session refresh must persist through the helper (not raw sessionStorage.setItem)
+  assert.ok(!/if \(d\.sessionToken\) \{ sessionStorage\.setItem\(SESSION_TOKEN_KEY, d\.sessionToken\); return d\.sessionToken; \}/.test(html),
+    '_refreshSession must persist via persistSessionToken, not raw sessionStorage.setItem');
+});
+
+test('logout clears auth tokens from both storages', () => {
+  assert.match(html, /function clearAuthTokens/, 'clearAuthTokens helper must exist');
+  assert.match(html, /clearAuthTokens\(\)/, 'logout must call clearAuthTokens');
+  // clearAuthTokens must remove from BOTH localStorage and sessionStorage
+  const fn = html.match(/function clearAuthTokens\(\)\s*\{[\s\S]*?\n\}/);
+  assert.ok(fn, 'clearAuthTokens body must be found');
+  assert.match(fn[0], /localStorage\.removeItem\(MEMBER_TOKEN_KEY\)/);
+  assert.match(fn[0], /localStorage\.removeItem\(SESSION_TOKEN_KEY\)/);
+});

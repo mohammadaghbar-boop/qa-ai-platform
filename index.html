@@ -175,6 +175,53 @@ const SESSION_TOKEN_KEY = "qa_api_session_token";
 const ADMIN_TOKEN_KEY   = "qa_admin_token";
 const MEMBER_TOKEN_KEY  = "qa_member_token";
 
+// Auth tokens live in sessionStorage for the tab. When "Remember Me" is on they
+// are ALSO mirrored to localStorage so they survive a browser close alongside the
+// persisted user session. Without this, reopening the app (Remember Me on) restores
+// the logged-in member from localStorage but leaves sessionStorage empty — so any
+// call that mints a session (e.g. Test Connection) fails with "Could not create test
+// session" until the user logs out and back in.
+function _rememberOn() {
+  try { return !!localStorage.getItem(MEMBER_TOKEN_KEY); } catch { return false; }
+}
+// Persist the member token at login. When remember is on, mirror it to localStorage.
+function persistMemberToken(memberTok, remember) {
+  try {
+    if (memberTok) sessionStorage.setItem(MEMBER_TOKEN_KEY, memberTok);
+    if (remember && memberTok) localStorage.setItem(MEMBER_TOKEN_KEY, memberTok);
+    else localStorage.removeItem(MEMBER_TOKEN_KEY);
+  } catch {}
+}
+// Persist a freshly minted API session token, mirroring to localStorage in remember mode.
+function persistSessionToken(sessionTok) {
+  try {
+    if (!sessionTok) return;
+    sessionStorage.setItem(SESSION_TOKEN_KEY, sessionTok);
+    if (_rememberOn()) localStorage.setItem(SESSION_TOKEN_KEY, sessionTok);
+  } catch {}
+}
+// Clear all auth tokens from both storages (logout).
+function clearAuthTokens() {
+  try {
+    sessionStorage.removeItem(MEMBER_TOKEN_KEY);  localStorage.removeItem(MEMBER_TOKEN_KEY);
+    sessionStorage.removeItem(SESSION_TOKEN_KEY); localStorage.removeItem(SESSION_TOKEN_KEY);
+  } catch {}
+}
+// On load, rehydrate sessionStorage from the localStorage mirror (present only when
+// Remember Me was on). Lets all existing sessionStorage.getItem call sites work unchanged.
+(function _hydrateAuthTokens() {
+  try {
+    if (!sessionStorage.getItem(MEMBER_TOKEN_KEY)) {
+      const lm = localStorage.getItem(MEMBER_TOKEN_KEY);
+      if (lm) sessionStorage.setItem(MEMBER_TOKEN_KEY, lm);
+    }
+    if (!sessionStorage.getItem(SESSION_TOKEN_KEY)) {
+      const ls = localStorage.getItem(SESSION_TOKEN_KEY);
+      if (ls) sessionStorage.setItem(SESSION_TOKEN_KEY, ls);
+    }
+  } catch {}
+})();
+
 async function _refreshSession() {
   const mt = sessionStorage.getItem(MEMBER_TOKEN_KEY);
   if (!mt) return null;
@@ -185,7 +232,7 @@ async function _refreshSession() {
     });
     if (!r.ok) return null;
     const d = await r.json();
-    if (d.sessionToken) { sessionStorage.setItem(SESSION_TOKEN_KEY, d.sessionToken); return d.sessionToken; }
+    if (d.sessionToken) { persistSessionToken(d.sessionToken); return d.sessionToken; }
   } catch (e) { console.warn("Session refresh failed:", e.message); }
   return null;
 }
@@ -4629,8 +4676,8 @@ function LoginPage({onLogin}) {
       if(!r.ok){setErr(d.error||"Invalid credentials");setBusy(false);return;}
       if(remember){localStorage.setItem(CREDS_KEY,JSON.stringify({mode,email}));}
       else{localStorage.removeItem(CREDS_KEY);}
-      sessionStorage.setItem(MEMBER_TOKEN_KEY,d.token);
-      if(d.sessionToken)sessionStorage.setItem(SESSION_TOKEN_KEY,d.sessionToken);
+      persistMemberToken(d.token,remember);
+      if(d.sessionToken)persistSessionToken(d.sessionToken);
       onLogin({role:"member",member:d.member,id:d.member.id,hasSession:!!d.sessionToken},remember);
     }catch{setErr("Cannot reach server. Make sure node server.js is running.");}
     setBusy(false); return;
@@ -4781,7 +4828,7 @@ function MemberConfigDialog({memberId, onClose}) {
       const cleanUrl=(()=>{try{return new URL(f.jiraUrl.trim()).origin;}catch{return f.jiraUrl.trim();}})();
       const sr=await fetch(API_BASE+"/api/auth/session",{method:"POST",headers:{"Content-Type":"application/json","X-Member-Token":mt,"X-Session-Token":st},body:JSON.stringify({memberId,jiraUrl:cleanUrl,jiraEmail:f.jiraEmail,jiraToken:f.jiraToken})});
       const sd=await sr.json();
-      if(!sd.sessionToken)throw new Error("Could not create test session");
+      if(!sd.sessionToken)throw new Error(sd.error||"Could not create test session — please sign out and sign back in.");
       const r=await fetch(API_BASE+"/api/jira",{method:"POST",headers:{"Content-Type":"application/json","X-Session-Token":sd.sessionToken},body:JSON.stringify({path:"/myself",method:"GET"})});
       const d=await r.json();
       if(d.error)throw new Error(d.error);
@@ -4802,13 +4849,13 @@ function MemberConfigDialog({memberId, onClose}) {
       const d=await r.json();
       if(r.status===401){setSaveErr("Session expired — please sign out and sign back in.");setSaving(false);return;}
       if(!r.ok)throw new Error(d.error||"Save failed");
-      if(d.sessionToken)sessionStorage.setItem(SESSION_TOKEN_KEY,d.sessionToken);
+      if(d.sessionToken)persistSessionToken(d.sessionToken);
       // Mint a new session carrying the AIO token so import works immediately without re-login.
       const st=sessionStorage.getItem(SESSION_TOKEN_KEY)||"";
       const cleanUrl=(()=>{try{return new URL(f.jiraUrl.trim()).origin;}catch{return f.jiraUrl.trim();}})();
       const sr=await fetch(API_BASE+"/api/auth/session",{method:"POST",headers:{"Content-Type":"application/json","X-Member-Token":mt||"","X-Session-Token":st},body:JSON.stringify({memberId,jiraUrl:cleanUrl,jiraEmail:f.jiraEmail.trim(),jiraToken:f.jiraToken.trim(),aioToken:f.aioToken.trim()})});
       const sd=await sr.json();
-      if(sd.sessionToken)sessionStorage.setItem(SESSION_TOKEN_KEY,sd.sessionToken);
+      if(sd.sessionToken)persistSessionToken(sd.sessionToken);
       // Save Figma token locally (not sent to server — stays in browser)
       if(f.figmaToken.trim())localStorage.setItem(FIGMA_TOKEN_KEY(memberId),f.figmaToken.trim());
       else localStorage.removeItem(FIGMA_TOKEN_KEY(memberId));
@@ -4942,7 +4989,7 @@ function App() {
       if(!localStorage.getItem(onboardedKey)){setShowOnboarding(true);}
     }
   };
-  const handleLogout=()=>{localStorage.removeItem('qa_ws_'+_currentMemberId);_currentMemberId="";localStorage.removeItem(SESSION_KEY);sessionStorage.removeItem(SESSION_KEY);sessionStorage.removeItem(SESSION_TOKEN_KEY);sessionStorage.removeItem(ADMIN_TOKEN_KEY);sessionStorage.removeItem(MEMBER_TOKEN_KEY);setUser(null);setPage("workspace");setShowConfig(false);setShowChangePwd(false);};
+  const handleLogout=()=>{localStorage.removeItem('qa_ws_'+_currentMemberId);_currentMemberId="";localStorage.removeItem(SESSION_KEY);sessionStorage.removeItem(SESSION_KEY);sessionStorage.removeItem(ADMIN_TOKEN_KEY);clearAuthTokens();setUser(null);setPage("workspace");setShowConfig(false);setShowChangePwd(false);};
   useEffect(()=>{
     const onAuthFailure=()=>handleLogout();
     window.addEventListener('qa-auth-failure',onAuthFailure);
