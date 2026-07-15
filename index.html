@@ -925,7 +925,11 @@ function PerfAIChat({proj,perfForm,perfResult}) {
     const hist=msgs.map(m=>({role:m.role==="assistant"?"assistant":"user",content:m.text}));
     try{
       const authDesc=perfForm.authType==="bearer"?"Bearer Token":perfForm.authType==="basic"?"Basic Auth":perfForm.authType==="csv"?`Dynamic/CSV (${perfForm.csvUsers?.length||0} users)`:"None";
-      const configCtx=`TEST CONFIGURATION:\n  Name: ${perfForm.testName||"—"}\n  Type: ${perfForm.testType==="stress"?"Stress Test":"Load Test"}\n  Method: ${perfForm.method} ${perfForm.apiUrl||"—"}\n  Auth: ${authDesc}\n  Virtual Users: ${perfForm.vus}${perfForm.testType==="stress"?" (max)":""}\n  Duration: ${perfForm.duration}${perfForm.testType==="stress"?" per step":""}\n  Ramp: ${perfForm.ramp}\n  p95 Threshold: ${perfForm.p95Threshold}ms`;
+      const isFlow=perfForm.mode==="flow";
+      const targetCtx=isFlow
+        ?`Flow — ${(perfForm.steps||[]).filter(s=>s.url&&s.url.trim()).map((s,i)=>`\n    ${i+1}. ${s.method} ${s.url}${s.extractVar?` (extracts "${s.extractPath||""}" into {{${s.extractVar}}})`:""}`).join("")}`
+        :`Method: ${perfForm.method} ${perfForm.apiUrl||"—"}`;
+      const configCtx=`TEST CONFIGURATION:\n  Name: ${perfForm.testName||"—"}\n  Type: ${perfForm.testType==="stress"?"Stress Test":"Load Test"}\n  ${targetCtx}\n  Auth: ${authDesc}\n  Virtual Users: ${perfForm.vus}${perfForm.testType==="stress"?" (max)":""}\n  Duration: ${perfForm.duration}${perfForm.testType==="stress"?" per step":""}\n  Ramp: ${perfForm.ramp}\n  p95 Threshold: ${perfForm.p95Threshold}ms`;
       const resultCtx=perfResult?`\n\nTEST RESULTS:\n  Status: ${perfResult.passed?"PASSED ✅":"FAILED ❌"}\n  Total Requests: ${perfResult.metrics?.totalRequests||0}\n  RPS: ${perfResult.metrics?.rps||0}\n  Avg: ${perfResult.metrics?.avgDuration||0}ms | Min: ${perfResult.metrics?.minDuration||0}ms | Max: ${perfResult.metrics?.maxDuration||0}ms\n  p50: ${perfResult.metrics?.p50||0}ms | p90: ${perfResult.metrics?.p90||0}ms | p95: ${perfResult.metrics?.p95||0}ms | p99: ${perfResult.metrics?.p99||0}ms\n  Error Rate: ${perfResult.metrics?.errorRate||0}%`:"";
       const sys=`You are a performance testing expert embedded in the QA AI Platform. Help the user understand and improve their API performance tests. Project: "${proj?.name||"—"}"\n\n=== CURRENT TEST ===\n${configCtx}${resultCtx}\n\nBe concise and practical. Focus on performance testing best practices, k6 insights, and actionable recommendations based on the data above.`;
       const r=await callAI([...hist,{role:"user",content:u}],sys,2000);
@@ -947,6 +951,129 @@ function PerfAIChat({proj,perfForm,perfResult}) {
       <input style={{...inp,flex:1,fontSize:13}} value={msg} onChange={e=>setMsg(e.target.value)} onKeyDown={e=>e.key==="Enter"&&!e.shiftKey&&send()} placeholder="Ask about results, thresholds, k6…"/>
       <Btn v="primary" onClick={send} disabled={busy}>Send</Btn>
     </div>
+  </div>;
+}
+
+/* ─── Perf Failures List — grouped/counted so identical failures show once ── */
+function FailuresList({failures}) {
+  if(!failures||!failures.length)return null;
+  const total=failures.reduce((a,f)=>a+(f.count||1),0);
+  return <div style={{...card,border:"1px solid var(--color-text-danger)"}}>
+    <H2 style={{marginBottom:12}}>⚠ Failures — {total} total, {failures.length} distinct</H2>
+    <div style={{overflowX:"auto"}}>
+      <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+        <thead><tr style={{borderBottom:"1px solid var(--color-border-secondary)"}}>{["Step","Expected","Actual","Error","Count"].map(h=><th key={h} style={{padding:"6px 10px",textAlign:"left",fontWeight:600,color:"var(--color-text-secondary)"}}>{h}</th>)}</tr></thead>
+        <tbody>{failures.map((f,i)=><tr key={i} style={{borderBottom:"1px solid var(--color-border-tertiary)"}}>
+          <td style={{padding:"6px 10px"}}>{f.step||"—"}</td>
+          <td style={{padding:"6px 10px"}}><Tag c="blue">{f.expectedStatus}</Tag></td>
+          <td style={{padding:"6px 10px"}}><Tag c="red">{f.actualStatus||"—"}{f.statusText?" "+f.statusText:""}</Tag></td>
+          <td style={{padding:"6px 10px",maxWidth:280,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={f.error||""}>{f.error||"—"}</td>
+          <td style={{padding:"6px 10px",fontWeight:600}}>{f.count}</td>
+        </tr>)}</tbody>
+      </table>
+    </div>
+  </div>;
+}
+
+/* ─── Perf History Report Modal ───────────────────────────────────────────── */
+function PerfHistoryReportModal({item,onClose}) {
+  const ghostBtn={padding:"9px 20px",borderRadius:10,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:14,fontWeight:500,color:"var(--color-text-secondary)"};
+  const m=item.metrics||{};
+  const pass=item.passed;
+  const over=item.p95Threshold&&m.p95>item.p95Threshold;
+  const isFlow=item.mode==="flow";
+  return <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,0.5)",zIndex:2000,display:"flex",alignItems:"center",justifyContent:"center",backdropFilter:"blur(2px)"}} onClick={onClose}>
+    <div style={{background:"var(--color-background-primary)",borderRadius:16,padding:28,width:640,maxWidth:"92vw",maxHeight:"85vh",overflowY:"auto",boxShadow:"var(--shadow-lg)",border:"1px solid var(--color-border-tertiary)",animation:"qa-fade-up 0.22s ease both"}} onClick={e=>e.stopPropagation()}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:16}}>
+        <div>
+          <div style={{fontWeight:700,fontSize:18}}>{item.testName||"—"}</div>
+          <div style={{fontSize:12,color:"var(--color-text-tertiary)",marginTop:2}}>{item.testType==="stress"?"Stress":"Load"} Test · {isFlow?`API Flow (${item.stepCount||(item.steps||[]).length} steps)`:"Single Endpoint"} · {item.syncedAt?new Date(item.syncedAt).toLocaleString():"—"}</div>
+        </div>
+        <button onClick={onClose} style={{...ghostBtn,padding:"4px 10px"}}>✕</button>
+      </div>
+
+      <div style={{padding:"12px 16px",borderRadius:10,background:pass?"var(--color-background-success)":"var(--color-background-danger)",border:"1px solid "+(pass?"var(--color-text-success)":"var(--color-text-danger)"),marginBottom:16,display:"flex",alignItems:"center",gap:12}}>
+        <span style={{fontSize:26}}>{pass?"✅":"❌"}</span>
+        <div style={{fontWeight:600,fontSize:14}}>{pass?"All thresholds passed":"Test failed — thresholds exceeded"}</div>
+      </div>
+
+      <div style={{display:"flex",flexWrap:"wrap",gap:16,marginBottom:16,fontSize:12}}>
+        <div><span style={{color:"var(--color-text-tertiary)"}}>Virtual Users: </span><b>{item.vus||"—"}</b></div>
+        <div><span style={{color:"var(--color-text-tertiary)"}}>Duration: </span><b>{item.duration||"—"}</b></div>
+        {item.ramp&&<div><span style={{color:"var(--color-text-tertiary)"}}>Ramp: </span><b>{item.ramp}</b></div>}
+        <div><span style={{color:"var(--color-text-tertiary)"}}>p95 Threshold: </span><b>{item.p95Threshold||"—"}ms</b></div>
+      </div>
+
+      {!isFlow&&<div style={{marginBottom:16,fontSize:12}}>
+        <span style={{color:"var(--color-text-tertiary)"}}>Endpoint: </span>
+        <Tag c="blue">{item.method||"GET"}</Tag> <span style={{wordBreak:"break-all"}}>{item.apiUrl||"—"}</span>
+      </div>}
+      {isFlow&&(item.steps||[]).length>0&&<div style={{marginBottom:16}}>
+        <div style={{fontSize:12,color:"var(--color-text-tertiary)",marginBottom:6}}>Flow steps:</div>
+        <div style={{fontSize:12,background:"var(--color-background-tertiary)",border:"1px solid var(--color-border-tertiary)",borderRadius:8,padding:"8px 12px"}}>
+          {item.steps.map((s,i)=><div key={i} style={{padding:"3px 0",display:"flex",gap:6,alignItems:"center"}}>
+            <span style={{color:"var(--color-text-tertiary)",flexShrink:0}}>{i+1}.</span>
+            <span style={{fontWeight:600,flexShrink:0}}>{s.method}</span>
+            <span style={{wordBreak:"break-all"}}>{s.name||s.url}</span>
+            {s.extractVar&&<Tag c="green">{"→ {{"}{s.extractVar}{"}}"}</Tag>}
+          </div>)}
+        </div>
+      </div>}
+
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(140px,1fr))",gap:10,marginBottom:16}}>
+        {[
+          {icon:"📊",label:"Total Requests",val:(m.totalRequests||0).toLocaleString()},
+          {icon:"⚡",label:"Requests / sec",val:m.rps??0},
+          {icon:"⏱",label:"p95 Latency",val:`${m.p95??0} ms`,warn:over},
+          {icon:"⚠️",label:"Error Rate",val:`${m.errorRate??0}%`,warn:m.errorRate>5},
+          {icon:"📈",label:"Avg Latency",val:`${m.avgDuration??0} ms`},
+          {icon:"📈",label:"Max Latency",val:`${m.maxDuration??0} ms`},
+        ].map((x,i)=><div key={i} style={{padding:"10px",borderRadius:10,textAlign:"center",border:"1px solid "+(x.warn?"var(--color-text-danger)":"var(--color-border-tertiary)")}}>
+          <div style={{fontSize:16,marginBottom:2}}>{x.icon}</div>
+          <div style={{fontSize:16,fontWeight:700,color:x.warn?"var(--color-text-danger)":undefined}}>{x.val}</div>
+          <div style={{fontSize:10,color:"var(--color-text-tertiary)",marginTop:2}}>{x.label}</div>
+        </div>)}
+      </div>
+
+      <div>
+        <div style={{fontSize:12,fontWeight:600,marginBottom:8}}>Response Time Breakdown</div>
+        <div style={{display:"flex",gap:18,flexWrap:"wrap"}}>
+          {[["Min",m.minDuration],["Avg",m.avgDuration],["p50",m.p50],["p90",m.p90],["p95",m.p95],["p99",m.p99],["Max",m.maxDuration]].map(([lbl,val])=>(
+            <div key={lbl} style={{textAlign:"center"}}>
+              <div style={{fontSize:14,fontWeight:600,color:lbl==="p95"&&over?"var(--color-text-danger)":undefined}}>{val??0} ms</div>
+              <div style={{fontSize:10,color:"var(--color-text-tertiary)"}}>{lbl}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+      {item.failures&&item.failures.length>0&&<div style={{marginTop:16}}><FailuresList failures={item.failures}/></div>}
+    </div>
+  </div>;
+}
+
+/* ─── Member History Page — sidebar item below Workspace ─────────────────── */
+function MemberHistoryPage({member}) {
+  const [perfHistory,setPerfHistory]=useState([]);
+  const [perfHistoryLoading,setPerfHistoryLoading]=useState(true);
+  const [historyDetail,setHistoryDetail]=useState(null);
+  const ghostBtn={padding:"9px 20px",borderRadius:10,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:14,fontWeight:500,color:"var(--color-text-secondary)"};
+  useEffect(()=>{
+    const token=sessionStorage.getItem(MEMBER_TOKEN_KEY)||sessionStorage.getItem(SESSION_TOKEN_KEY)||"";
+    fetch(API_BASE+"/api/members/"+member.id+"/perf-history",{headers:{"X-Member-Token":token}}).then(r=>r.json()).then(d=>{setPerfHistory(Array.isArray(d.results)?d.results:[]);setPerfHistoryLoading(false);}).catch(()=>setPerfHistoryLoading(false));
+  },[member.id]);
+  return <div>
+    <H1>History</H1>
+    <div style={card}>
+      <H2 style={{marginBottom:12}}>Performance Test History</H2>
+      {perfHistoryLoading?<div style={{color:"var(--color-text-tertiary)",fontSize:13}}>Loading...</div>:perfHistory.length===0?<div style={{color:"var(--color-text-tertiary)",fontSize:13}}>No history yet. Run a performance test to see results here.</div>:
+      <div style={{overflowX:"auto"}}>
+        <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+          <thead><tr style={{borderBottom:"1px solid var(--color-border-secondary)"}}>{["Name","Method","URL","VUs","Duration","p95 (ms)","Threshold","Pass/Fail","Date",""].map(h=><th key={h} style={{padding:"6px 10px",textAlign:"left",fontWeight:600,color:"var(--color-text-secondary)"}}>{h}</th>)}</tr></thead>
+          <tbody>{perfHistory.map((h,i)=><tr key={i} onClick={()=>setHistoryDetail(h)} style={{borderBottom:"1px solid var(--color-border-tertiary)",cursor:"pointer"}} onMouseEnter={e=>e.currentTarget.style.background="var(--color-background-secondary)"} onMouseLeave={e=>e.currentTarget.style.background="transparent"}><td style={{padding:"6px 10px"}}>{h.testName||"—"}</td><td style={{padding:"6px 10px"}}>{h.mode==="flow"?<Tag c="blue">Flow</Tag>:(h.method||"GET")}</td><td style={{padding:"6px 10px",maxWidth:120,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={h.mode==="flow"?`${h.stepCount||0} step(s)`:(h.apiUrl||"")}>{h.mode==="flow"?`${h.stepCount||0} step(s)`:(h.apiUrl||"—")}</td><td style={{padding:"6px 10px"}}>{h.vus||"—"}</td><td style={{padding:"6px 10px"}}>{h.duration||"—"}</td><td style={{padding:"6px 10px"}}>{h.metrics?.p95!=null?h.metrics.p95:"—"}</td><td style={{padding:"6px 10px"}}>{h.p95Threshold?"≤"+h.p95Threshold+"ms":"—"}</td><td style={{padding:"6px 10px"}}><span style={{color:h.passed?"var(--color-text-success)":"var(--color-text-danger)",fontWeight:600}}>{h.passed?"✓ Pass":"✗ Fail"}</span></td><td style={{padding:"6px 10px",whiteSpace:"nowrap"}}>{h.syncedAt?new Date(h.syncedAt).toLocaleDateString():"—"}</td><td style={{padding:"6px 10px"}}><button onClick={e=>{e.stopPropagation();setHistoryDetail(h);}} style={{...ghostBtn,padding:"3px 10px",fontSize:11}}>📄 Report</button></td></tr>)}</tbody>
+        </table>
+      </div>}
+    </div>
+    {historyDetail&&<PerfHistoryReportModal item={historyDetail} onClose={()=>setHistoryDetail(null)}/>}
   </div>;
 }
 
@@ -1656,9 +1783,11 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
   const [perfTab,setPerfTab] = React.useState('test');
   const [perfHistory,setPerfHistory] = React.useState([]);
   const [perfHistoryLoading,setPerfHistoryLoading] = React.useState(false);
+  const [historyDetail,setHistoryDetail] = React.useState(null);
 
   // ── Non-functional / performance test state ──────────────────────────────
-  const PERF_FORM_DEFAULT={testType:"load",testName:"",method:"GET",apiUrl:"",expectedStatus:200,authType:"none",token:"",basicUsername:"",basicPassword:"",requestBody:"",vus:100,duration:"60s",ramp:"10s",p95Threshold:2000,csvUsers:null,csvFileName:"",csvError:"",variables:[],customHeaders:[]};
+  const PERF_FORM_DEFAULT={testType:"load",mode:"single",testName:"",method:"GET",apiUrl:"",expectedStatus:200,authType:"none",token:"",basicUsername:"",basicPassword:"",requestBody:"",vus:100,duration:"60s",ramp:"10s",p95Threshold:2000,csvUsers:null,csvFileName:"",csvError:"",variables:[],customHeaders:[],steps:[]};
+  const PERF_STEP_DEFAULT=()=>({id:uid(),name:"",method:"GET",url:"",requestBody:"",expectedStatus:200,extractVar:"",extractPath:""});
   const [testKind,setTestKind]=useState("functional");
   const [perfForm,setPerfForm]=useState(PERF_FORM_DEFAULT);
   const [perfResult,setPerfResult]=useState(null);
@@ -1719,8 +1848,10 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
     uidJiraTicket:2, uidSetup:3, uidCases:4, uidRun:5, uidResults:6, uidBugs:7, uidReport:8
   };
 
+  const perfFlowStepsValid=()=>(perfForm.steps||[]).filter(s=>s.url&&s.url.trim());
   const doRunPerfTest=async()=>{
-    if(!perfForm.testName.trim()||!perfForm.apiUrl.trim())return;
+    const isFlow=perfForm.mode==="flow";
+    if(!perfForm.testName.trim()||(isFlow?perfFlowStepsValid().length===0:!perfForm.apiUrl.trim()))return;
     setPerfLoading(true);
     try{
       const r=await fetch(API_BASE+"/api/perf",{method:"POST",headers:{"Content-Type":"application/json","X-Session-Token":sessionStorage.getItem(SESSION_TOKEN_KEY)||""},body:JSON.stringify({...perfForm,projectName:proj?.name||""})});
@@ -1728,7 +1859,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
       if(d.error)throw new Error(d.error);
       setPerfResult({...d,testName:perfForm.testName,testType:perfForm.testType,vus:perfForm.vus,duration:perfForm.duration,p95Threshold:perfForm.p95Threshold});
       setPhase("perfResult");
-      syncToServer("perf",{memberId:member.id,memberName:member.name,projectId:proj?.id||"",projectName:proj?.name||"",testName:perfForm.testName,testType:perfForm.testType,passed:d.passed,metrics:d.metrics,vus:perfForm.vus,duration:perfForm.duration,p95Threshold:perfForm.p95Threshold});
+      syncToServer("perf",{memberId:member.id,memberName:member.name,projectId:proj?.id||"",projectName:proj?.name||"",testName:perfForm.testName,testType:perfForm.testType,mode:perfForm.mode,method:isFlow?"":perfForm.method,apiUrl:isFlow?"":perfForm.apiUrl,steps:isFlow?perfFlowStepsValid().map(s=>({name:s.name||"",method:s.method,url:s.url,expectedStatus:s.expectedStatus,extractVar:s.extractVar||""})):[],stepCount:isFlow?perfFlowStepsValid().length:0,passed:d.passed,metrics:d.metrics,failures:d.failures||[],vus:perfForm.vus,duration:perfForm.duration,ramp:perfForm.ramp,p95Threshold:perfForm.p95Threshold});
     }catch(e){alert("Performance test error: "+e.message);}
     setPerfLoading(false);
   };
@@ -1879,6 +2010,33 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
   const allDone=cases.length>0&&cases.every(c=>c.status!=="pending");
 
   const [switchTarget,setSwitchTarget]=React.useState(null);
+  // The following hooks are declared here — before the "no project assigned" early
+  // return below — rather than near the code that uses them, because a hook placed
+  // after an early return gets skipped on renders where that return fires (e.g. the
+  // very first render, before the assigned-projects fetch resolves) but not on later
+  // renders once a project loads. React requires every hook to run on every render;
+  // violating that previously crashed the whole workspace with a blank screen
+  // ("Rendered more hooks than during the previous render") for any member with an
+  // assigned project.
+  const [saveModal,setSaveModal]=useState(null);
+  React.useEffect(()=>{
+    if(onActiveSid){
+      if(testKind==="ui-design")onActiveSid(uidStoryId?"uid:"+uidStoryId:null);
+      else if(testKind==="non-functional")onActiveSid(perfStoryId?"perf:"+perfStoryId:null);
+      else onActiveSid(sid);
+    }
+  },[sid,testKind,uidStoryId,perfStoryId]);
+  React.useEffect(()=>{if(onProjChange)onProjChange(proj);},[selectedProjId]);
+  React.useEffect(()=>{if(restoreTarget){restoreStory(restoreTarget);if(clearRestore)clearRestore();}}, [restoreTarget]);
+  React.useEffect(()=>{if(resetTrigger>0)reset();},[resetTrigger]);
+  React.useEffect(()=>{
+    if(!sid||!sdata)return;
+    const existing=DB.savedStories.find(s=>s.sid===sid);
+    const snap={id:existing?.id||uid(),name:existing?.name||(sdata?.summary||sid),categoryId:existing?.categoryId||null,phase,sid,sdata,cases:[...cases],gapData,platform,ctypes:[...ctypes],scripts:{...scripts},result,sessionBugs:[...sessionBugs],coverageText,selectedForScripts:[...selectedForScripts],appUrl,savedAt:Date.now()};
+    if(existing){DB.savedStories=DB.savedStories.map(s=>s.sid===sid?snap:s);}
+    else{DB.savedStories.unshift(snap);}
+    saveDB();if(refreshSaved)refreshSaved();
+  },[phase,cases.length,result,coverageText]);
   if (!proj) return <div style={card}><div style={{color:"var(--color-text-warning)",fontWeight:500}}>No project assigned. Contact your QA lead.</div></div>;
   const doSwitchProj=(id)=>{setSelectedProjId(id);setPhase("testType");setTestKind("functional");setPerfForm(PERF_FORM_DEFAULT);setPerfResult(null);setPerfStoryId(null);setSid("");setSdata(null);setCases([]);setNeedsClarification([]);setCoverageSummary("");setResult(null);setExecLines([]);setScripts({web:""});setHasSaved(false);setUidForm({pageUrl:"",figmaUrl:"",figmaToken:"",selectedNodeId:""});setUidCases([]);setUidVisualResult(null);setUidFigmaImg(null);setUidScreenshotImg(null);setUidFigmaFrames([]);setUidJiraStatus({});setUidManualFigmaImg(null);setUidJiraTicketKey("");setUidStoryId(null);setUidAiotestStatus({importing:false,done:false,error:""});setUidTicketSearch("");setUidTicketResults([]);setUidTicketSearching(false);};
   const switchProj=(id)=>{
@@ -2401,7 +2559,6 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
   const delStep=(id,si)=>setCases(cs=>cs.map(c=>c.id===id?{...c,steps:(c.steps||[]).filter((_,i)=>i!==si)}:c));
   const reset=()=>{localStorage.removeItem(WS_SNAP);setPhase("project");setTestKind("functional");setPerfResult(null);setPerfForm(PERF_FORM_DEFAULT);setPerfChat(false);setSid("");setSdata(null);setPlatform("web");setCtypes([]);setReadyFilter("all");setGapData(null);setCases([]);setCasesByType({});setEditOn(false);setScripts({web:""});setProjFiles(null);setExecLines([]);setResult(null);setJKey(null);setBugDone(null);setShowBugForm(false);setFixed(false);setChat(false);setShowAddCase(false);setSelectedForScripts([]);setCoverageText("");setSessionBugs([]);setHasSaved(false);setAppUrl("");setScriptCache({});setUidForm({pageUrl:"",figmaUrl:"",figmaToken:"",selectedNodeId:""});setUidCases([]);setUidVisualResult(null);setUidFigmaImg(null);setUidManualFigmaImg(null);setUidJiraTicketKey("");setUidStoryId(null);setPerfStoryId(null);setUidJiraStatus({});setUidAiotestStatus({importing:false,done:false,error:""});setUidReportComment("");setUidCommentStatus({sending:false,done:false,error:""});setCurlDraft("");setCurlErr("");};
   const resetPerf=()=>{setPerfForm(PERF_FORM_DEFAULT);setPerfResult(null);setPerfStoryId(null);setPerfChat(false);setHasSaved(false);setPhase("perfTest");setCurlDraft("");setCurlErr("");};
-  const [saveModal,setSaveModal]=useState(null);
   // saveModal: null | {step:1,name:""} | {step:2,name:"",newCat:""}
   const openSaveModal=()=>{
     if(testKind==="ui-design"){
@@ -2492,24 +2649,6 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
     const lastPhase=snap.phase||(snap.coverageText?"coverage":snap.result?"result":snap.cases?.some(c=>c.status==="approved")?"review":"ctype");
     setPhase(lastPhase);
   };
-  React.useEffect(()=>{
-    if(onActiveSid){
-      if(testKind==="ui-design")onActiveSid(uidStoryId?"uid:"+uidStoryId:null);
-      else if(testKind==="non-functional")onActiveSid(perfStoryId?"perf:"+perfStoryId:null);
-      else onActiveSid(sid);
-    }
-  },[sid,testKind,uidStoryId,perfStoryId]);
-  React.useEffect(()=>{if(onProjChange)onProjChange(proj);},[selectedProjId]);
-  React.useEffect(()=>{if(restoreTarget){restoreStory(restoreTarget);if(clearRestore)clearRestore();}}, [restoreTarget]);
-  React.useEffect(()=>{if(resetTrigger>0)reset();},[resetTrigger]);
-  React.useEffect(()=>{
-    if(!sid||!sdata)return;
-    const existing=DB.savedStories.find(s=>s.sid===sid);
-    const snap={id:existing?.id||uid(),name:existing?.name||(sdata?.summary||sid),categoryId:existing?.categoryId||null,phase,sid,sdata,cases:[...cases],gapData,platform,ctypes:[...ctypes],scripts:{...scripts},result,sessionBugs:[...sessionBugs],coverageText,selectedForScripts:[...selectedForScripts],appUrl,savedAt:Date.now()};
-    if(existing){DB.savedStories=DB.savedStories.map(s=>s.sid===sid?snap:s);}
-    else{DB.savedStories.unshift(snap);}
-    saveDB();if(refreshSaved)refreshSaved();
-  },[phase,cases.length,result,coverageText]);
   const goToStep=i=>{
     const cur=WS_IDX[phase]??0; if(i>=cur||phase==="running") return;
     if(i===0){setPhase("project");return;}
@@ -3573,11 +3712,18 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
           const applyCurl=()=>{
             const parsed=parseCurlCommand(curlDraft);
             if(!parsed||!parsed.url){setCurlErr("Couldn't find a URL in that command.");return;}
-            const updates={apiUrl:parsed.url,method:parsed.method};
+            const authUpdates={};
+            if(parsed.bearer){authUpdates.authType="bearer";authUpdates.token=parsed.bearer;}
+            else if(parsed.basicUser){authUpdates.authType="basic";authUpdates.basicUsername=parsed.basicUser;authUpdates.basicPassword=parsed.basicPass;}
+            if(parsed.otherHeaders&&parsed.otherHeaders.length)authUpdates.customHeaders=[...(perfForm.customHeaders||[]),...parsed.otherHeaders];
+            if(perfForm.mode==="flow"){
+              const newStep={...PERF_STEP_DEFAULT(),method:parsed.method||"GET",url:parsed.url,requestBody:parsed.body||""};
+              s_({steps:[...(perfForm.steps||[]),newStep],...authUpdates});
+              setCurlErr("");
+              return;
+            }
+            const updates={apiUrl:parsed.url,method:parsed.method,...authUpdates};
             if(parsed.body)updates.requestBody=parsed.body;
-            if(parsed.bearer){updates.authType="bearer";updates.token=parsed.bearer;}
-            else if(parsed.basicUser){updates.authType="basic";updates.basicUsername=parsed.basicUser;updates.basicPassword=parsed.basicPass;}
-            if(parsed.otherHeaders&&parsed.otherHeaders.length)updates.customHeaders=[...(perfForm.customHeaders||[]),...parsed.otherHeaders];
             s_(updates);
             setCurlErr("");
           };
@@ -3585,7 +3731,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
             if(id==='history'&&perfHistory.length===0&&!perfHistoryLoading){
               setPerfHistoryLoading(true);
               const token=sessionStorage.getItem(MEMBER_TOKEN_KEY)||sessionStorage.getItem(SESSION_TOKEN_KEY)||"";
-              fetch(API_BASE+"/api/members/"+member.id+"/perf-history",{headers:{"X-Member-Token":token}}).then(r=>r.json()).then(d=>{setPerfHistory(Array.isArray(d.history)?d.history:[]);setPerfHistoryLoading(false);}).catch(()=>setPerfHistoryLoading(false));
+              fetch(API_BASE+"/api/members/"+member.id+"/perf-history",{headers:{"X-Member-Token":token}}).then(r=>r.json()).then(d=>{setPerfHistory(Array.isArray(d.results)?d.results:[]);setPerfHistoryLoading(false);}).catch(()=>setPerfHistoryLoading(false));
             }
             setPerfTab(id);
           }} style={{padding:"6px 16px",borderRadius:8,border:"1px solid "+(perfTab===id?"var(--color-text-info)":"var(--color-border-secondary)"),background:perfTab===id?"var(--color-background-info)":"transparent",cursor:"pointer",fontSize:13,fontWeight:perfTab===id?600:400,color:perfTab===id?"var(--color-text-info)":"var(--color-text-secondary)"}}>{lbl}</button>;
@@ -3596,11 +3742,12 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
             {perfHistoryLoading?<div style={{color:"var(--color-text-tertiary)",fontSize:13}}>Loading...</div>:perfHistory.length===0?<div style={{color:"var(--color-text-tertiary)",fontSize:13}}>No history yet. Run a test to see results here.</div>:
             <div style={{overflowX:"auto"}}>
               <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
-                <thead><tr style={{borderBottom:"1px solid var(--color-border-secondary)"}}>{["Name","Method","URL","VUs","Duration","p95 (ms)","Threshold","Pass/Fail","Date"].map(h=><th key={h} style={{padding:"6px 10px",textAlign:"left",fontWeight:600,color:"var(--color-text-secondary)"}}>{h}</th>)}</tr></thead>
-                <tbody>{perfHistory.map((h,i)=><tr key={i} style={{borderBottom:"1px solid var(--color-border-tertiary)"}}><td style={{padding:"6px 10px"}}>{h.testName||"—"}</td><td style={{padding:"6px 10px"}}>{h.method||"GET"}</td><td style={{padding:"6px 10px",maxWidth:120,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={h.apiUrl||""}>{h.apiUrl||"—"}</td><td style={{padding:"6px 10px"}}>{h.vus||"—"}</td><td style={{padding:"6px 10px"}}>{h.duration||"—"}</td><td style={{padding:"6px 10px"}}>{h.p95!=null?h.p95:"—"}</td><td style={{padding:"6px 10px"}}>{h.p95Threshold?"≤"+h.p95Threshold+"ms":"—"}</td><td style={{padding:"6px 10px"}}><span style={{color:h.passed?"var(--color-text-success)":"var(--color-text-danger)",fontWeight:600}}>{h.passed?"✓ Pass":"✗ Fail"}</span></td><td style={{padding:"6px 10px",whiteSpace:"nowrap"}}>{h.at?new Date(h.at).toLocaleDateString():"—"}</td></tr>)}</tbody>
+                <thead><tr style={{borderBottom:"1px solid var(--color-border-secondary)"}}>{["Name","Method","URL","VUs","Duration","p95 (ms)","Threshold","Pass/Fail","Date",""].map(h=><th key={h} style={{padding:"6px 10px",textAlign:"left",fontWeight:600,color:"var(--color-text-secondary)"}}>{h}</th>)}</tr></thead>
+                <tbody>{perfHistory.map((h,i)=><tr key={i} onClick={()=>setHistoryDetail(h)} style={{borderBottom:"1px solid var(--color-border-tertiary)",cursor:"pointer"}} onMouseEnter={e=>e.currentTarget.style.background="var(--color-background-secondary)"} onMouseLeave={e=>e.currentTarget.style.background="transparent"}><td style={{padding:"6px 10px"}}>{h.testName||"—"}</td><td style={{padding:"6px 10px"}}>{h.mode==="flow"?<Tag c="blue">Flow</Tag>:(h.method||"GET")}</td><td style={{padding:"6px 10px",maxWidth:120,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={h.mode==="flow"?`${h.stepCount||0} step(s)`:(h.apiUrl||"")}>{h.mode==="flow"?`${h.stepCount||0} step(s)`:(h.apiUrl||"—")}</td><td style={{padding:"6px 10px"}}>{h.vus||"—"}</td><td style={{padding:"6px 10px"}}>{h.duration||"—"}</td><td style={{padding:"6px 10px"}}>{h.metrics?.p95!=null?h.metrics.p95:"—"}</td><td style={{padding:"6px 10px"}}>{h.p95Threshold?"≤"+h.p95Threshold+"ms":"—"}</td><td style={{padding:"6px 10px"}}><span style={{color:h.passed?"var(--color-text-success)":"var(--color-text-danger)",fontWeight:600}}>{h.passed?"✓ Pass":"✗ Fail"}</span></td><td style={{padding:"6px 10px",whiteSpace:"nowrap"}}>{h.syncedAt?new Date(h.syncedAt).toLocaleDateString():"—"}</td><td style={{padding:"6px 10px"}}><button onClick={e=>{e.stopPropagation();setHistoryDetail(h);}} style={{...ghostBtn,padding:"3px 10px",fontSize:11}}>📄 Report</button></td></tr>)}</tbody>
               </table>
             </div>}
           </div>}
+          {historyDetail&&<PerfHistoryReportModal item={historyDetail} onClose={()=>setHistoryDetail(null)}/>}
           {perfTab==="test"&&<div style={{display:"flex",gap:20,alignItems:"flex-start"}}>
             {/* ── LEFT: form ── */}
             <div style={{flex:1,minWidth:0,display:"flex",flexDirection:"column",gap:0}}>
@@ -3630,12 +3777,26 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
                 </div>
               </div>
 
+              {/* Request Mode */}
+              <div style={card}>
+                <H2 style={{marginBottom:12}}>Request Mode</H2>
+                <div style={{display:"flex",gap:12}}>
+                  {[{v:"single",icon:"🎯",label:"Single Endpoint",desc:"Hammer one API with load."},{v:"flow",icon:"🔗",label:"API Flow",desc:"Run a sequence of APIs in order each iteration — e.g. login → use token → call protected API."}].map(o=>(
+                    <button key={o.v} onClick={()=>s_({mode:o.v})} style={{flex:1,padding:14,borderRadius:12,border:"2px solid "+(perfForm.mode===o.v?"var(--color-text-info)":"var(--color-border-secondary)"),background:perfForm.mode===o.v?"var(--color-background-info)":"var(--color-background-primary)",cursor:"pointer",textAlign:"left"}}>
+                      <div style={{fontSize:20,marginBottom:4}}>{o.icon}</div>
+                      <div style={{fontWeight:500,fontSize:14}}>{o.label}</div>
+                      <div style={{fontSize:12,color:"var(--color-text-secondary)",marginTop:2}}>{o.desc}</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
               {/* API Details */}
               <div style={card}>
-                <H2 style={{marginBottom:12}}>API Details</H2>
+                <H2 style={{marginBottom:12}}>{perfForm.mode==="flow"?"Flow Details":"API Details"}</H2>
                 <div style={{display:"flex",flexDirection:"column",gap:12}}>
                   <div><Lbl>Test Name *</Lbl><input style={inp} value={perfForm.testName} onChange={e=>s_({testName:e.target.value})} placeholder="e.g. Login API — Load Test"/></div>
-                  <div style={{display:"flex",gap:12}}>
+                  {perfForm.mode==="single"&&<div style={{display:"flex",gap:12}}>
                     <div style={{width:130}}>
                       <Lbl>Method</Lbl>
                       <select style={{...inp,width:"100%"}} value={perfForm.method} onChange={e=>s_({method:e.target.value})}>
@@ -3643,9 +3804,48 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
                       </select>
                     </div>
                     <div style={{flex:1}}><Lbl>API Endpoint URL *</Lbl><input style={inp} value={perfForm.apiUrl} onChange={e=>s_({apiUrl:e.target.value})} placeholder="https://api.example.com/endpoint or .../items/{{itemId}}"/></div>
-                  </div>
+                  </div>}
+                  {perfForm.mode==="flow"&&<div>
+                    <Lbl>Steps <span style={{fontWeight:400,color:"var(--color-text-tertiary)"}}>— run in order, once per iteration. A step can extract a field from its JSON response into a variable the later steps reuse via {"{{name}}"}.</span></Lbl>
+                    <div style={{display:"flex",flexDirection:"column",gap:10,marginTop:8}}>
+                      {(perfForm.steps||[]).map((st,i)=>{
+                        const upd=patch=>s_({steps:perfForm.steps.map((s2,j)=>j===i?{...s2,...patch}:s2)});
+                        const move=dir=>{
+                          const j=i+dir; if(j<0||j>=perfForm.steps.length)return;
+                          const next=[...perfForm.steps]; [next[i],next[j]]=[next[j],next[i]]; s_({steps:next});
+                        };
+                        return <div key={st.id} style={{border:"1px solid var(--color-border-secondary)",borderRadius:10,padding:12,background:"var(--color-background-secondary)"}}>
+                          <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:8}}>
+                            <span style={{fontSize:12,fontWeight:600,color:"var(--color-text-tertiary)",flexShrink:0}}>#{i+1}</span>
+                            <input style={{...inp,flex:1}} value={st.name} placeholder={`Step name (optional), e.g. "Login"`} onChange={e=>upd({name:e.target.value})}/>
+                            <button onClick={()=>move(-1)} disabled={i===0} style={{...ghostBtn,padding:"0 8px",opacity:i===0?0.35:1,cursor:i===0?"not-allowed":"pointer"}} title="Move up">↑</button>
+                            <button onClick={()=>move(1)} disabled={i===perfForm.steps.length-1} style={{...ghostBtn,padding:"0 8px",opacity:i===perfForm.steps.length-1?0.35:1,cursor:i===perfForm.steps.length-1?"not-allowed":"pointer"}} title="Move down">↓</button>
+                            <button onClick={()=>s_({steps:perfForm.steps.filter((_,j)=>j!==i)})} style={{...ghostBtn,padding:"0 8px"}} title="Remove step">✕</button>
+                          </div>
+                          <div style={{display:"flex",gap:8,marginBottom:8}}>
+                            <div style={{width:120}}>
+                              <select style={{...inp,width:"100%"}} value={st.method} onChange={e=>upd({method:e.target.value})}>
+                                {["GET","POST","PUT","PATCH","DELETE"].map(m=><option key={m}>{m}</option>)}
+                              </select>
+                            </div>
+                            <input style={{...inp,flex:1}} value={st.url} placeholder="https://api.example.com/endpoint or .../items/{{itemId}}" onChange={e=>upd({url:e.target.value})}/>
+                            <input style={{...inpN,width:90}} type="number" value={st.expectedStatus} title="Expected status code" onChange={e=>upd({expectedStatus:parseInt(e.target.value)||200})}/>
+                          </div>
+                          {["POST","PUT","PATCH"].includes(st.method)&&<textarea style={{...inp,width:"100%",height:56,fontFamily:"monospace",fontSize:12,resize:"vertical",marginBottom:8}} value={st.requestBody} onChange={e=>upd({requestBody:e.target.value})} placeholder='Request body (JSON), e.g. {"key":"{{value}}"}'/>}
+                          <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                            <span style={{fontSize:11,color:"var(--color-text-tertiary)",flexShrink:0}}>Save response field as variable:</span>
+                            <input style={{...inp,flex:1}} value={st.extractPath} placeholder="field path, e.g. data.token or id" onChange={e=>upd({extractPath:e.target.value})}/>
+                            <span style={{fontSize:11,color:"var(--color-text-tertiary)"}}>→ {"{{"}</span>
+                            <input style={{...inp,width:120}} value={st.extractVar} placeholder="varName" onChange={e=>upd({extractVar:e.target.value})}/>
+                            <span style={{fontSize:11,color:"var(--color-text-tertiary)"}}>{"}}"}</span>
+                          </div>
+                        </div>;
+                      })}
+                    </div>
+                    <button onClick={()=>s_({steps:[...(perfForm.steps||[]),PERF_STEP_DEFAULT()]})} style={{...ghostBtn,fontSize:12,marginTop:8}}>+ Add Step</button>
+                  </div>}
                   <div>
-                    <Lbl>Configurable Variables <span style={{fontWeight:400,color:"var(--color-text-tertiary)"}}>— reference as {"{{name}}"} anywhere in the URL above; each becomes overridable per run</span></Lbl>
+                    <Lbl>Configurable Variables <span style={{fontWeight:400,color:"var(--color-text-tertiary)"}}>— reference as {"{{name}}"} anywhere {perfForm.mode==="flow"?"in a step's URL/body above":"in the URL above"}; each becomes overridable per run</span></Lbl>
                     {(perfForm.variables||[]).map((v,i)=>(
                       <div key={i} style={{display:"flex",gap:8,marginTop:6}}>
                         <input style={{...inp,flex:1}} value={v.name} placeholder="e.g. auctionItemId" onChange={e=>{
@@ -3659,7 +3859,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
                     ))}
                     <button onClick={()=>s_({variables:[...(perfForm.variables||[]),{name:"",value:""}]})} style={{...ghostBtn,fontSize:12,marginTop:8}}>+ Add Variable</button>
                   </div>
-                  <div style={{maxWidth:200}}><Lbl>Expected Status Code</Lbl><input style={inpN} type="number" value={perfForm.expectedStatus} onChange={e=>s_({expectedStatus:parseInt(e.target.value)||200})}/></div>
+                  {perfForm.mode==="single"&&<div style={{maxWidth:200}}><Lbl>Expected Status Code</Lbl><input style={inpN} type="number" value={perfForm.expectedStatus} onChange={e=>s_({expectedStatus:parseInt(e.target.value)||200})}/></div>}
                   <div>
                     <Lbl>Authentication</Lbl>
                     <div style={{display:"flex",gap:8,marginTop:6}}>
@@ -3718,7 +3918,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
                     ))}
                     <button onClick={()=>s_({customHeaders:[...(perfForm.customHeaders||[]),{name:"",value:""}]})} style={{...ghostBtn,fontSize:12,marginTop:8}}>+ Add Header</button>
                   </div>
-                  {["POST","PUT","PATCH"].includes(perfForm.method)&&<div><Lbl>Request Body (JSON) <span style={{fontWeight:400,color:"var(--color-text-tertiary)"}}>— can reference {"{{variables}}"} too</span></Lbl><textarea style={{...inp,height:76,fontFamily:"monospace",resize:"vertical"}} value={perfForm.requestBody} onChange={e=>s_({requestBody:e.target.value})} placeholder='{"key":"{{value}}"}'/></div>}
+                  {perfForm.mode==="single"&&["POST","PUT","PATCH"].includes(perfForm.method)&&<div><Lbl>Request Body (JSON) <span style={{fontWeight:400,color:"var(--color-text-tertiary)"}}>— can reference {"{{variables}}"} too</span></Lbl><textarea style={{...inp,height:76,fontFamily:"monospace",resize:"vertical"}} value={perfForm.requestBody} onChange={e=>s_({requestBody:e.target.value})} placeholder='{"key":"{{value}}"}'/></div>}
                 </div>
               </div>
 
@@ -3753,7 +3953,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
               </div>
 
               <div style={{display:"flex",gap:12,alignItems:"center"}}>
-                <Btn v="primary" onClick={doRunPerfTest} disabled={!perfForm.testName.trim()||!perfForm.apiUrl.trim()||(perfForm.authType==="csv"&&(!perfForm.csvUsers||perfForm.csvUsers.length===0))}>▶ Start Test</Btn>
+                <Btn v="primary" onClick={doRunPerfTest} disabled={!perfForm.testName.trim()||(perfForm.mode==="flow"?perfFlowStepsValid().length===0:!perfForm.apiUrl.trim())||(perfForm.authType==="csv"&&(!perfForm.csvUsers||perfForm.csvUsers.length===0))}>▶ Start Test</Btn>
                 <button onClick={()=>setPhase("testType")} style={{...ghostBtn,fontSize:13}}>← Back</button>
               </div>
             </div>
@@ -3765,11 +3965,15 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
                 {(()=>{
                   const namedVars=(perfForm.variables||[]).filter(v=>v.name.trim());
                   const namedHeaders=(perfForm.customHeaders||[]).filter(h=>h.name.trim());
+                  const isFlowMode=perfForm.mode==="flow";
+                  const validSteps=(perfForm.steps||[]).filter(s=>s.url&&s.url.trim());
                   return [
                   {label:"Type",val:<Tag c={isStress?"red":"blue"}>{isStress?"Stress":"Load"}</Tag>},
                   {label:"Name",val:perfForm.testName||"—"},
-                  {label:"Method",val:<Tag c="blue">{perfForm.method}</Tag>},
-                  {label:"URL",val:<span style={{fontSize:11,wordBreak:"break-all"}}>{perfForm.apiUrl||"—"}</span>},
+                  ...(isFlowMode
+                    ?[{label:"Flow",val:validSteps.length?`${validSteps.length} step(s)`:"—"}]
+                    :[{label:"Method",val:<Tag c="blue">{perfForm.method}</Tag>},
+                      {label:"URL",val:<span style={{fontSize:11,wordBreak:"break-all"}}>{perfForm.apiUrl||"—"}</span>}]),
                   {label:"Variables",val:namedVars.length?namedVars.map(v=>v.name).join(", "):"—"},
                   {label:"Custom Headers",val:namedHeaders.length?namedHeaders.map(h=>h.name).join(", "):"—"},
                   {label:"Auth",val:perfForm.authType==="bearer"?"🔑 Bearer":perfForm.authType==="basic"?"👤 Basic":perfForm.authType==="csv"?("🔄 Dynamic ("+(perfForm.csvUsers?.length||0)+" users)"):"🔓 None"},
@@ -3788,6 +3992,13 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
                 })()}
                 {isStress&&<div style={{marginTop:8,fontSize:12,color:"var(--color-text-secondary)",background:"var(--color-background-warning)",padding:"8px 10px",borderRadius:8}}>
                   🔥 Steps: {Math.ceil(perfForm.vus*.25)} → {Math.ceil(perfForm.vus*.5)} → {Math.ceil(perfForm.vus*.75)} → {perfForm.vus} VUs
+                </div>}
+                {perfForm.mode==="flow"&&(perfForm.steps||[]).filter(s=>s.url&&s.url.trim()).length>0&&<div style={{marginTop:8,fontSize:11,background:"var(--color-background-tertiary)",border:"1px solid var(--color-border-tertiary)",borderRadius:8,padding:"8px 10px"}}>
+                  {(perfForm.steps||[]).filter(s=>s.url&&s.url.trim()).map((s,i)=><div key={s.id} style={{padding:"3px 0",display:"flex",gap:6,alignItems:"baseline"}}>
+                    <span style={{color:"var(--color-text-tertiary)",flexShrink:0}}>{i+1}.</span>
+                    <span style={{fontWeight:600,flexShrink:0}}>{s.method}</span>
+                    <span style={{wordBreak:"break-all"}}>{s.name?.trim()||s.url}</span>
+                  </div>)}
                 </div>}
               </div>
             </div>
@@ -3837,6 +4048,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
                 ))}
               </div>
             </div>
+            <FailuresList failures={perfResult.failures}/>
             {/* Actions */}
             <div style={{display:"flex",gap:12,marginTop:4}}>
               <Btn v="primary" onClick={()=>setPhase("perfTest")}>↩ Run Again</Btn>
@@ -4960,7 +5172,7 @@ function App() {
   },[]);
   if(!user) return <LoginPage onLogin={handleLogin}/>;
   const adminNav=[{sec:"Overview",items:[{id:"dashboard",label:"Dashboard",icon:"📊"}]},{sec:"Manage",items:[{id:"members",label:"Members",icon:"👥"},{id:"projects",label:"Projects",icon:"📁"},{id:"assign",label:"Assignments",icon:"🔗"}]}];
-  const memberNav=[{sec:"Work",items:[{id:"workspace",label:"Workspace",icon:"🖥"}]}];
+  const memberNav=[{sec:"Work",items:[{id:"workspace",label:"Workspace",icon:"🖥"},{id:"history",label:"History",icon:"🕐"}]}];
   const nav=user.role==="admin"?adminNav:memberNav;
   return <div style={{fontFamily:"-apple-system,BlinkMacSystemFont,'Segoe UI','Inter',sans-serif",color:"var(--color-text-primary)",minHeight:"100vh",backgroundColor:"#f5f6f8",backgroundImage:"radial-gradient(circle farthest-side at 50% 50%, transparent 40%, #f5f6f8 100%), url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='22' height='22'%3E%3Crect x='9' y='9' width='4' height='4' fill='rgba(120,130,140,0.10)'/%3E%3C/svg%3E\")",backgroundSize:"auto, 22px 22px",backgroundPosition:"center, center",backgroundRepeat:"no-repeat, repeat",backgroundAttachment:"fixed, fixed",display:"flex",flexDirection:"column"}}>
     {showConfig&&user?.role==="member"&&<MemberConfigDialog memberId={user.id} onClose={()=>setShowConfig(false)}/>}
@@ -5093,6 +5305,7 @@ function App() {
       {user.role==="admin"&&page==="projects"&&<ProjectsPage onBack={()=>setPage("dashboard")}/>}
       {user.role==="admin"&&page==="assign"&&<AssignmentsPage onBack={()=>setPage("dashboard")}/>}
       {user.role==="member"&&page==="workspace"&&<Workspace member={user.member} refreshSaved={refreshSaved} restoreTarget={restoreTarget} clearRestore={()=>setRestoreTarget(null)} onActiveSid={setActiveSid} onProjChange={setActiveProj} resetTrigger={resetTrigger}/>}
+      {user.role==="member"&&page==="history"&&<MemberHistoryPage member={user.member}/>}
     </div>
   </div>;
 }
