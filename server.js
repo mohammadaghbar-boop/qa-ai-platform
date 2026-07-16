@@ -15,6 +15,7 @@
 // Notes   :
 //   - Port 3456 (override with PORT env var)
 //   - k6 is bundled inside Docker — no separate install needed
+//   - newman must be installed globally (npm install -g newman) for API/Postman test execution
 //   - Sessions are in-memory — if container restarts, members must log out and back in
 //   - Per-member credentials (Jira, etc.) are managed inside the app
 //   - Optional .env (see .env.example) sets ANTHROPIC_API_KEY for non-interactive Claude CLI billing
@@ -1474,6 +1475,89 @@ function runK6(scriptPath) {
   });
 }
 
+/* ── Postman Collection Runner (Newman) ─────────────────────────────────── */
+// Follows the same shape as runPlaywrightTests/runK6: spawn the CLI tool, stream stdout live,
+// parse the JSON reporter, normalise to { lines, passed, failed, error }. newman must be installed
+// globally (npm install -g newman). Same shell:true path-quoting caveat as the Playwright runner.
+function runNewman(collection, onLine) {
+  const emit = onLine || (() => {});
+  return new Promise((resolve) => {
+    const runId   = crypto.randomBytes(16).toString('hex');
+    const colPath = path.join(os.tmpdir(), 'qa_newman_' + runId + '.json');
+    const outPath = path.join(os.tmpdir(), 'qa_newman_' + runId + '.out.json');
+    const q = p => (p.includes(' ') ? '"' + p + '"' : p);
+    const cleanup = () => { try { fs.unlinkSync(colPath); } catch {} try { fs.unlinkSync(outPath); } catch {} };
+
+    try { fs.writeFileSync(colPath, JSON.stringify(collection || {})); }
+    catch (e) { resolve({ lines: ['Error writing collection: ' + e.message], passed: [], failed: [], error: e.message }); return; }
+
+    // Pre-check: verify newman is reachable (fast fail, clean not_installed — reliable even on
+    // Windows where shell:true otherwise swallows the ENOENT error event).
+    const { spawnSync } = require('child_process');
+    const pre = spawnSync('newman', ['--version'], { shell: true, stdio: ['ignore', 'pipe', 'pipe'], timeout: 15000 });
+    if (pre.status !== 0 || pre.error) { cleanup(); resolve({ lines: [], passed: [], failed: [], error: 'not_installed' }); return; }
+
+    const lines = [];
+    const pushLine = l => { lines.push(l); emit(l); };
+    pushLine('▶ Launching Newman…');
+    const proc = spawn('newman', ['run', q(colPath), '--reporters', 'cli,json', '--reporter-json-export', q(outPath), '--no-color'],
+      { shell: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    const stdoutRef = { buf: '' }, stderrRef = { buf: '' };
+    const flush = (ref, chunk) => {
+      ref.buf += chunk;
+      const parts = ref.buf.split('\n'); ref.buf = parts.pop();
+      for (const l of parts) if (l.trim()) pushLine(l.replace(/\x1b\[[0-9;]*m/g, ''));
+    };
+    proc.stdout.on('data', d => flush(stdoutRef, d.toString()));
+    proc.stderr.on('data', d => flush(stderrRef, d.toString()));
+
+    const killProc = () => {
+      try {
+        if (process.platform === 'win32') spawn('taskkill', ['/F', '/T', '/PID', String(proc.pid)], { shell: true, stdio: 'ignore' });
+        else proc.kill('SIGTERM');
+      } catch {}
+    };
+    const timer = setTimeout(() => {
+      killProc(); cleanup();
+      pushLine('✗ Test run timed out after 5 minutes');
+      resolve({ lines, passed: [], failed: [], error: 'timeout' });
+    }, 300000);
+
+    proc.on('close', () => {
+      clearTimeout(timer);
+      if (stdoutRef.buf.trim()) pushLine(stdoutRef.buf.replace(/\x1b\[[0-9;]*m/g, ''));
+      if (stderrRef.buf.trim()) pushLine(stderrRef.buf.replace(/\x1b\[[0-9;]*m/g, ''));
+      let passed = [], failed = [], gotReport = false;
+      try {
+        const out = JSON.parse(fs.readFileSync(outPath, 'utf8'));
+        gotReport = true;
+        for (const ex of (out.run?.executions || [])) {
+          const title = ex.item?.name || 'Request';
+          const failedAssertions = (ex.assertions || []).filter(a => a.error);
+          if (ex.requestError) {
+            const re = ex.requestError;
+            const reMsg = typeof re === 'string' ? re : (re.message || re.code || JSON.stringify(re));
+            failed.push({ title, error: ('Request failed: ' + reMsg).slice(0, 300) });
+          } else if (failedAssertions.length > 0) {
+            failed.push({ title, error: (failedAssertions[0].error?.message || 'Assertion failed').slice(0, 300) });
+          } else {
+            passed.push(title);
+          }
+        }
+      } catch (e) { /* handled below */ }
+      cleanup();
+      if (!gotReport) { resolve({ lines: [...lines, '✗ Newman produced no report output.'], passed: [], failed: [], error: 'no_output' }); return; }
+      pushLine(''); pushLine('Results: ' + passed.length + ' passed, ' + failed.length + ' failed');
+      resolve({ lines, passed, failed, error: null });
+    });
+
+    proc.on('error', e => {
+      clearTimeout(timer); cleanup();
+      resolve({ lines: [], passed: [], failed: [], error: e.code === 'ENOENT' ? 'not_installed' : e.message });
+    });
+  });
+}
+
 /* ── Member token validator helper ─────────────────────────────────────── */
 const validateMemberToken = (req, expectedId) => {
   const token = req.headers['x-member-token'];
@@ -1669,6 +1753,23 @@ const server = http.createServer((req, res) => {
       try {
         const parsed = JSON.parse(body);
         const result = await runPlaywrightTests(parsed.files || {}, (line) => {
+          res.write(JSON.stringify({ type: 'line', line }) + '\n');
+        });
+        res.write(JSON.stringify({ type: 'done', ...result }) + '\n');
+      } catch (e) {
+        res.write(JSON.stringify({ type: 'done', error: e.message, lines: [], passed: [], failed: [] }) + '\n');
+      }
+      res.end();
+      return;
+    }
+
+    /* ── /api/postman/run (requires session) — streams NDJSON like /api/playwright/run ── */
+    if (req.method === 'POST' && req.url === '/api/postman/run') {
+      if (!getSession(req)) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Authentication required' })); return; }
+      res.writeHead(200, { 'Content-Type': 'application/x-ndjson', 'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no' });
+      try {
+        const parsed = JSON.parse(body);
+        const result = await runNewman(parsed.collection || {}, (line) => {
           res.write(JSON.stringify({ type: 'line', line }) + '\n');
         });
         res.write(JSON.stringify({ type: 'done', ...result }) + '\n');
