@@ -21,6 +21,8 @@
     min-height: 100vh;
   }
   :root {
+    --sitech-navy: #1F4E9C;
+    --sitech-navy-tint: rgba(31,78,156,0.09);
     --color-background-primary: #ffffff;
     --color-background-secondary: #f8fafc;
     --color-background-tertiary: #f1f5f9;
@@ -576,6 +578,18 @@ function Tag({c="blue",children}) {
   return <span style={{display:"inline-block",padding:"3px 10px",borderRadius:20,fontSize:12,fontWeight:500,background:bg,color:tx,border:"1px solid "+br}}>{children}</span>;
 }
 const Lbl = ({children}) => <label style={{fontSize:13,fontWeight:500,color:"var(--color-text-secondary)",marginBottom:5,display:"block"}}>{children}</label>;
+const Logo = ({size=32,withText=true,textSize=22,showSub=true}) => <div style={{display:"flex",alignItems:"center",gap:10}}>
+  <svg width={size} height={Math.round(size*0.833)} viewBox="0 0 108 90" style={{flexShrink:0}}>
+    <rect x="0" y="0" width="62" height="62" rx="14" fill="#90AAD9"/>
+    <rect x="20" y="20" width="62" height="62" rx="14" fill="#4472C4"/>
+    <rect x="38" y="47" width="66" height="40" rx="14" fill="#1F4E9C"/>
+  </svg>
+  {withText&&<div style={{display:"flex",flexDirection:"column",lineHeight:1.05}}>
+    <span style={{fontSize:textSize,fontWeight:700,letterSpacing:"-0.01em",color:"#16264F"}}>ITQAN</span>
+    {showSub&&<span style={{fontSize:Math.max(8,Math.round(textSize*0.32)),fontWeight:600,letterSpacing:"0.18em",color:"#4A76CF"}}>PLATFORM</span>}
+  </div>}
+</div>;
+const BackLink = ({onClick,children="Back to Dashboard"}) => <div onClick={onClick} style={{display:"inline-flex",alignItems:"center",gap:7,cursor:"pointer",color:"var(--sitech-navy)",fontSize:14,fontWeight:500,marginBottom:12}}><span style={{fontSize:22,lineHeight:1}}>←</span>{children}</div>;
 const H1 = ({children}) => <div style={{fontSize:21,fontWeight:700,marginBottom:16,letterSpacing:"-0.01em"}}>{children}</div>;
 const H2 = ({children}) => <div style={{fontSize:15,fontWeight:600,marginBottom:12}}>{children}</div>;
 
@@ -660,9 +674,10 @@ const ONE_WEEK=7*24*60*60*1000;
 function NotifBell({userId}) {
   const [open,setOpen]=useState(false);
   const [,tick]=useState(0);
-  const [pos,setPos]=useState({bottom:0,left:0});
+  const [pos,setPos]=useState({top:0,left:0});
   const [shown,setShown]=useState(NOTIF_PAGE);
   const btnRef=useRef(null);
+  const panelRef=useRef(null);
   const now=Date.now();
   const thirtyDaysAgo = now - 30 * 24 * 60 * 60 * 1000;
   const rawNotifs = DB.notifs.filter(n => n.to === userId);
@@ -673,15 +688,21 @@ function NotifBell({userId}) {
   const visible=withinWeek.slice(0,shown);
   const hasMore=withinWeek.length>shown;
   const toggle=()=>{
-    if(btnRef.current){const r=btnRef.current.getBoundingClientRect();const panelW=300;const left=Math.min(r.right+8,window.innerWidth-panelW-8);setPos({bottom:window.innerHeight-r.bottom+4,left});}
+    if(btnRef.current){const r=btnRef.current.getBoundingClientRect();const panelW=300;const left=Math.max(8,Math.min(r.right-panelW,window.innerWidth-panelW-8));setPos({top:r.bottom+6,left});}
     if(!open) setShown(NOTIF_PAGE);
     setOpen(o=>!o);tick(x=>x+1);
   };
+  useEffect(()=>{
+    if(!open)return;
+    const onDocClick=e=>{ if(btnRef.current?.contains(e.target)||panelRef.current?.contains(e.target))return; setOpen(false); };
+    document.addEventListener("mousedown",onDocClick);
+    return ()=>document.removeEventListener("mousedown",onDocClick);
+  },[open]);
   return <div style={{position:"relative"}}>
     <button ref={btnRef} onClick={toggle} style={{padding:"6px 10px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",position:"relative",color:"var(--color-text-secondary)",fontSize:14}}>
       🔔{unread.length>0&&<span style={{position:"absolute",top:-6,right:-6,background:"var(--color-text-danger)",color:"#fff",borderRadius:20,padding:"0 5px",fontSize:10,minWidth:16,textAlign:"center"}}>{unread.length}</span>}
     </button>
-    {open&&<div style={{position:"fixed",left:pos.left,bottom:pos.bottom,width:300,background:"var(--color-background-secondary)",border:"1px solid var(--color-border-secondary)",borderRadius:12,zIndex:9999,boxShadow:"0 8px 24px rgba(0,0,0,.14)"}}>
+    {open&&<div ref={panelRef} style={{position:"fixed",left:pos.left,top:pos.top,width:300,maxHeight:"70vh",display:"flex",flexDirection:"column",background:"var(--color-background-secondary)",border:"1px solid var(--color-border-secondary)",borderRadius:12,zIndex:9999,boxShadow:"0 8px 24px rgba(0,0,0,.14)"}}>
       <div style={{padding:"12px 16px",borderBottom:"1px solid var(--color-border-tertiary)",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
         <div style={{fontWeight:500,fontSize:14}}>Notifications <span style={{fontSize:11,fontWeight:400,color:"var(--color-text-tertiary)"}}>· last 7 days</span></div>
         {unread.length>0&&<button onClick={()=>{unread.forEach(n=>n.read=true);saveDB();tick(x=>x+1);}} style={{padding:"3px 8px",borderRadius:6,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:12,color:"var(--color-text-secondary)"}}>Mark all read</button>}
@@ -952,7 +973,11 @@ function PerfAIChat({proj,perfForm,perfResult}) {
     const hist=msgs.map(m=>({role:m.role==="assistant"?"assistant":"user",content:m.text}));
     try{
       const authDesc=perfForm.authType==="bearer"?"Bearer Token":perfForm.authType==="basic"?"Basic Auth":perfForm.authType==="csv"?`Dynamic/CSV (${perfForm.csvUsers?.length||0} users)`:"None";
-      const configCtx=`TEST CONFIGURATION:\n  Name: ${perfForm.testName||"—"}\n  Type: ${perfForm.testType==="stress"?"Stress Test":"Load Test"}\n  Method: ${perfForm.method} ${perfForm.apiUrl||"—"}\n  Auth: ${authDesc}\n  Virtual Users: ${perfForm.vus}${perfForm.testType==="stress"?" (max)":""}\n  Duration: ${perfForm.duration}${perfForm.testType==="stress"?" per step":""}\n  Ramp: ${perfForm.ramp}\n  p95 Threshold: ${perfForm.p95Threshold}ms`;
+      const isFlow=perfForm.mode==="flow";
+      const targetCtx=isFlow
+        ?`Flow — ${(perfForm.steps||[]).filter(s=>s.url&&s.url.trim()).map((s,i)=>`\n    ${i+1}. ${s.method} ${s.url}${s.extractVar?` (extracts "${s.extractPath||""}" into {{${s.extractVar}}})`:""}`).join("")}`
+        :`Method: ${perfForm.method} ${perfForm.apiUrl||"—"}`;
+      const configCtx=`TEST CONFIGURATION:\n  Name: ${perfForm.testName||"—"}\n  Type: ${perfForm.testType==="stress"?"Stress Test":"Load Test"}\n  ${targetCtx}\n  Auth: ${authDesc}\n  Virtual Users: ${perfForm.vus}${perfForm.testType==="stress"?" (max)":""}\n  Duration: ${perfForm.duration}${perfForm.testType==="stress"?" per step":""}\n  Ramp: ${perfForm.ramp}\n  p95 Threshold: ${perfForm.p95Threshold}ms`;
       const resultCtx=perfResult?`\n\nTEST RESULTS:\n  Status: ${perfResult.passed?"PASSED ✅":"FAILED ❌"}\n  Total Requests: ${perfResult.metrics?.totalRequests||0}\n  RPS: ${perfResult.metrics?.rps||0}\n  Avg: ${perfResult.metrics?.avgDuration||0}ms | Min: ${perfResult.metrics?.minDuration||0}ms | Max: ${perfResult.metrics?.maxDuration||0}ms\n  p50: ${perfResult.metrics?.p50||0}ms | p90: ${perfResult.metrics?.p90||0}ms | p95: ${perfResult.metrics?.p95||0}ms | p99: ${perfResult.metrics?.p99||0}ms\n  Error Rate: ${perfResult.metrics?.errorRate||0}%`:"";
       const sys=`You are a performance testing expert embedded in the QA AI Platform. Help the user understand and improve their API performance tests. Project: "${proj?.name||"—"}"\n\n=== CURRENT TEST ===\n${configCtx}${resultCtx}\n\nBe concise and practical. Focus on performance testing best practices, k6 insights, and actionable recommendations based on the data above.`;
       const r=await callAI([...hist,{role:"user",content:u}],sys,2000);
@@ -977,8 +1002,131 @@ function PerfAIChat({proj,perfForm,perfResult}) {
   </div>;
 }
 
+/* ─── Perf Failures List — grouped/counted so identical failures show once ── */
+function FailuresList({failures}) {
+  if(!failures||!failures.length)return null;
+  const total=failures.reduce((a,f)=>a+(f.count||1),0);
+  return <div style={{...card,border:"1px solid var(--color-text-danger)"}}>
+    <H2 style={{marginBottom:12}}>⚠ Failures — {total} total, {failures.length} distinct</H2>
+    <div style={{overflowX:"auto"}}>
+      <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+        <thead><tr style={{borderBottom:"1px solid var(--color-border-secondary)"}}>{["Step","Expected","Actual","Error","Count"].map(h=><th key={h} style={{padding:"6px 10px",textAlign:"left",fontWeight:600,color:"var(--color-text-secondary)"}}>{h}</th>)}</tr></thead>
+        <tbody>{failures.map((f,i)=><tr key={i} style={{borderBottom:"1px solid var(--color-border-tertiary)"}}>
+          <td style={{padding:"6px 10px"}}>{f.step||"—"}</td>
+          <td style={{padding:"6px 10px"}}><Tag c="blue">{f.expectedStatus}</Tag></td>
+          <td style={{padding:"6px 10px"}}><Tag c="red">{f.actualStatus||"—"}{f.statusText?" "+f.statusText:""}</Tag></td>
+          <td style={{padding:"6px 10px",maxWidth:280,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={f.error||""}>{f.error||"—"}</td>
+          <td style={{padding:"6px 10px",fontWeight:600}}>{f.count}</td>
+        </tr>)}</tbody>
+      </table>
+    </div>
+  </div>;
+}
+
+/* ─── Perf History Report Modal ───────────────────────────────────────────── */
+function PerfHistoryReportModal({item,onClose}) {
+  const ghostBtn={padding:"9px 20px",borderRadius:10,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:14,fontWeight:500,color:"var(--color-text-secondary)"};
+  const m=item.metrics||{};
+  const pass=item.passed;
+  const over=item.p95Threshold&&m.p95>item.p95Threshold;
+  const isFlow=item.mode==="flow";
+  return <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,0.5)",zIndex:2000,display:"flex",alignItems:"center",justifyContent:"center",backdropFilter:"blur(2px)"}} onClick={onClose}>
+    <div style={{background:"var(--color-background-primary)",borderRadius:16,padding:28,width:640,maxWidth:"92vw",maxHeight:"85vh",overflowY:"auto",boxShadow:"var(--shadow-lg)",border:"1px solid var(--color-border-tertiary)",animation:"qa-fade-up 0.22s ease both"}} onClick={e=>e.stopPropagation()}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:16}}>
+        <div>
+          <div style={{fontWeight:700,fontSize:18}}>{item.testName||"—"}</div>
+          <div style={{fontSize:12,color:"var(--color-text-tertiary)",marginTop:2}}>{item.testType==="stress"?"Stress":"Load"} Test · {isFlow?`API Flow (${item.stepCount||(item.steps||[]).length} steps)`:"Single Endpoint"} · {item.syncedAt?new Date(item.syncedAt).toLocaleString():"—"}</div>
+        </div>
+        <button onClick={onClose} style={{...ghostBtn,padding:"4px 10px"}}>✕</button>
+      </div>
+
+      <div style={{padding:"12px 16px",borderRadius:10,background:pass?"var(--color-background-success)":"var(--color-background-danger)",border:"1px solid "+(pass?"var(--color-text-success)":"var(--color-text-danger)"),marginBottom:16,display:"flex",alignItems:"center",gap:12}}>
+        <span style={{fontSize:26}}>{pass?"✅":"❌"}</span>
+        <div style={{fontWeight:600,fontSize:14}}>{pass?"All thresholds passed":"Test failed — thresholds exceeded"}</div>
+      </div>
+
+      <div style={{display:"flex",flexWrap:"wrap",gap:16,marginBottom:16,fontSize:12}}>
+        <div><span style={{color:"var(--color-text-tertiary)"}}>Virtual Users: </span><b>{item.vus||"—"}</b></div>
+        <div><span style={{color:"var(--color-text-tertiary)"}}>Duration: </span><b>{item.duration||"—"}</b></div>
+        {item.ramp&&<div><span style={{color:"var(--color-text-tertiary)"}}>Ramp: </span><b>{item.ramp}</b></div>}
+        <div><span style={{color:"var(--color-text-tertiary)"}}>p95 Threshold: </span><b>{item.p95Threshold||"—"}ms</b></div>
+      </div>
+
+      {!isFlow&&<div style={{marginBottom:16,fontSize:12}}>
+        <span style={{color:"var(--color-text-tertiary)"}}>Endpoint: </span>
+        <Tag c="blue">{item.method||"GET"}</Tag> <span style={{wordBreak:"break-all"}}>{item.apiUrl||"—"}</span>
+      </div>}
+      {isFlow&&(item.steps||[]).length>0&&<div style={{marginBottom:16}}>
+        <div style={{fontSize:12,color:"var(--color-text-tertiary)",marginBottom:6}}>Flow steps:</div>
+        <div style={{fontSize:12,background:"var(--color-background-tertiary)",border:"1px solid var(--color-border-tertiary)",borderRadius:8,padding:"8px 12px"}}>
+          {item.steps.map((s,i)=><div key={i} style={{padding:"3px 0",display:"flex",gap:6,alignItems:"center"}}>
+            <span style={{color:"var(--color-text-tertiary)",flexShrink:0}}>{i+1}.</span>
+            <span style={{fontWeight:600,flexShrink:0}}>{s.method}</span>
+            <span style={{wordBreak:"break-all"}}>{s.name||s.url}</span>
+            {s.extractVar&&<Tag c="green">{"→ {{"}{s.extractVar}{"}}"}</Tag>}
+          </div>)}
+        </div>
+      </div>}
+
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(140px,1fr))",gap:10,marginBottom:16}}>
+        {[
+          {icon:"📊",label:"Total Requests",val:(m.totalRequests||0).toLocaleString()},
+          {icon:"⚡",label:"Requests / sec",val:m.rps??0},
+          {icon:"⏱",label:"p95 Latency",val:`${m.p95??0} ms`,warn:over},
+          {icon:"⚠️",label:"Error Rate",val:`${m.errorRate??0}%`,warn:m.errorRate>5},
+          {icon:"📈",label:"Avg Latency",val:`${m.avgDuration??0} ms`},
+          {icon:"📈",label:"Max Latency",val:`${m.maxDuration??0} ms`},
+        ].map((x,i)=><div key={i} style={{padding:"10px",borderRadius:10,textAlign:"center",border:"1px solid "+(x.warn?"var(--color-text-danger)":"var(--color-border-tertiary)")}}>
+          <div style={{fontSize:16,marginBottom:2}}>{x.icon}</div>
+          <div style={{fontSize:16,fontWeight:700,color:x.warn?"var(--color-text-danger)":undefined}}>{x.val}</div>
+          <div style={{fontSize:10,color:"var(--color-text-tertiary)",marginTop:2}}>{x.label}</div>
+        </div>)}
+      </div>
+
+      <div>
+        <div style={{fontSize:12,fontWeight:600,marginBottom:8}}>Response Time Breakdown</div>
+        <div style={{display:"flex",gap:18,flexWrap:"wrap"}}>
+          {[["Min",m.minDuration],["Avg",m.avgDuration],["p50",m.p50],["p90",m.p90],["p95",m.p95],["p99",m.p99],["Max",m.maxDuration]].map(([lbl,val])=>(
+            <div key={lbl} style={{textAlign:"center"}}>
+              <div style={{fontSize:14,fontWeight:600,color:lbl==="p95"&&over?"var(--color-text-danger)":undefined}}>{val??0} ms</div>
+              <div style={{fontSize:10,color:"var(--color-text-tertiary)"}}>{lbl}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+      {item.failures&&item.failures.length>0&&<div style={{marginTop:16}}><FailuresList failures={item.failures}/></div>}
+    </div>
+  </div>;
+}
+
+/* ─── Member History Page — sidebar item below Workspace ─────────────────── */
+function MemberHistoryPage({member}) {
+  const [perfHistory,setPerfHistory]=useState([]);
+  const [perfHistoryLoading,setPerfHistoryLoading]=useState(true);
+  const [historyDetail,setHistoryDetail]=useState(null);
+  const ghostBtn={padding:"9px 20px",borderRadius:10,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:14,fontWeight:500,color:"var(--color-text-secondary)"};
+  useEffect(()=>{
+    const token=sessionStorage.getItem(MEMBER_TOKEN_KEY)||sessionStorage.getItem(SESSION_TOKEN_KEY)||"";
+    fetch(API_BASE+"/api/members/"+member.id+"/perf-history",{headers:{"X-Member-Token":token}}).then(r=>r.json()).then(d=>{setPerfHistory(Array.isArray(d.results)?d.results:[]);setPerfHistoryLoading(false);}).catch(()=>setPerfHistoryLoading(false));
+  },[member.id]);
+  return <div>
+    <H1>History</H1>
+    <div style={card}>
+      <H2 style={{marginBottom:12}}>Performance Test History</H2>
+      {perfHistoryLoading?<div style={{color:"var(--color-text-tertiary)",fontSize:13}}>Loading...</div>:perfHistory.length===0?<div style={{color:"var(--color-text-tertiary)",fontSize:13}}>No history yet. Run a performance test to see results here.</div>:
+      <div style={{overflowX:"auto"}}>
+        <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+          <thead><tr style={{borderBottom:"1px solid var(--color-border-secondary)"}}>{["Name","Method","URL","VUs","Duration","p95 (ms)","Threshold","Pass/Fail","Date",""].map(h=><th key={h} style={{padding:"6px 10px",textAlign:"left",fontWeight:600,color:"var(--color-text-secondary)"}}>{h}</th>)}</tr></thead>
+          <tbody>{perfHistory.map((h,i)=><tr key={i} onClick={()=>setHistoryDetail(h)} style={{borderBottom:"1px solid var(--color-border-tertiary)",cursor:"pointer"}} onMouseEnter={e=>e.currentTarget.style.background="var(--color-background-secondary)"} onMouseLeave={e=>e.currentTarget.style.background="transparent"}><td style={{padding:"6px 10px"}}>{h.testName||"—"}</td><td style={{padding:"6px 10px"}}>{h.mode==="flow"?<Tag c="blue">Flow</Tag>:(h.method||"GET")}</td><td style={{padding:"6px 10px",maxWidth:120,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={h.mode==="flow"?`${h.stepCount||0} step(s)`:(h.apiUrl||"")}>{h.mode==="flow"?`${h.stepCount||0} step(s)`:(h.apiUrl||"—")}</td><td style={{padding:"6px 10px"}}>{h.vus||"—"}</td><td style={{padding:"6px 10px"}}>{h.duration||"—"}</td><td style={{padding:"6px 10px"}}>{h.metrics?.p95!=null?h.metrics.p95:"—"}</td><td style={{padding:"6px 10px"}}>{h.p95Threshold?"≤"+h.p95Threshold+"ms":"—"}</td><td style={{padding:"6px 10px"}}><span style={{color:h.passed?"var(--color-text-success)":"var(--color-text-danger)",fontWeight:600}}>{h.passed?"✓ Pass":"✗ Fail"}</span></td><td style={{padding:"6px 10px",whiteSpace:"nowrap"}}>{h.syncedAt?new Date(h.syncedAt).toLocaleDateString():"—"}</td><td style={{padding:"6px 10px"}}><button onClick={e=>{e.stopPropagation();setHistoryDetail(h);}} style={{...ghostBtn,padding:"3px 10px",fontSize:11}}>📄 Report</button></td></tr>)}</tbody>
+        </table>
+      </div>}
+    </div>
+    {historyDetail&&<PerfHistoryReportModal item={historyDetail} onClose={()=>setHistoryDetail(null)}/>}
+  </div>;
+}
+
 /* ─── Admin Pages ─────────────────────────────────────────────────────────── */
-function MembersPage() {
+function MembersPage({onBack}) {
   const [list,setList]=useState([...DB.members]);
   const [f,setF]=useState({name:"",email:"",password:"",role:"Junior QA Engineer"});
   const [editing,setEditing]=useState(null);
@@ -1037,6 +1185,7 @@ function MembersPage() {
   const th={textAlign:"left",padding:"8px 12px",borderBottom:"1px solid var(--color-border-tertiary)",fontSize:12,fontWeight:500,color:"var(--color-text-secondary)"};
   const td={padding:"10px 12px",borderBottom:"1px solid var(--color-border-tertiary)"};
   return <div>
+    <BackLink onClick={onBack}/>
     <H1>Members</H1>
     {!editing&&<div style={card}><H2>Add member</H2>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
@@ -1069,7 +1218,7 @@ function MembersPage() {
   </div>;
 }
 
-function ProjectsPage() {
+function ProjectsPage({onBack}) {
   const [list,setList]=useState([...DB.projects]);
   const EMPTY_F={name:"",jiraProjKey:"",platform:"web",frontendRepoUrl:"",backendRepoUrl:"",language:"ar"};
   const [f,setF]=useState({...EMPTY_F});
@@ -1144,6 +1293,7 @@ function ProjectsPage() {
   const th={textAlign:"left",padding:"8px 12px",borderBottom:"1px solid var(--color-border-tertiary)",fontSize:12,fontWeight:500,color:"var(--color-text-secondary)"};
   const td={padding:"10px 12px",borderBottom:"1px solid var(--color-border-tertiary)"};
   return <div>
+    <BackLink onClick={onBack}/>
     <H1>Projects</H1>
     <div style={{...card,marginBottom:12,padding:"12px 16px",background:"var(--color-background-info)",border:"1px solid var(--color-border-secondary)"}}>
       <div style={{fontSize:13,color:"var(--color-text-secondary)"}}>ℹ️ Jira credentials (URL, email, API token) are configured per member in their Settings. AI runs via Claude CLI — no API key needed.</div>
@@ -1191,7 +1341,7 @@ function ProjectsPage() {
   </div>;
 }
 
-function AssignmentsPage() {
+function AssignmentsPage({onBack}) {
   const adminTok=()=>sessionStorage.getItem(ADMIN_TOKEN_KEY)||"";
   const [list,setList]=useState([...DB.assignments]);
   const [mId,setMId]=useState("");
@@ -1257,6 +1407,7 @@ function AssignmentsPage() {
   const th={textAlign:"left",padding:"8px 12px",borderBottom:"1px solid var(--color-border-tertiary)",fontSize:12,fontWeight:500,color:"var(--color-text-secondary)"};
   const td={padding:"10px 12px",borderBottom:"1px solid var(--color-border-tertiary)"};
   return <div>
+    <BackLink onClick={onBack}/>
     <H1>Assignments</H1>
     {!editing&&<div style={card}><H2>Assign member</H2>
       <div style={{marginBottom:12}}>
@@ -1301,7 +1452,7 @@ function AssignmentsPage() {
   </div>;
 }
 
-function DashboardPage() {
+function DashboardPage({onNavigate}) {
   const [sd,setSd]=useState(null);
   const [tab,setTab]=useState("sessions");
   const [loading,setLoading]=useState(true);
@@ -1362,12 +1513,12 @@ function DashboardPage() {
   const pr=tp+tf>0?Math.round(tp/(tp+tf)*100):0;
   const perfPassed=perfs.filter(x=>x.passed).length;
   const cards=[
-    {l:"Members",v:membersFromServer.length,c:"info"},
-    {l:"Projects",v:DB.projects.length,c:"success"},
-    {l:"Test Sessions",v:sessions.length,c:"warning"},
-    {l:"Bugs Filed",v:bugs.length,c:"danger"},
-    {l:"Pass Rate",v:pr+"%",c:pr>=80?"success":pr>=50?"warning":"danger"},
-    {l:"Perf Tests",v:perfs.length,c:"info"},
+    {l:"Members",v:membersFromServer.length,c:"info",to:()=>onNavigate&&onNavigate("members")},
+    {l:"Projects",v:DB.projects.length,c:"success",to:()=>onNavigate&&onNavigate("projects")},
+    {l:"Test Sessions",v:sessions.length,c:"warning",to:()=>setTab("sessions")},
+    {l:"Bugs Filed",v:bugs.length,c:"danger",to:()=>setTab("bugs")},
+    {l:"Pass Rate",v:pr+"%",c:pr>=80?"success":pr>=50?"warning":"danger",to:()=>setTab("sessions")},
+    {l:"Perf Tests",v:perfs.length,c:"info",to:()=>setTab("perf")},
   ];
   const th={textAlign:"left",padding:"8px 10px",borderBottom:"1px solid var(--color-border-tertiary)",fontSize:12,fontWeight:500,color:"var(--color-text-secondary)"};
   const td={padding:"8px 10px",borderBottom:"1px solid var(--color-border-tertiary)",fontSize:13};
@@ -1394,7 +1545,11 @@ function DashboardPage() {
       <button onClick={()=>{localStorage.removeItem("qa_sync_warnings");setSyncWarnings([]);}} style={{marginLeft:8,fontSize:11,color:"#92400E",background:"none",border:"none",cursor:"pointer",textDecoration:"underline"}}>Dismiss</button>
     </div>}
     <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12,marginBottom:20}}>
-      {cards.map(x=><div key={x.l} style={{...card,marginBottom:0,padding:18}}><div style={{fontSize:28,fontWeight:500,color:`var(--color-text-${x.c})`}}>{x.v}</div><div style={{fontSize:13,color:"var(--color-text-secondary)",marginTop:2}}>{x.l}</div></div>)}
+      {cards.map(x=><div key={x.l} onClick={x.to}
+        onMouseEnter={e=>{e.currentTarget.style.boxShadow="0 4px 14px rgba(0,0,0,.08)";}}
+        onMouseLeave={e=>{e.currentTarget.style.boxShadow="none";}}
+        style={{...card,marginBottom:0,padding:18,cursor:"pointer",transition:"box-shadow 0.15s"}}>
+        <div style={{fontSize:28,fontWeight:500,color:`var(--color-text-${x.c})`}}>{x.v}</div><div style={{fontSize:13,color:"var(--color-text-secondary)",marginTop:2}}>{x.l}</div></div>)}
     </div>
     <div style={{display:"flex",gap:8,marginBottom:16}}>{tabBtn("sessions","📋 Sessions")}{tabBtn("bugs","🐛 Bugs")}{tabBtn("perf","⚡ Performance")}{tabBtn("coverage","📊 Coverage")}</div>
 
@@ -1676,9 +1831,11 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
   const [perfTab,setPerfTab] = React.useState('test');
   const [perfHistory,setPerfHistory] = React.useState([]);
   const [perfHistoryLoading,setPerfHistoryLoading] = React.useState(false);
+  const [historyDetail,setHistoryDetail] = React.useState(null);
 
   // ── Non-functional / performance test state ──────────────────────────────
-  const PERF_FORM_DEFAULT={testType:"load",testName:"",method:"GET",apiUrl:"",expectedStatus:200,authType:"none",token:"",basicUsername:"",basicPassword:"",requestBody:"",vus:100,duration:"60s",ramp:"10s",p95Threshold:2000,csvUsers:null,csvFileName:"",csvError:"",variables:[],customHeaders:[]};
+  const PERF_FORM_DEFAULT={testType:"load",mode:"single",testName:"",method:"GET",apiUrl:"",expectedStatus:200,authType:"none",token:"",basicUsername:"",basicPassword:"",requestBody:"",vus:100,duration:"60s",ramp:"10s",p95Threshold:2000,csvUsers:null,csvFileName:"",csvError:"",variables:[],customHeaders:[],steps:[]};
+  const PERF_STEP_DEFAULT=()=>({id:uid(),name:"",method:"GET",url:"",requestBody:"",expectedStatus:200,extractVar:"",extractPath:""});
   const [testKind,setTestKind]=useState("functional");
   const [perfForm,setPerfForm]=useState(PERF_FORM_DEFAULT);
   const [perfResult,setPerfResult]=useState(null);
@@ -1739,8 +1896,10 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
     uidJiraTicket:2, uidSetup:3, uidCases:4, uidRun:5, uidResults:6, uidBugs:7, uidReport:8
   };
 
+  const perfFlowStepsValid=()=>(perfForm.steps||[]).filter(s=>s.url&&s.url.trim());
   const doRunPerfTest=async()=>{
-    if(!perfForm.testName.trim()||!perfForm.apiUrl.trim())return;
+    const isFlow=perfForm.mode==="flow";
+    if(!perfForm.testName.trim()||(isFlow?perfFlowStepsValid().length===0:!perfForm.apiUrl.trim()))return;
     setPerfLoading(true);
     try{
       const r=await fetch(API_BASE+"/api/perf",{method:"POST",headers:{"Content-Type":"application/json","X-Session-Token":sessionStorage.getItem(SESSION_TOKEN_KEY)||""},body:JSON.stringify({...perfForm,projectName:proj?.name||""})});
@@ -1748,7 +1907,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
       if(d.error)throw new Error(d.error);
       setPerfResult({...d,testName:perfForm.testName,testType:perfForm.testType,vus:perfForm.vus,duration:perfForm.duration,p95Threshold:perfForm.p95Threshold});
       setPhase("perfResult");
-      syncToServer("perf",{memberId:member.id,memberName:member.name,projectId:proj?.id||"",projectName:proj?.name||"",testName:perfForm.testName,testType:perfForm.testType,passed:d.passed,metrics:d.metrics,vus:perfForm.vus,duration:perfForm.duration,p95Threshold:perfForm.p95Threshold});
+      syncToServer("perf",{memberId:member.id,memberName:member.name,projectId:proj?.id||"",projectName:proj?.name||"",testName:perfForm.testName,testType:perfForm.testType,mode:perfForm.mode,method:isFlow?"":perfForm.method,apiUrl:isFlow?"":perfForm.apiUrl,steps:isFlow?perfFlowStepsValid().map(s=>({name:s.name||"",method:s.method,url:s.url,expectedStatus:s.expectedStatus,extractVar:s.extractVar||""})):[],stepCount:isFlow?perfFlowStepsValid().length:0,passed:d.passed,metrics:d.metrics,failures:d.failures||[],vus:perfForm.vus,duration:perfForm.duration,ramp:perfForm.ramp,p95Threshold:perfForm.p95Threshold});
     }catch(e){alert("Performance test error: "+e.message);}
     setPerfLoading(false);
   };
@@ -1899,6 +2058,14 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
   const allDone=cases.length>0&&cases.every(c=>c.status!=="pending");
 
   const [switchTarget,setSwitchTarget]=React.useState(null);
+  // The following hooks are declared here — before the "no project assigned" early
+  // return below — rather than near the code that uses them, because a hook placed
+  // after an early return gets skipped on renders where that return fires (e.g. the
+  // very first render, before the assigned-projects fetch resolves) but not on later
+  // renders once a project loads. React requires every hook to run on every render;
+  // violating that previously crashed the whole workspace with a blank screen
+  // ("Rendered more hooks than during the previous render") for any member with an
+  // assigned project.
   const [saveModal,setSaveModal]=useState(null);
   React.useEffect(()=>{
     if(onActiveSid){
@@ -2656,7 +2823,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
       <span style={{color:"#4ade80",fontSize:17}}>✓</span>{toast}
     </div>}
     <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",marginBottom:16}}>
-      <div><div style={{fontSize:20,fontWeight:500,marginBottom:4}}>QA Workspace</div>
+      <div><div style={{fontSize:20,fontWeight:500,marginBottom:4}}>{sid&&sdata?.summary?sdata.summary:"QA Workspace"}</div>
         <div style={{fontSize:13,color:"var(--color-text-secondary)",display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
           {proj&&<><span>Project: <b>{proj.name}</b></span><Tag c="blue">{proj.jiraProjKey}</Tag></>}
           {testKind==="functional"&&phase!=="input"&&<Tag c="blue">web</Tag>}
@@ -3627,11 +3794,18 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
           const applyCurl=()=>{
             const parsed=parseCurlCommand(curlDraft);
             if(!parsed||!parsed.url){setCurlErr("Couldn't find a URL in that command.");return;}
-            const updates={apiUrl:parsed.url,method:parsed.method};
+            const authUpdates={};
+            if(parsed.bearer){authUpdates.authType="bearer";authUpdates.token=parsed.bearer;}
+            else if(parsed.basicUser){authUpdates.authType="basic";authUpdates.basicUsername=parsed.basicUser;authUpdates.basicPassword=parsed.basicPass;}
+            if(parsed.otherHeaders&&parsed.otherHeaders.length)authUpdates.customHeaders=[...(perfForm.customHeaders||[]),...parsed.otherHeaders];
+            if(perfForm.mode==="flow"){
+              const newStep={...PERF_STEP_DEFAULT(),method:parsed.method||"GET",url:parsed.url,requestBody:parsed.body||""};
+              s_({steps:[...(perfForm.steps||[]),newStep],...authUpdates});
+              setCurlErr("");
+              return;
+            }
+            const updates={apiUrl:parsed.url,method:parsed.method,...authUpdates};
             if(parsed.body)updates.requestBody=parsed.body;
-            if(parsed.bearer){updates.authType="bearer";updates.token=parsed.bearer;}
-            else if(parsed.basicUser){updates.authType="basic";updates.basicUsername=parsed.basicUser;updates.basicPassword=parsed.basicPass;}
-            if(parsed.otherHeaders&&parsed.otherHeaders.length)updates.customHeaders=[...(perfForm.customHeaders||[]),...parsed.otherHeaders];
             s_(updates);
             setCurlErr("");
           };
@@ -3639,7 +3813,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
             if(id==='history'&&perfHistory.length===0&&!perfHistoryLoading){
               setPerfHistoryLoading(true);
               const token=sessionStorage.getItem(MEMBER_TOKEN_KEY)||sessionStorage.getItem(SESSION_TOKEN_KEY)||"";
-              fetch(API_BASE+"/api/members/"+member.id+"/perf-history",{headers:{"X-Member-Token":token}}).then(r=>r.json()).then(d=>{setPerfHistory(Array.isArray(d.history)?d.history:[]);setPerfHistoryLoading(false);}).catch(()=>setPerfHistoryLoading(false));
+              fetch(API_BASE+"/api/members/"+member.id+"/perf-history",{headers:{"X-Member-Token":token}}).then(r=>r.json()).then(d=>{setPerfHistory(Array.isArray(d.results)?d.results:[]);setPerfHistoryLoading(false);}).catch(()=>setPerfHistoryLoading(false));
             }
             setPerfTab(id);
           }} style={{padding:"6px 16px",borderRadius:8,border:"1px solid "+(perfTab===id?"var(--color-text-info)":"var(--color-border-secondary)"),background:perfTab===id?"var(--color-background-info)":"transparent",cursor:"pointer",fontSize:13,fontWeight:perfTab===id?600:400,color:perfTab===id?"var(--color-text-info)":"var(--color-text-secondary)"}}>{lbl}</button>;
@@ -3650,11 +3824,12 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
             {perfHistoryLoading?<div style={{color:"var(--color-text-tertiary)",fontSize:13}}>Loading...</div>:perfHistory.length===0?<div style={{color:"var(--color-text-tertiary)",fontSize:13}}>No history yet. Run a test to see results here.</div>:
             <div style={{overflowX:"auto"}}>
               <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
-                <thead><tr style={{borderBottom:"1px solid var(--color-border-secondary)"}}>{["Name","Method","URL","VUs","Duration","p95 (ms)","Threshold","Pass/Fail","Date"].map(h=><th key={h} style={{padding:"6px 10px",textAlign:"left",fontWeight:600,color:"var(--color-text-secondary)"}}>{h}</th>)}</tr></thead>
-                <tbody>{perfHistory.map((h,i)=><tr key={i} style={{borderBottom:"1px solid var(--color-border-tertiary)"}}><td style={{padding:"6px 10px"}}>{h.testName||"—"}</td><td style={{padding:"6px 10px"}}>{h.method||"GET"}</td><td style={{padding:"6px 10px",maxWidth:120,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={h.apiUrl||""}>{h.apiUrl||"—"}</td><td style={{padding:"6px 10px"}}>{h.vus||"—"}</td><td style={{padding:"6px 10px"}}>{h.duration||"—"}</td><td style={{padding:"6px 10px"}}>{h.p95!=null?h.p95:"—"}</td><td style={{padding:"6px 10px"}}>{h.p95Threshold?"≤"+h.p95Threshold+"ms":"—"}</td><td style={{padding:"6px 10px"}}><span style={{color:h.passed?"var(--color-text-success)":"var(--color-text-danger)",fontWeight:600}}>{h.passed?"✓ Pass":"✗ Fail"}</span></td><td style={{padding:"6px 10px",whiteSpace:"nowrap"}}>{h.at?new Date(h.at).toLocaleDateString():"—"}</td></tr>)}</tbody>
+                <thead><tr style={{borderBottom:"1px solid var(--color-border-secondary)"}}>{["Name","Method","URL","VUs","Duration","p95 (ms)","Threshold","Pass/Fail","Date",""].map(h=><th key={h} style={{padding:"6px 10px",textAlign:"left",fontWeight:600,color:"var(--color-text-secondary)"}}>{h}</th>)}</tr></thead>
+                <tbody>{perfHistory.map((h,i)=><tr key={i} onClick={()=>setHistoryDetail(h)} style={{borderBottom:"1px solid var(--color-border-tertiary)",cursor:"pointer"}} onMouseEnter={e=>e.currentTarget.style.background="var(--color-background-secondary)"} onMouseLeave={e=>e.currentTarget.style.background="transparent"}><td style={{padding:"6px 10px"}}>{h.testName||"—"}</td><td style={{padding:"6px 10px"}}>{h.mode==="flow"?<Tag c="blue">Flow</Tag>:(h.method||"GET")}</td><td style={{padding:"6px 10px",maxWidth:120,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={h.mode==="flow"?`${h.stepCount||0} step(s)`:(h.apiUrl||"")}>{h.mode==="flow"?`${h.stepCount||0} step(s)`:(h.apiUrl||"—")}</td><td style={{padding:"6px 10px"}}>{h.vus||"—"}</td><td style={{padding:"6px 10px"}}>{h.duration||"—"}</td><td style={{padding:"6px 10px"}}>{h.metrics?.p95!=null?h.metrics.p95:"—"}</td><td style={{padding:"6px 10px"}}>{h.p95Threshold?"≤"+h.p95Threshold+"ms":"—"}</td><td style={{padding:"6px 10px"}}><span style={{color:h.passed?"var(--color-text-success)":"var(--color-text-danger)",fontWeight:600}}>{h.passed?"✓ Pass":"✗ Fail"}</span></td><td style={{padding:"6px 10px",whiteSpace:"nowrap"}}>{h.syncedAt?new Date(h.syncedAt).toLocaleDateString():"—"}</td><td style={{padding:"6px 10px"}}><button onClick={e=>{e.stopPropagation();setHistoryDetail(h);}} style={{...ghostBtn,padding:"3px 10px",fontSize:11}}>📄 Report</button></td></tr>)}</tbody>
               </table>
             </div>}
           </div>}
+          {historyDetail&&<PerfHistoryReportModal item={historyDetail} onClose={()=>setHistoryDetail(null)}/>}
           {perfTab==="test"&&<div style={{display:"flex",gap:20,alignItems:"flex-start"}}>
             {/* ── LEFT: form ── */}
             <div style={{flex:1,minWidth:0,display:"flex",flexDirection:"column",gap:0}}>
@@ -3684,12 +3859,26 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
                 </div>
               </div>
 
+              {/* Request Mode */}
+              <div style={card}>
+                <H2 style={{marginBottom:12}}>Request Mode</H2>
+                <div style={{display:"flex",gap:12}}>
+                  {[{v:"single",icon:"🎯",label:"Single Endpoint",desc:"Hammer one API with load."},{v:"flow",icon:"🔗",label:"API Flow",desc:"Run a sequence of APIs in order each iteration — e.g. login → use token → call protected API."}].map(o=>(
+                    <button key={o.v} onClick={()=>s_({mode:o.v})} style={{flex:1,padding:14,borderRadius:12,border:"2px solid "+(perfForm.mode===o.v?"var(--color-text-info)":"var(--color-border-secondary)"),background:perfForm.mode===o.v?"var(--color-background-info)":"var(--color-background-primary)",cursor:"pointer",textAlign:"left"}}>
+                      <div style={{fontSize:20,marginBottom:4}}>{o.icon}</div>
+                      <div style={{fontWeight:500,fontSize:14}}>{o.label}</div>
+                      <div style={{fontSize:12,color:"var(--color-text-secondary)",marginTop:2}}>{o.desc}</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
               {/* API Details */}
               <div style={card}>
-                <H2 style={{marginBottom:12}}>API Details</H2>
+                <H2 style={{marginBottom:12}}>{perfForm.mode==="flow"?"Flow Details":"API Details"}</H2>
                 <div style={{display:"flex",flexDirection:"column",gap:12}}>
                   <div><Lbl>Test Name *</Lbl><input style={inp} value={perfForm.testName} onChange={e=>s_({testName:e.target.value})} placeholder="e.g. Login API — Load Test"/></div>
-                  <div style={{display:"flex",gap:12}}>
+                  {perfForm.mode==="single"&&<div style={{display:"flex",gap:12}}>
                     <div style={{width:130}}>
                       <Lbl>Method</Lbl>
                       <select style={{...inp,width:"100%"}} value={perfForm.method} onChange={e=>s_({method:e.target.value})}>
@@ -3697,9 +3886,48 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
                       </select>
                     </div>
                     <div style={{flex:1}}><Lbl>API Endpoint URL *</Lbl><input style={inp} value={perfForm.apiUrl} onChange={e=>s_({apiUrl:e.target.value})} placeholder="https://api.example.com/endpoint or .../items/{{itemId}}"/></div>
-                  </div>
+                  </div>}
+                  {perfForm.mode==="flow"&&<div>
+                    <Lbl>Steps <span style={{fontWeight:400,color:"var(--color-text-tertiary)"}}>— run in order, once per iteration. A step can extract a field from its JSON response into a variable the later steps reuse via {"{{name}}"}.</span></Lbl>
+                    <div style={{display:"flex",flexDirection:"column",gap:10,marginTop:8}}>
+                      {(perfForm.steps||[]).map((st,i)=>{
+                        const upd=patch=>s_({steps:perfForm.steps.map((s2,j)=>j===i?{...s2,...patch}:s2)});
+                        const move=dir=>{
+                          const j=i+dir; if(j<0||j>=perfForm.steps.length)return;
+                          const next=[...perfForm.steps]; [next[i],next[j]]=[next[j],next[i]]; s_({steps:next});
+                        };
+                        return <div key={st.id} style={{border:"1px solid var(--color-border-secondary)",borderRadius:10,padding:12,background:"var(--color-background-secondary)"}}>
+                          <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:8}}>
+                            <span style={{fontSize:12,fontWeight:600,color:"var(--color-text-tertiary)",flexShrink:0}}>#{i+1}</span>
+                            <input style={{...inp,flex:1}} value={st.name} placeholder={`Step name (optional), e.g. "Login"`} onChange={e=>upd({name:e.target.value})}/>
+                            <button onClick={()=>move(-1)} disabled={i===0} style={{...ghostBtn,padding:"0 8px",opacity:i===0?0.35:1,cursor:i===0?"not-allowed":"pointer"}} title="Move up">↑</button>
+                            <button onClick={()=>move(1)} disabled={i===perfForm.steps.length-1} style={{...ghostBtn,padding:"0 8px",opacity:i===perfForm.steps.length-1?0.35:1,cursor:i===perfForm.steps.length-1?"not-allowed":"pointer"}} title="Move down">↓</button>
+                            <button onClick={()=>s_({steps:perfForm.steps.filter((_,j)=>j!==i)})} style={{...ghostBtn,padding:"0 8px"}} title="Remove step">✕</button>
+                          </div>
+                          <div style={{display:"flex",gap:8,marginBottom:8}}>
+                            <div style={{width:120}}>
+                              <select style={{...inp,width:"100%"}} value={st.method} onChange={e=>upd({method:e.target.value})}>
+                                {["GET","POST","PUT","PATCH","DELETE"].map(m=><option key={m}>{m}</option>)}
+                              </select>
+                            </div>
+                            <input style={{...inp,flex:1}} value={st.url} placeholder="https://api.example.com/endpoint or .../items/{{itemId}}" onChange={e=>upd({url:e.target.value})}/>
+                            <input style={{...inpN,width:90}} type="number" value={st.expectedStatus} title="Expected status code" onChange={e=>upd({expectedStatus:parseInt(e.target.value)||200})}/>
+                          </div>
+                          {["POST","PUT","PATCH"].includes(st.method)&&<textarea style={{...inp,width:"100%",height:56,fontFamily:"monospace",fontSize:12,resize:"vertical",marginBottom:8}} value={st.requestBody} onChange={e=>upd({requestBody:e.target.value})} placeholder='Request body (JSON), e.g. {"key":"{{value}}"}'/>}
+                          <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                            <span style={{fontSize:11,color:"var(--color-text-tertiary)",flexShrink:0}}>Save response field as variable:</span>
+                            <input style={{...inp,flex:1}} value={st.extractPath} placeholder="field path, e.g. data.token or id" onChange={e=>upd({extractPath:e.target.value})}/>
+                            <span style={{fontSize:11,color:"var(--color-text-tertiary)"}}>→ {"{{"}</span>
+                            <input style={{...inp,width:120}} value={st.extractVar} placeholder="varName" onChange={e=>upd({extractVar:e.target.value})}/>
+                            <span style={{fontSize:11,color:"var(--color-text-tertiary)"}}>{"}}"}</span>
+                          </div>
+                        </div>;
+                      })}
+                    </div>
+                    <button onClick={()=>s_({steps:[...(perfForm.steps||[]),PERF_STEP_DEFAULT()]})} style={{...ghostBtn,fontSize:12,marginTop:8}}>+ Add Step</button>
+                  </div>}
                   <div>
-                    <Lbl>Configurable Variables <span style={{fontWeight:400,color:"var(--color-text-tertiary)"}}>— reference as {"{{name}}"} anywhere in the URL above; each becomes overridable per run</span></Lbl>
+                    <Lbl>Configurable Variables <span style={{fontWeight:400,color:"var(--color-text-tertiary)"}}>— reference as {"{{name}}"} anywhere {perfForm.mode==="flow"?"in a step's URL/body above":"in the URL above"}; each becomes overridable per run</span></Lbl>
                     {(perfForm.variables||[]).map((v,i)=>(
                       <div key={i} style={{display:"flex",gap:8,marginTop:6}}>
                         <input style={{...inp,flex:1}} value={v.name} placeholder="e.g. auctionItemId" onChange={e=>{
@@ -3713,7 +3941,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
                     ))}
                     <button onClick={()=>s_({variables:[...(perfForm.variables||[]),{name:"",value:""}]})} style={{...ghostBtn,fontSize:12,marginTop:8}}>+ Add Variable</button>
                   </div>
-                  <div style={{maxWidth:200}}><Lbl>Expected Status Code</Lbl><input style={inpN} type="number" value={perfForm.expectedStatus} onChange={e=>s_({expectedStatus:parseInt(e.target.value)||200})}/></div>
+                  {perfForm.mode==="single"&&<div style={{maxWidth:200}}><Lbl>Expected Status Code</Lbl><input style={inpN} type="number" value={perfForm.expectedStatus} onChange={e=>s_({expectedStatus:parseInt(e.target.value)||200})}/></div>}
                   <div>
                     <Lbl>Authentication</Lbl>
                     <div style={{display:"flex",gap:8,marginTop:6}}>
@@ -3772,7 +4000,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
                     ))}
                     <button onClick={()=>s_({customHeaders:[...(perfForm.customHeaders||[]),{name:"",value:""}]})} style={{...ghostBtn,fontSize:12,marginTop:8}}>+ Add Header</button>
                   </div>
-                  {["POST","PUT","PATCH"].includes(perfForm.method)&&<div><Lbl>Request Body (JSON) <span style={{fontWeight:400,color:"var(--color-text-tertiary)"}}>— can reference {"{{variables}}"} too</span></Lbl><textarea style={{...inp,height:76,fontFamily:"monospace",resize:"vertical"}} value={perfForm.requestBody} onChange={e=>s_({requestBody:e.target.value})} placeholder='{"key":"{{value}}"}'/></div>}
+                  {perfForm.mode==="single"&&["POST","PUT","PATCH"].includes(perfForm.method)&&<div><Lbl>Request Body (JSON) <span style={{fontWeight:400,color:"var(--color-text-tertiary)"}}>— can reference {"{{variables}}"} too</span></Lbl><textarea style={{...inp,height:76,fontFamily:"monospace",resize:"vertical"}} value={perfForm.requestBody} onChange={e=>s_({requestBody:e.target.value})} placeholder='{"key":"{{value}}"}'/></div>}
                 </div>
               </div>
 
@@ -3807,7 +4035,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
               </div>
 
               <div style={{display:"flex",gap:12,alignItems:"center"}}>
-                <Btn v="primary" onClick={doRunPerfTest} disabled={!perfForm.testName.trim()||!perfForm.apiUrl.trim()||(perfForm.authType==="csv"&&(!perfForm.csvUsers||perfForm.csvUsers.length===0))}>▶ Start Test</Btn>
+                <Btn v="primary" onClick={doRunPerfTest} disabled={!perfForm.testName.trim()||(perfForm.mode==="flow"?perfFlowStepsValid().length===0:!perfForm.apiUrl.trim())||(perfForm.authType==="csv"&&(!perfForm.csvUsers||perfForm.csvUsers.length===0))}>▶ Start Test</Btn>
                 <button onClick={()=>setPhase("testType")} style={{...ghostBtn,fontSize:13}}>← Back</button>
               </div>
             </div>
@@ -3819,11 +4047,15 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
                 {(()=>{
                   const namedVars=(perfForm.variables||[]).filter(v=>v.name.trim());
                   const namedHeaders=(perfForm.customHeaders||[]).filter(h=>h.name.trim());
+                  const isFlowMode=perfForm.mode==="flow";
+                  const validSteps=(perfForm.steps||[]).filter(s=>s.url&&s.url.trim());
                   return [
                   {label:"Type",val:<Tag c={isStress?"red":"blue"}>{isStress?"Stress":"Load"}</Tag>},
                   {label:"Name",val:perfForm.testName||"—"},
-                  {label:"Method",val:<Tag c="blue">{perfForm.method}</Tag>},
-                  {label:"URL",val:<span style={{fontSize:11,wordBreak:"break-all"}}>{perfForm.apiUrl||"—"}</span>},
+                  ...(isFlowMode
+                    ?[{label:"Flow",val:validSteps.length?`${validSteps.length} step(s)`:"—"}]
+                    :[{label:"Method",val:<Tag c="blue">{perfForm.method}</Tag>},
+                      {label:"URL",val:<span style={{fontSize:11,wordBreak:"break-all"}}>{perfForm.apiUrl||"—"}</span>}]),
                   {label:"Variables",val:namedVars.length?namedVars.map(v=>v.name).join(", "):"—"},
                   {label:"Custom Headers",val:namedHeaders.length?namedHeaders.map(h=>h.name).join(", "):"—"},
                   {label:"Auth",val:perfForm.authType==="bearer"?"🔑 Bearer":perfForm.authType==="basic"?"👤 Basic":perfForm.authType==="csv"?("🔄 Dynamic ("+(perfForm.csvUsers?.length||0)+" users)"):"🔓 None"},
@@ -3842,6 +4074,13 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
                 })()}
                 {isStress&&<div style={{marginTop:8,fontSize:12,color:"var(--color-text-secondary)",background:"var(--color-background-warning)",padding:"8px 10px",borderRadius:8}}>
                   🔥 Steps: {Math.ceil(perfForm.vus*.25)} → {Math.ceil(perfForm.vus*.5)} → {Math.ceil(perfForm.vus*.75)} → {perfForm.vus} VUs
+                </div>}
+                {perfForm.mode==="flow"&&(perfForm.steps||[]).filter(s=>s.url&&s.url.trim()).length>0&&<div style={{marginTop:8,fontSize:11,background:"var(--color-background-tertiary)",border:"1px solid var(--color-border-tertiary)",borderRadius:8,padding:"8px 10px"}}>
+                  {(perfForm.steps||[]).filter(s=>s.url&&s.url.trim()).map((s,i)=><div key={s.id} style={{padding:"3px 0",display:"flex",gap:6,alignItems:"baseline"}}>
+                    <span style={{color:"var(--color-text-tertiary)",flexShrink:0}}>{i+1}.</span>
+                    <span style={{fontWeight:600,flexShrink:0}}>{s.method}</span>
+                    <span style={{wordBreak:"break-all"}}>{s.name?.trim()||s.url}</span>
+                  </div>)}
                 </div>}
               </div>
             </div>
@@ -3891,6 +4130,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
                 ))}
               </div>
             </div>
+            <FailuresList failures={perfResult.failures}/>
             {/* Actions */}
             <div style={{display:"flex",gap:12,marginTop:4}}>
               <Btn v="primary" onClick={()=>setPhase("perfTest")}>↩ Run Again</Btn>
@@ -4690,12 +4930,13 @@ function LoginPage({onLogin}) {
     }catch{setErr("Cannot reach server. Make sure node server.js is running.");}
     setBusy(false); return;
   };
-  return <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"linear-gradient(135deg, #f1f5f9 0%, #e2e8f0 100%)"}}>
+  return <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",backgroundColor:"#f5f6f8",backgroundImage:"radial-gradient(circle farthest-side at 50% 50%, transparent 40%, #f5f6f8 100%), url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='22' height='22'%3E%3Crect x='9' y='9' width='4' height='4' fill='rgba(90,110,150,0.35)'/%3E%3C/svg%3E\"), radial-gradient(circle at 50% 38%, rgba(74,114,207,0.16), rgba(74,114,207,0) 55%)",backgroundSize:"auto, 22px 22px, auto",backgroundPosition:"center, center, center",backgroundRepeat:"no-repeat, repeat, no-repeat"}}>
     <div style={{...card,width:400,padding:40,boxShadow:"var(--shadow-lg)",animation:"qa-fade-up 0.35s ease both"}}>
-      <div style={{fontSize:24,fontWeight:800,marginBottom:3,letterSpacing:"-0.02em"}}>QA AI Platform</div>
+      <div style={{marginBottom:14,display:"flex",justifyContent:"center"}}><Logo size={60} withText={false}/></div>
+      <div style={{fontSize:24,fontWeight:800,marginBottom:3,letterSpacing:"-0.02em",color:"var(--sitech-navy)",textAlign:"center"}}>ITQAN</div>
       <div style={{fontSize:13,color:"var(--color-text-tertiary)",marginBottom:28}}>AI-powered QA workflow management</div>
       <div style={{display:"flex",gap:8,marginBottom:22,padding:4,borderRadius:12,background:"var(--color-background-secondary)",border:"1px solid var(--color-border-tertiary)"}}>
-        {["admin","member"].map(r=><button key={r} className="qa-btn" onClick={()=>{setMode(r);setErr("");setEmail(saved?.mode===r?saved.email:"");setPass(saved?.mode===r?saved.pass:"");}} style={{flex:1,padding:"8px 0",borderRadius:9,border:"none",background:r===mode?"#ffffff":"transparent",color:r===mode?"var(--color-text-primary)":"var(--color-text-secondary)",cursor:"pointer",fontSize:14,fontWeight:r===mode?600:400,boxShadow:r===mode?"var(--shadow-sm)":"none"}}>{r==="admin"?"QA Lead":"Team Member"}</button>)}
+        {["admin","member"].map(r=><button key={r} className="qa-btn" onClick={()=>{setMode(r);setErr("");setEmail(saved?.mode===r?saved.email:"");setPass(saved?.mode===r?saved.pass:"");}} style={{flex:1,padding:"8px 0",borderRadius:9,border:"none",background:r===mode?"var(--sitech-navy)":"transparent",color:r===mode?"#ffffff":"var(--color-text-secondary)",cursor:"pointer",fontSize:14,fontWeight:r===mode?600:400,boxShadow:r===mode?"var(--shadow-sm)":"none"}}>{r==="admin"?"QA Lead":"Team Member"}</button>)}
       </div>
       <form onSubmit={e=>{e.preventDefault();login();}} autoComplete="on">
       <Lbl>{mode==="admin"?"Username":"Email"}</Lbl>
@@ -4706,7 +4947,7 @@ function LoginPage({onLogin}) {
         <input type="checkbox" checked={remember} onChange={e=>setRemember(e.target.checked)}/> Remember me
       </label>
       {err&&<div style={{color:"var(--color-text-danger)",fontSize:13,marginBottom:12}}>{err}</div>}
-      <button type="submit" disabled={busy} style={{width:"100%",padding:"8px 0",borderRadius:8,border:"none",background:"var(--color-text-info)",color:"#fff",cursor:busy?"not-allowed":"pointer",fontSize:14,fontWeight:500,opacity:busy?0.7:1}}>{busy?"Signing in…":"Sign in"}</button>
+      <button type="submit" disabled={busy} style={{width:"100%",padding:"8px 0",borderRadius:8,border:"none",background:"var(--sitech-navy)",color:"#fff",cursor:busy?"not-allowed":"pointer",fontSize:14,fontWeight:500,opacity:busy?0.7:1}}>{busy?"Signing in…":"Sign in"}</button>
       </form>
       {mode==="member"&&!showForgot&&<button onClick={()=>setShowForgot(true)} style={{background:"none",border:"none",cursor:"pointer",fontSize:12,color:"var(--color-text-tertiary)",marginTop:14,textDecoration:"underline"}}>Forgot password?</button>}
       {mode==="member"&&showForgot&&<div style={{marginTop:16,paddingTop:16,borderTop:"1px solid var(--color-border-tertiary)"}}>
@@ -4718,7 +4959,7 @@ function LoginPage({onLogin}) {
           <input type="password" style={inp} value={confirmPwd} onChange={e=>setConfirmPwd(e.target.value)} placeholder="Confirm new password"/>
           {resetErr&&<div style={{color:"var(--color-text-danger)",fontSize:12}}>{resetErr}</div>}
           <div style={{display:"flex",gap:8}}>
-            <button onClick={doReset} disabled={resetBusy} style={{flex:1,padding:"8px 0",borderRadius:8,border:"none",background:"var(--color-text-info)",color:"#fff",cursor:resetBusy?"not-allowed":"pointer",fontSize:13,fontWeight:500,opacity:resetBusy?0.7:1}}>{resetBusy?"Resetting…":"Reset Password"}</button>
+            <button onClick={doReset} disabled={resetBusy} style={{flex:1,padding:"8px 0",borderRadius:8,border:"none",background:"var(--sitech-navy)",color:"#fff",cursor:resetBusy?"not-allowed":"pointer",fontSize:13,fontWeight:500,opacity:resetBusy?0.7:1}}>{resetBusy?"Resetting…":"Reset Password"}</button>
             <button onClick={()=>{setShowForgot(false);setResetErr("");setResetToken("");setNewPwd("");setConfirmPwd("");}} style={{padding:"8px 14px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:13,color:"var(--color-text-secondary)"}}>Cancel</button>
           </div>
         </div>}
@@ -4959,6 +5200,34 @@ function App() {
   const [deleteConfirmId,setDeleteConfirmId]=useState(null);
   const [renamingCatId,setRenamingCatId]=useState(null); const [renameCatVal,setRenameCatVal]=useState("");
   const [storySearch,setStorySearch]=useState("");
+  const [storiesOpen,setStoriesOpen]=useState(false);
+  const storiesBtnRef=useRef(null);
+  const storiesPanelRef=useRef(null);
+  const [storiesPos,setStoriesPos]=useState({top:0,left:0});
+  const toggleStories=()=>{
+    if(storiesBtnRef.current){const r=storiesBtnRef.current.getBoundingClientRect();const panelW=300;const left=Math.min(r.left,window.innerWidth-panelW-8);setStoriesPos({top:r.bottom+6,left});}
+    setStoriesOpen(o=>!o);
+  };
+  useEffect(()=>{
+    if(!storiesOpen)return;
+    const onDocClick=e=>{ if(storiesBtnRef.current?.contains(e.target)||storiesPanelRef.current?.contains(e.target))return; setStoriesOpen(false); };
+    document.addEventListener("mousedown",onDocClick);
+    return ()=>document.removeEventListener("mousedown",onDocClick);
+  },[storiesOpen]);
+  const [userMenuOpen,setUserMenuOpen]=useState(false);
+  const userMenuBtnRef=useRef(null);
+  const userMenuPanelRef=useRef(null);
+  const [userMenuPos,setUserMenuPos]=useState({top:0,left:0});
+  const toggleUserMenu=()=>{
+    if(userMenuBtnRef.current){const r=userMenuBtnRef.current.getBoundingClientRect();const panelW=200;const left=Math.max(8,Math.min(r.right-panelW,window.innerWidth-panelW-8));setUserMenuPos({top:r.bottom+6,left});}
+    setUserMenuOpen(o=>!o);
+  };
+  useEffect(()=>{
+    if(!userMenuOpen)return;
+    const onDocClick=e=>{ if(userMenuBtnRef.current?.contains(e.target)||userMenuPanelRef.current?.contains(e.target))return; setUserMenuOpen(false); };
+    document.addEventListener("mousedown",onDocClick);
+    return ()=>document.removeEventListener("mousedown",onDocClick);
+  },[userMenuOpen]);
   const renameCat=(id,name)=>{if(!name.trim())return;DB.categories=DB.categories.map(c=>c.id===id?{...c,name:name.trim()}:c);saveDB();refreshSaved();setRenamingCatId(null);};
   const [,forceUpdate]=useState(0);
   const [resetTrigger,setResetTrigger]=useState(0);
@@ -5005,9 +5274,9 @@ function App() {
   },[]);
   if(!user) return <LoginPage onLogin={handleLogin}/>;
   const adminNav=[{sec:"Overview",items:[{id:"dashboard",label:"Dashboard",icon:"📊"}]},{sec:"Manage",items:[{id:"members",label:"Members",icon:"👥"},{id:"projects",label:"Projects",icon:"📁"},{id:"assign",label:"Assignments",icon:"🔗"}]}];
-  const memberNav=[{sec:"Work",items:[{id:"workspace",label:"Workspace",icon:"🖥"}]}];
+  const memberNav=[{sec:"Work",items:[{id:"workspace",label:"Workspace",icon:"🖥"},{id:"history",label:"History",icon:"🕐"}]}];
   const nav=user.role==="admin"?adminNav:memberNav;
-  return <div style={{fontFamily:"-apple-system,BlinkMacSystemFont,'Segoe UI','Inter',sans-serif",color:"var(--color-text-primary)",minHeight:"100vh",background:"#f1f5f9",display:"flex"}}>
+  return <div style={{fontFamily:"-apple-system,BlinkMacSystemFont,'Segoe UI','Inter',sans-serif",color:"var(--color-text-primary)",minHeight:"100vh",backgroundColor:"#f5f6f8",backgroundImage:"radial-gradient(circle farthest-side at 50% 50%, transparent 40%, #f5f6f8 100%), url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='22' height='22'%3E%3Crect x='9' y='9' width='4' height='4' fill='rgba(120,130,140,0.10)'/%3E%3C/svg%3E\")",backgroundSize:"auto, 22px 22px",backgroundPosition:"center, center",backgroundRepeat:"no-repeat, repeat",backgroundAttachment:"fixed, fixed",display:"flex",flexDirection:"column"}}>
     {showConfig&&user?.role==="member"&&<MemberConfigDialog memberId={user.id} onClose={()=>setShowConfig(false)}/>}
     {showChangePwd&&user?.role==="admin"&&<AdminChangePasswordModal forced={!!user.forceChangePwd} onClose={()=>{setShowChangePwd(false);setUser(u=>({...u,forceChangePwd:false}));}}/>}
     {showChangeUsername&&user?.role==="admin"&&<AdminChangeUsernameModal onClose={()=>setShowChangeUsername(false)}/>}
@@ -5027,56 +5296,57 @@ function App() {
         <Btn v="primary" onClick={()=>{localStorage.setItem('qa_onboarded_'+user.id,'1');setShowOnboarding(false);}}>Get Started</Btn>
       </div>
     </div>}
-    <div style={{width:224,minHeight:"100vh",background:"#ffffff",borderRight:"1px solid var(--color-border-tertiary)",display:"flex",flexDirection:"column",flexShrink:0,boxShadow:"1px 0 0 rgba(15,23,42,0.06)"}}>
-      <div style={{padding:"18px 20px 14px",borderBottom:"1px solid var(--color-border-tertiary)"}}>
-        <div style={{fontWeight:700,fontSize:15,letterSpacing:"-0.01em",color:"var(--color-text-primary)"}}>QA AI Platform</div>
-        <div style={{fontSize:11,color:"var(--color-text-tertiary)",marginTop:3}}>{user.role==="admin"?"QA Lead · Admin":(user.member?.name+" · "+user.member?.role)}</div>
+    <div style={{display:"flex",alignItems:"center",gap:4,background:"#ffffff",border:"1px solid var(--color-border-tertiary)",borderRadius:16,margin:"14px 16px 0",padding:"0 16px",height:58,flexShrink:0,overflowX:"auto",position:"sticky",top:14,zIndex:50,boxShadow:"0 6px 20px rgba(0,0,0,.08)"}}>
+      <div style={{display:"flex",alignItems:"center",paddingRight:16,marginRight:12,borderRight:"1px solid var(--color-border-tertiary)",height:"100%",flexShrink:0}}>
+        <Logo size={30} textSize={15}/>
       </div>
-      <div style={{flex:1,paddingTop:8,overflowY:"auto"}}>
-        {nav.map(g=><div key={g.sec}>
-          <div style={{padding:"14px 20px 4px",fontSize:10,fontWeight:600,color:"var(--color-text-tertiary)",textTransform:"uppercase",letterSpacing:"0.09em"}}>{g.sec}</div>
-          {g.items.map(n=>{const ob=n.id==="bugs"?DB.bugs.filter(b=>b.status==="Open").length:0;
-            return <div key={n.id} onClick={()=>{setPage(n.id);tick(x=>x+1);}} style={{padding:"9px 16px",margin:"1px 8px",borderRadius:9,cursor:"pointer",fontSize:13,fontWeight:page===n.id?600:400,background:page===n.id?"rgba(79,70,229,0.09)":"transparent",color:page===n.id?"var(--accent)":"var(--color-text-secondary)",display:"flex",alignItems:"center",gap:8,transition:"background 0.15s ease, color 0.15s ease"}}>
-              <span>{n.icon}</span>{n.label}{ob>0&&<span style={{marginLeft:"auto",background:"var(--color-text-danger)",color:"#fff",borderRadius:20,padding:"0 6px",fontSize:11}}>{ob}</span>}
-            </div>;})}
-        </div>)}
-        {user.role==="member"&&savedStories.length>0&&(()=>{
-          const projFiltered=activeProj?savedStories.filter(s=>storyMatchesProject(s,activeProj.jiraProjKey,activeProj.id)):savedStories;
-          const _sq=storySearch.trim().toLowerCase();
-          const visibleStories=_sq?projFiltered.filter(s=>[s.name,s.sid,s.uidJiraTicketKey,s.perfForm?.testName].filter(Boolean).join(" ").toLowerCase().includes(_sq)):projFiltered;
-          if(projFiltered.length===0)return null;
-          const isActive=s=>s.testKind==="ui-design"?activeSid===("uid:"+s.id)&&page==="workspace":s.testKind==="non-functional"?activeSid===("perf:"+s.id)&&page==="workspace":s.sid===activeSid&&page==="workspace";
-          const StoryCard=({s})=>(
-            <div key={s.id} style={{borderRadius:7,padding:"8px 9px",background:isActive(s)?"var(--color-background-info)":"var(--color-background-primary)",border:isActive(s)?"1px solid var(--color-text-info)":"1px solid var(--color-border-tertiary)",cursor:renamingId===s.id?"default":"pointer",transition:"border-color 0.15s",borderLeft:isActive(s)?"3px solid var(--color-text-info)":"1px solid var(--color-border-tertiary)"}}
-              onMouseEnter={e=>{if(renamingId!==s.id&&!isActive(s))e.currentTarget.style.borderColor="var(--color-border-primary)";}}
-              onMouseLeave={e=>{if(!isActive(s))e.currentTarget.style.borderColor="var(--color-border-tertiary)";}}
-              onClick={()=>{if(renamingId!==s.id){setRestoreTarget(s);setPage("workspace");}}}>
-              {renamingId===s.id
-                ?<div style={{display:"flex",gap:4}} onClick={e=>e.stopPropagation()}>
-                    <input autoFocus style={{flex:1,fontSize:12,padding:"3px 7px",borderRadius:5,border:"1px solid var(--color-border-primary)",background:"var(--color-background-secondary)",color:"var(--color-text-primary)",outline:"none"}} value={renameVal} onChange={e=>setRenameVal(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")renameSnap(s.id,renameVal||s.name||s.sid||"Session");if(e.key==="Escape")setRenamingId(null);}}/>
-                    <button onClick={()=>renameSnap(s.id,renameVal||s.name||s.sid||"Session")} style={{background:"none",border:"none",cursor:"pointer",color:"var(--color-text-success)",fontSize:14,padding:"0 2px"}}>✓</button>
+      {nav.map((g,gi)=><div key={g.sec} style={{display:"flex",alignItems:"center",gap:2,paddingRight:12,marginRight:12,borderRight:gi<nav.length-1?"1px solid var(--color-border-tertiary)":"none",flexShrink:0}}>
+        {g.items.map(n=>{const ob=n.id==="bugs"?DB.bugs.filter(b=>b.status==="Open").length:0;
+          return <div key={n.id} onClick={()=>{setPage(n.id);tick(x=>x+1);}} style={{padding:"7px 12px",cursor:"pointer",fontSize:14,fontWeight:page===n.id?600:400,background:page===n.id?"var(--sitech-navy-tint)":"transparent",color:page===n.id?"var(--sitech-navy)":"var(--color-text-secondary)",borderRadius:7,display:"flex",alignItems:"center",gap:6,whiteSpace:"nowrap",transition:"background 0.15s ease, color 0.15s ease"}}>
+            <span>{n.icon}</span>{n.label}{ob>0&&<span style={{background:"var(--color-text-danger)",color:"#fff",borderRadius:20,padding:"0 6px",fontSize:11}}>{ob}</span>}
+          </div>;})}
+      </div>)}
+      {user.role==="member"&&savedStories.length>0&&(()=>{
+        const projFiltered=activeProj?savedStories.filter(s=>storyMatchesProject(s,activeProj.jiraProjKey,activeProj.id)):savedStories;
+        const _sq=storySearch.trim().toLowerCase();
+        const visibleStories=_sq?projFiltered.filter(s=>[s.name,s.sid,s.uidJiraTicketKey,s.perfForm?.testName].filter(Boolean).join(" ").toLowerCase().includes(_sq)):projFiltered;
+        if(projFiltered.length===0)return null;
+        const isActive=s=>s.testKind==="ui-design"?activeSid===("uid:"+s.id)&&page==="workspace":s.testKind==="non-functional"?activeSid===("perf:"+s.id)&&page==="workspace":s.sid===activeSid&&page==="workspace";
+        const StoryCard=({s})=>(
+          <div key={s.id} style={{borderRadius:7,padding:"8px 9px",background:isActive(s)?"var(--color-background-info)":"var(--color-background-primary)",border:isActive(s)?"1px solid var(--color-text-info)":"1px solid var(--color-border-tertiary)",cursor:renamingId===s.id?"default":"pointer",transition:"border-color 0.15s",borderLeft:isActive(s)?"3px solid var(--color-text-info)":"1px solid var(--color-border-tertiary)"}}
+            onMouseEnter={e=>{if(renamingId!==s.id&&!isActive(s))e.currentTarget.style.borderColor="var(--color-border-primary)";}}
+            onMouseLeave={e=>{if(!isActive(s))e.currentTarget.style.borderColor="var(--color-border-tertiary)";}}
+            onClick={()=>{if(renamingId!==s.id){setRestoreTarget(s);setPage("workspace");setStoriesOpen(false);}}}>
+            {renamingId===s.id
+              ?<div style={{display:"flex",gap:4}} onClick={e=>e.stopPropagation()}>
+                  <input autoFocus style={{flex:1,fontSize:12,padding:"3px 7px",borderRadius:5,border:"1px solid var(--color-border-primary)",background:"var(--color-background-secondary)",color:"var(--color-text-primary)",outline:"none"}} value={renameVal} onChange={e=>setRenameVal(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")renameSnap(s.id,renameVal||s.name||s.sid||"Session");if(e.key==="Escape")setRenamingId(null);}}/>
+                  <button onClick={()=>renameSnap(s.id,renameVal||s.name||s.sid||"Session")} style={{background:"none",border:"none",cursor:"pointer",color:"var(--color-text-success)",fontSize:14,padding:"0 2px"}}>✓</button>
+                </div>
+              :<div>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+                    <span style={{fontSize:12,fontWeight:500,color:"var(--color-text-primary)",flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{s.name}</span>
+                    <div style={{display:"flex",gap:1,marginLeft:4,flexShrink:0,opacity:0.7}} onClick={e=>e.stopPropagation()}>
+                      <button title="Rename" onClick={()=>{setRenamingId(s.id);setRenameVal(s.name);}} style={{background:"none",border:"none",cursor:"pointer",color:"var(--color-text-tertiary)",fontSize:11,padding:"2px 3px",borderRadius:3}}>✎</button>
+                      <button title="Delete" onClick={()=>setDeleteConfirmId(s.id)} style={{background:"none",border:"none",cursor:"pointer",color:"var(--color-text-danger)",fontSize:11,padding:"2px 3px",borderRadius:3}}>✕</button>
+                    </div>
                   </div>
-                :<div>
-                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
-                      <span style={{fontSize:12,fontWeight:500,color:"var(--color-text-primary)",flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{s.name}</span>
-                      <div style={{display:"flex",gap:1,marginLeft:4,flexShrink:0,opacity:0.7}} onClick={e=>e.stopPropagation()}>
-                        <button title="Rename" onClick={()=>{setRenamingId(s.id);setRenameVal(s.name);}} style={{background:"none",border:"none",cursor:"pointer",color:"var(--color-text-tertiary)",fontSize:11,padding:"2px 3px",borderRadius:3}}>✎</button>
-                        <button title="Delete" onClick={()=>setDeleteConfirmId(s.id)} style={{background:"none",border:"none",cursor:"pointer",color:"var(--color-text-danger)",fontSize:11,padding:"2px 3px",borderRadius:3}}>✕</button>
-                      </div>
-                    </div>
-                    <div style={{display:"flex",gap:3,flexWrap:"wrap"}}>
-                      {s.testKind==="ui-design"
-                        ?<><Tag c="purple">UI</Tag>{s.uidJiraTicketKey&&<Tag c="blue">{s.uidJiraTicketKey}</Tag>}{(s.uidCases?.length||0)>0&&<Tag c="green">{s.uidCases.length} TC</Tag>}{s.uidVisualResult&&<Tag c="green">✓</Tag>}</>
-                        :s.testKind==="non-functional"
-                        ?<><Tag c="amber">PERF</Tag><Tag c="blue">{s.perfForm?.method||"GET"}</Tag>{s.perfResult&&<Tag c={s.perfResult.passed?"green":"red"}>{s.perfResult.passed?"✓ Pass":"✗ Fail"}</Tag>}</>
-                        :<><Tag c="blue">{s.sid}</Tag>{(s.cases?.filter(c=>c.status==="approved")?.length||0)>0&&<Tag c="green">{s.cases.filter(c=>c.status==="approved").length} TC</Tag>}{s.coverageText&&<Tag c="green">✓</Tag>}</>}
-                    </div>
-                  </div>}
-            </div>);
-          const cats=DB.categories;
-          const grouped=cats.map(c=>({cat:c,stories:visibleStories.filter(s=>s.categoryId===c.id)})).filter(g=>g.stories.length>0);
-          const uncategorized=visibleStories.filter(s=>!s.categoryId);
-          return <div style={{padding:"6px 12px 12px"}}>
+                  <div style={{display:"flex",gap:3,flexWrap:"wrap"}}>
+                    {s.testKind==="ui-design"
+                      ?<><Tag c="purple">UI</Tag>{s.uidJiraTicketKey&&<Tag c="blue">{s.uidJiraTicketKey}</Tag>}{(s.uidCases?.length||0)>0&&<Tag c="green">{s.uidCases.length} TC</Tag>}{s.uidVisualResult&&<Tag c="green">✓</Tag>}</>
+                      :s.testKind==="non-functional"
+                      ?<><Tag c="amber">PERF</Tag><Tag c="blue">{s.perfForm?.method||"GET"}</Tag>{s.perfResult&&<Tag c={s.perfResult.passed?"green":"red"}>{s.perfResult.passed?"✓ Pass":"✗ Fail"}</Tag>}</>
+                      :<><Tag c="blue">{s.sid}</Tag>{(s.cases?.filter(c=>c.status==="approved")?.length||0)>0&&<Tag c="green">{s.cases.filter(c=>c.status==="approved").length} TC</Tag>}{s.coverageText&&<Tag c="green">✓</Tag>}</>}
+                  </div>
+                </div>}
+          </div>);
+        const cats=DB.categories;
+        const grouped=cats.map(c=>({cat:c,stories:visibleStories.filter(s=>s.categoryId===c.id)})).filter(g=>g.stories.length>0);
+        const uncategorized=visibleStories.filter(s=>!s.categoryId);
+        return <div style={{position:"relative",flexShrink:0,marginRight:12}}>
+          <div ref={storiesBtnRef} onClick={toggleStories} style={{padding:"7px 12px",cursor:"pointer",fontSize:14,fontWeight:400,color:"var(--color-text-secondary)",borderRadius:7,display:"flex",alignItems:"center",gap:6,whiteSpace:"nowrap"}}>
+            <span>📑</span>Saved Stories<span style={{fontSize:10,color:"var(--color-text-tertiary)"}}>{projFiltered.length}</span><span style={{fontSize:9,marginLeft:2}}>{storiesOpen?"▲":"▼"}</span>
+          </div>
+          {storiesOpen&&<div ref={storiesPanelRef} style={{position:"fixed",top:storiesPos.top,left:storiesPos.left,width:300,maxHeight:"70vh",overflowY:"auto",background:"var(--color-background-secondary)",border:"1px solid var(--color-border-secondary)",borderRadius:12,zIndex:9999,boxShadow:"0 8px 24px rgba(0,0,0,.14)",padding:"6px 12px 12px"}}>
             <div style={{fontSize:11,fontWeight:500,color:"var(--color-text-tertiary)",textTransform:"uppercase",letterSpacing:"0.07em",padding:"10px 8px 6px"}}>Saved Stories</div>
             {projFiltered.length > 4 && <input value={storySearch} onChange={e=>setStorySearch(e.target.value)} placeholder="Search stories..." style={{width:"100%",boxSizing:"border-box",fontSize:11,padding:"4px 8px",borderRadius:5,border:"1px solid var(--color-border-secondary)",background:"var(--color-background-secondary)",color:"var(--color-text-primary)",marginBottom:6,outline:"none"}}/>}
             {visibleStories.length===0&&storySearch.trim()&&<div style={{fontSize:11,color:"var(--color-text-tertiary)",padding:"4px 8px"}}>No stories match.</div>}
@@ -5110,28 +5380,35 @@ function App() {
                 </div>
               </div>
             </div>}
-          </div>;
-        })()}
-      </div>
-      <div style={{padding:"14px 20px",borderTop:"1px solid var(--color-border-tertiary)"}}>
-        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
-          <div><div style={{fontSize:13,fontWeight:600}}>{user.role==="admin"?"Admin":user.member?.name}</div><div style={{fontSize:11,color:"var(--color-text-tertiary)",marginTop:1}}>{user.role==="admin"?"QA Lead":user.member?.role}</div></div>
-          <NotifBell userId={user.role==="admin"?"admin":user.id}/>
+          </div>}
+        </div>;
+      })()}
+      <div style={{flex:1}}/>
+      <div style={{display:"flex",alignItems:"center",gap:12,flexShrink:0,paddingLeft:12}}>
+        <NotifBell userId={user.role==="admin"?"admin":user.id}/>
+        <div style={{position:"relative"}}>
+          <div ref={userMenuBtnRef} onClick={toggleUserMenu} style={{textAlign:"right",cursor:"pointer"}}>
+            <div style={{fontSize:13,fontWeight:600,color:"var(--sitech-navy)"}}>{user.role==="admin"?"Admin":user.member?.name}</div>
+            <div style={{fontSize:11,color:"var(--color-text-tertiary)"}}>{user.role==="admin"?"QA Lead":user.member?.role}</div>
+          </div>
+          {userMenuOpen&&<div ref={userMenuPanelRef} style={{position:"fixed",top:userMenuPos.top,left:userMenuPos.left,width:200,background:"var(--color-background-secondary)",border:"1px solid var(--color-border-secondary)",borderRadius:12,zIndex:9999,boxShadow:"0 8px 24px rgba(0,0,0,.14)",padding:8,display:"flex",flexDirection:"column",gap:4}}>
+            {user.role==="member"&&<button className="qa-btn" onClick={()=>{setShowConfig(true);setUserMenuOpen(false);}} style={{width:"100%",padding:"7px 0",borderRadius:9,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:13,color:"var(--color-text-secondary)",display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>
+              {sessionStorage.getItem(SESSION_TOKEN_KEY)?<><span style={{color:"var(--color-text-success)"}}>●</span> Settings</>:<><span style={{color:"var(--color-text-warning)"}}>●</span> Settings</>}
+            </button>}
+            {user.role==="admin"&&<button className="qa-btn" onClick={()=>{setShowChangePwd(true);setUserMenuOpen(false);}} style={{width:"100%",padding:"7px 0",borderRadius:9,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:13,color:"var(--color-text-secondary)"}}>🔒 Change Password</button>}
+            {user.role==="admin"&&<button className="qa-btn" onClick={()=>{setShowChangeUsername(true);setUserMenuOpen(false);}} style={{width:"100%",padding:"7px 0",borderRadius:9,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:13,color:"var(--color-text-secondary)"}}>👤 Change Username</button>}
+            <button className="qa-btn" onClick={handleLogout} style={{width:"100%",padding:"8px 0",borderRadius:9,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:13,color:"var(--color-text-secondary)"}}>Sign out</button>
+          </div>}
         </div>
-        {user.role==="member"&&<button className="qa-btn" onClick={()=>setShowConfig(true)} style={{width:"100%",padding:"7px 0",borderRadius:9,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:13,color:"var(--color-text-secondary)",marginBottom:8,display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>
-          {sessionStorage.getItem(SESSION_TOKEN_KEY)?<><span style={{color:"var(--color-text-success)"}}>●</span> Settings</>:<><span style={{color:"var(--color-text-warning)"}}>●</span> Settings</>}
-        </button>}
-        {user.role==="admin"&&<button className="qa-btn" onClick={()=>setShowChangePwd(true)} style={{width:"100%",padding:"7px 0",borderRadius:9,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:13,color:"var(--color-text-secondary)",marginBottom:6}}>🔒 Change Password</button>}
-        {user.role==="admin"&&<button className="qa-btn" onClick={()=>setShowChangeUsername(true)} style={{width:"100%",padding:"7px 0",borderRadius:9,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:13,color:"var(--color-text-secondary)",marginBottom:8}}>👤 Change Username</button>}
-        <button className="qa-btn" onClick={handleLogout} style={{width:"100%",padding:"8px 0",borderRadius:9,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:13,color:"var(--color-text-secondary)"}}>Sign out</button>
       </div>
     </div>
     <div style={{flex:1,padding:28,overflow:"auto",minHeight:"100vh"}}>
-      {user.role==="admin"&&page==="dashboard"&&<DashboardPage/>}
-      {user.role==="admin"&&page==="members"&&<MembersPage/>}
-      {user.role==="admin"&&page==="projects"&&<ProjectsPage/>}
-      {user.role==="admin"&&page==="assign"&&<AssignmentsPage/>}
+      {user.role==="admin"&&page==="dashboard"&&<DashboardPage onNavigate={setPage}/>}
+      {user.role==="admin"&&page==="members"&&<MembersPage onBack={()=>setPage("dashboard")}/>}
+      {user.role==="admin"&&page==="projects"&&<ProjectsPage onBack={()=>setPage("dashboard")}/>}
+      {user.role==="admin"&&page==="assign"&&<AssignmentsPage onBack={()=>setPage("dashboard")}/>}
       {user.role==="member"&&page==="workspace"&&<Workspace member={user.member} refreshSaved={refreshSaved} restoreTarget={restoreTarget} clearRestore={()=>setRestoreTarget(null)} onActiveSid={setActiveSid} onProjChange={setActiveProj} resetTrigger={resetTrigger}/>}
+      {user.role==="member"&&page==="history"&&<MemberHistoryPage member={user.member}/>}
     </div>
   </div>;
 }
