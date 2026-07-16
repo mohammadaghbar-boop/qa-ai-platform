@@ -34,10 +34,23 @@ test('prompt contains the TYPE OWNERSHIP RULE (anti-duplication)', () => {
   assert.match(tmplMatch[1], /return ZERO cases for that type/);
 });
 
-test('prompt contains ATOMIC ASSERTIONS, NO INVENTED IMPLEMENTATION DETAILS, DD VALUE ASSERTIONS', () => {
+test('prompt contains ATOMIC ASSERTIONS, NO INVENTED IMPLEMENTATION DETAILS, SPECIFIED-VALUE ASSERTIONS', () => {
   assert.match(tmplMatch[1], /ATOMIC ASSERTIONS/);
   assert.match(tmplMatch[1], /NO INVENTED IMPLEMENTATION DETAILS/);
-  assert.match(tmplMatch[1], /DD VALUE ASSERTIONS/);
+  // Specified values (UI tables, message templates, DD fields) must be asserted
+  // with exact content — presence-only checks are called out as coverage defects.
+  assert.match(tmplMatch[1], /SPECIFIED-VALUE ASSERTIONS/);
+  assert.match(tmplMatch[1], /INSUFFICIENT when the story defines the SMS body/);
+  assert.match(tmplMatch[1], /DISPLAYED-VALUE CORRECTNESS/);
+});
+
+test('regression guide forbids labeling new-story behavior as regression', () => {
+  const guideMatch = html.match(/const typeGuide=(\{[\s\S]*?\});/);
+  const typeGuide = eval('(' + guideMatch[1] + ')');
+  assert.match(typeGuide.regression, /NEVER regression/,
+    'regression guide must state that story-introduced behavior is never regression');
+  assert.match(typeGuide.regression, /PRE-EXISTING/,
+    'regression guide must scope to pre-existing behaviors');
 });
 
 test('risk patterns are gated with ONLY IF conditions', () => {
