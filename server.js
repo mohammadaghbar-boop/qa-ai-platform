@@ -1235,12 +1235,23 @@ function generateK6Script({ testType, mode, method, apiUrl, steps, vus, duration
   // this just bounds how much QA_FAIL:: detail runK6() has to parse out of
   // stdout when a broken endpoint fails on every single request.
   const FAIL_LOG_CAP = 50;
-  const failLogDecl = `let __failLogCount = 0;\nconst __FAIL_LOG_CAP = ${FAIL_LOG_CAP};`;
+  // __qaFailErr prefers k6's own transport error (connection refused, timeout);
+  // otherwise it pulls the actual error message the API returned in its response
+  // body (checking common {error|message|detail|title|errors} shapes) so the
+  // report can group by *why* the API said the request failed, not just the
+  // HTTP status mismatch.
+  const failLogDecl = `let __failLogCount = 0;\nconst __FAIL_LOG_CAP = ${FAIL_LOG_CAP};\nfunction __qaFailErr(r) { if (r.error) return String(r.error).slice(0, 200); var t = ''; try { t = r.body || ''; } catch (e) {} if (!t) return ''; try { var j = JSON.parse(t); var m = j.error || j.message || j.detail || j.title || (Array.isArray(j.errors) ? j.errors.map(function (x) { return typeof x === 'string' ? x : (x.message || JSON.stringify(x)); }).join('; ') : j.errors); if (m) return String(m).slice(0, 200); } catch (e) {} return String(t).slice(0, 200); }`;
   // Emitted right after each check() — reports the actual status/error k6 saw
   // for that request so the UI can show *why* a check failed, not just that
   // it did. QA_FAIL:: is a distinctive prefix runK6() greps out of stdout.
+  //
+  // Logs on expectedStatus mismatch OR on any response k6's own
+  // http_req_failed metric counts as an error (status 0 or >=400) — that
+  // metric (not our custom check) is what actually drives the error-rate
+  // threshold, so a run can fail the threshold with zero logged mismatches
+  // if the API's real status happens to equal the configured expectedStatus.
   const failLogStmt = (resVar, exp, stepLabel) =>
-    `if (${resVar}.status !== ${exp} && __failLogCount < __FAIL_LOG_CAP) { __failLogCount++; console.log('QA_FAIL::' + JSON.stringify({step: ${stepLabel != null ? JSON.stringify(stepLabel) : 'null'}, expectedStatus: ${exp}, actualStatus: ${resVar}.status, statusText: ${resVar}.status_text || '', error: ${resVar}.error || ''})); }`;
+    `if ((${resVar}.status !== ${exp} || ${resVar}.status === 0 || ${resVar}.status >= 400) && __failLogCount < __FAIL_LOG_CAP) { __failLogCount++; console.log('QA_FAIL::' + JSON.stringify({step: ${stepLabel != null ? JSON.stringify(stepLabel) : 'null'}, expectedStatus: ${exp}, actualStatus: ${resVar}.status, statusText: ${resVar}.status_text || '', error: __qaFailErr(${resVar})})); }`;
 
   // Flow mode: a named sequence of API calls executed in order within each VU
   // iteration (k6 runs the default function's statements sequentially per
@@ -1379,13 +1390,27 @@ export default function () {
 // check (see failLogStmt in generateK6Script) and groups identical failures
 // (same step + expected/actual status + error text) into counted buckets,
 // so "500 of these timed out" shows as one row instead of 500.
-function parseK6Failures(stdout) {
+//
+// k6's console.log() goes through its logfmt-style logger, which wraps the
+// message in msg="..." and Go-escapes it (\" for quotes, literal \r\n for
+// newlines) — so a naive JSON.parse(line.slice(...)) always throws (the
+// trailing `" source=console` isn't valid JSON, and the quotes/newlines
+// inside are double-escaped). We pull the msg="..." value out with a
+// quote-aware regex first, then undo Go's escaping before parsing.
+function parseK6Failures(output) {
   const groups = new Map();
-  for (const line of stdout.split('\n')) {
-    const idx = line.indexOf('QA_FAIL::');
+  const msgRe = /msg="((?:\\.|[^"\\])*)"/g;
+  let m;
+  while ((m = msgRe.exec(output)) !== null) {
+    const raw = m[1];
+    const idx = raw.indexOf('QA_FAIL::');
     if (idx === -1) continue;
+    // Only reverse Go's own quoting (\" and \\) — the \r/\n/\t sequences
+    // underneath are the JSON payload's own escapes and must stay backslash-
+    // form for JSON.parse to turn them back into real control characters.
+    const jsonText = raw.slice(idx + 'QA_FAIL::'.length).replace(/\\(["\\])/g, '$1');
     let item;
-    try { item = JSON.parse(line.slice(idx + 'QA_FAIL::'.length)); } catch { continue; }
+    try { item = JSON.parse(jsonText); } catch { continue; }
     const key = [item.step || '', item.expectedStatus, item.actualStatus, item.error || ''].join('|');
     const existing = groups.get(key);
     if (existing) existing.count++;
@@ -1420,7 +1445,8 @@ function runK6(scriptPath) {
         const dur  = findMetric('http_req_duration');
         const req  = findMetric('http_reqs');
         const fail = findMetric('http_req_failed');
-        const failures = parseK6Failures(stdout);
+        // k6 writes console.log() output (our QA_FAIL:: lines) to stderr, not stdout.
+        const failures = parseK6Failures(stdout + '\n' + stderr);
         if (failures.length) console.log('[Perf] failure groups:', JSON.stringify(failures));
         resolve({
           passed: code === 0,
