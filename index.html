@@ -955,7 +955,7 @@ function FailuresList({failures}) {
 }
 
 /* ─── Perf History Report Modal ───────────────────────────────────────────── */
-function PerfHistoryReportModal({item,onClose}) {
+function PerfHistoryReportModal({item,onClose,onRunAgain}) {
   const ghostBtn={padding:"9px 20px",borderRadius:10,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:14,fontWeight:500,color:"var(--color-text-secondary)"};
   const m=item.metrics||{};
   const pass=item.passed;
@@ -1026,12 +1026,13 @@ function PerfHistoryReportModal({item,onClose}) {
         </div>
       </div>
       {item.failures&&item.failures.length>0&&<div style={{marginTop:16}}><FailuresList failures={item.failures}/></div>}
+      {onRunAgain&&<div style={{marginTop:20,display:"flex",justifyContent:"flex-end"}}><Btn v="primary" onClick={()=>onRunAgain(item)}>↻ Run Again</Btn></div>}
     </div>
   </div>;
 }
 
 /* ─── Member History Page — sidebar item below Workspace ─────────────────── */
-function MemberHistoryPage({member}) {
+function MemberHistoryPage({member,onRunAgain}) {
   const [perfHistory,setPerfHistory]=useState([]);
   const [perfHistoryLoading,setPerfHistoryLoading]=useState(true);
   const [historyDetail,setHistoryDetail]=useState(null);
@@ -1048,11 +1049,11 @@ function MemberHistoryPage({member}) {
       <div style={{overflowX:"auto"}}>
         <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
           <thead><tr style={{borderBottom:"1px solid var(--color-border-secondary)"}}>{["Name","Method","URL","VUs","Duration","p95 (ms)","Threshold","Pass/Fail","Date",""].map(h=><th key={h} style={{padding:"6px 10px",textAlign:"left",fontWeight:600,color:"var(--color-text-secondary)"}}>{h}</th>)}</tr></thead>
-          <tbody>{perfHistory.map((h,i)=><tr key={i} onClick={()=>setHistoryDetail(h)} style={{borderBottom:"1px solid var(--color-border-tertiary)",cursor:"pointer"}} onMouseEnter={e=>e.currentTarget.style.background="var(--color-background-secondary)"} onMouseLeave={e=>e.currentTarget.style.background="transparent"}><td style={{padding:"6px 10px"}}>{h.testName||"—"}</td><td style={{padding:"6px 10px"}}>{h.mode==="flow"?<Tag c="blue">Flow</Tag>:(h.method||"GET")}</td><td style={{padding:"6px 10px",maxWidth:120,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={h.mode==="flow"?`${h.stepCount||0} step(s)`:(h.apiUrl||"")}>{h.mode==="flow"?`${h.stepCount||0} step(s)`:(h.apiUrl||"—")}</td><td style={{padding:"6px 10px"}}>{h.vus||"—"}</td><td style={{padding:"6px 10px"}}>{h.duration||"—"}</td><td style={{padding:"6px 10px"}}>{h.metrics?.p95!=null?h.metrics.p95:"—"}</td><td style={{padding:"6px 10px"}}>{h.p95Threshold?"≤"+h.p95Threshold+"ms":"—"}</td><td style={{padding:"6px 10px"}}><span style={{color:h.passed?"var(--color-text-success)":"var(--color-text-danger)",fontWeight:600}}>{h.passed?"✓ Pass":"✗ Fail"}</span></td><td style={{padding:"6px 10px",whiteSpace:"nowrap"}}>{h.syncedAt?new Date(h.syncedAt).toLocaleDateString():"—"}</td><td style={{padding:"6px 10px"}}><button onClick={e=>{e.stopPropagation();setHistoryDetail(h);}} style={{...ghostBtn,padding:"3px 10px",fontSize:11}}>📄 Report</button></td></tr>)}</tbody>
+          <tbody>{perfHistory.map((h,i)=><tr key={i} onClick={()=>setHistoryDetail(h)} style={{borderBottom:"1px solid var(--color-border-tertiary)",cursor:"pointer"}} onMouseEnter={e=>e.currentTarget.style.background="var(--color-background-secondary)"} onMouseLeave={e=>e.currentTarget.style.background="transparent"}><td style={{padding:"6px 10px"}}>{h.testName||"—"}</td><td style={{padding:"6px 10px"}}>{h.mode==="flow"?<Tag c="blue">Flow</Tag>:(h.method||"GET")}</td><td style={{padding:"6px 10px",maxWidth:120,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={h.mode==="flow"?`${h.stepCount||0} step(s)`:(h.apiUrl||"")}>{h.mode==="flow"?`${h.stepCount||0} step(s)`:(h.apiUrl||"—")}</td><td style={{padding:"6px 10px"}}>{h.vus||"—"}</td><td style={{padding:"6px 10px"}}>{h.duration||"—"}</td><td style={{padding:"6px 10px"}}>{h.metrics?.p95!=null?h.metrics.p95:"—"}</td><td style={{padding:"6px 10px"}}>{h.p95Threshold?"≤"+h.p95Threshold+"ms":"—"}</td><td style={{padding:"6px 10px"}}><span style={{color:h.passed?"var(--color-text-success)":"var(--color-text-danger)",fontWeight:600}}>{h.passed?"✓ Pass":"✗ Fail"}</span></td><td style={{padding:"6px 10px",whiteSpace:"nowrap"}}>{h.syncedAt?new Date(h.syncedAt).toLocaleDateString():"—"}</td><td style={{padding:"6px 10px",whiteSpace:"nowrap"}}><button onClick={e=>{e.stopPropagation();setHistoryDetail(h);}} style={{...ghostBtn,padding:"3px 10px",fontSize:11}}>📄 Report</button>{onRunAgain&&<> <button onClick={e=>{e.stopPropagation();onRunAgain(h);}} style={{...ghostBtn,padding:"3px 10px",fontSize:11}}>↻ Run Again</button></>}</td></tr>)}</tbody>
         </table>
       </div>}
     </div>
-    {historyDetail&&<PerfHistoryReportModal item={historyDetail} onClose={()=>setHistoryDetail(null)}/>}
+    {historyDetail&&<PerfHistoryReportModal item={historyDetail} onClose={()=>setHistoryDetail(null)} onRunAgain={onRunAgain}/>}
   </div>;
 }
 
@@ -1697,7 +1698,7 @@ function BarChart({data,title}) {
 /* ─── Workspace ───────────────────────────────────────────────────────────── */
 // WS_STEPS and WS_IDX are defined inside Workspace (reactive on testKind)
 
-function Workspace({member,refreshSaved,restoreTarget,clearRestore,onActiveSid,onProjChange,resetTrigger}) {
+function Workspace({member,refreshSaved,restoreTarget,clearRestore,onActiveSid,onProjChange,resetTrigger,perfRerunTarget,clearPerfRerun}) {
   // GAP-02: load assigned projects from server so members on any browser see their projects
   const [serverProjects,setServerProjects]=React.useState(null);
   React.useEffect(()=>{
@@ -2000,6 +2001,30 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
   },[sid,testKind,uidStoryId,perfStoryId]);
   React.useEffect(()=>{if(onProjChange)onProjChange(proj);},[selectedProjId]);
   React.useEffect(()=>{if(restoreTarget){restoreStory(restoreTarget);if(clearRestore)clearRestore();}}, [restoreTarget]);
+  // Jump here from the History sidebar page's "Run Again" — auth/body aren't persisted
+  // in history (tokens shouldn't be stored in plaintext), so those reset to defaults.
+  React.useEffect(()=>{
+    if(!perfRerunTarget)return;
+    const h=perfRerunTarget;
+    setTestKind("non-functional");
+    setPerfForm({
+      ...PERF_FORM_DEFAULT,
+      testName:h.testName||"",
+      testType:h.testType||"load",
+      mode:h.mode||"single",
+      method:h.method||"GET",
+      apiUrl:h.apiUrl||"",
+      steps:Array.isArray(h.steps)?h.steps:[],
+      vus:h.vus||PERF_FORM_DEFAULT.vus,
+      duration:h.duration||PERF_FORM_DEFAULT.duration,
+      ramp:h.ramp||PERF_FORM_DEFAULT.ramp,
+      p95Threshold:h.p95Threshold||PERF_FORM_DEFAULT.p95Threshold,
+    });
+    setPerfResult(null);
+    setPerfTab("test");
+    setPhase("perfTest");
+    if(clearPerfRerun)clearPerfRerun();
+  }, [perfRerunTarget]);
   React.useEffect(()=>{if(resetTrigger>0)reset();},[resetTrigger]);
   React.useEffect(()=>{
     if(!sid||!sdata)return;
@@ -3681,6 +3706,26 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
           const totalSec=isStress?durSecs[perfForm.duration]*4+rampSecs[perfForm.ramp]*5:(durSecs[perfForm.duration]||60)+(rampSecs[perfForm.ramp]||10)*2;
           const s_=v=>setPerfForm(f=>({...f,...v}));
           const inpN={...inp,maxWidth:130};
+          // Auth/body/headers aren't persisted in history (tokens shouldn't be stored in plaintext),
+          // so re-running from a saved record restores everything else and resets those to defaults.
+          const runAgainFromHistory=(h)=>{
+            setPerfForm({
+              ...PERF_FORM_DEFAULT,
+              testName:h.testName||"",
+              testType:h.testType||"load",
+              mode:h.mode||"single",
+              method:h.method||"GET",
+              apiUrl:h.apiUrl||"",
+              steps:Array.isArray(h.steps)?h.steps:[],
+              vus:h.vus||PERF_FORM_DEFAULT.vus,
+              duration:h.duration||PERF_FORM_DEFAULT.duration,
+              ramp:h.ramp||PERF_FORM_DEFAULT.ramp,
+              p95Threshold:h.p95Threshold||PERF_FORM_DEFAULT.p95Threshold,
+            });
+            setPerfResult(null);
+            setHistoryDetail(null);
+            setPerfTab("test");
+          };
           const applyCurl=()=>{
             const parsed=parseCurlCommand(curlDraft);
             if(!parsed||!parsed.url){setCurlErr("Couldn't find a URL in that command.");return;}
@@ -3715,11 +3760,11 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
             <div style={{overflowX:"auto"}}>
               <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
                 <thead><tr style={{borderBottom:"1px solid var(--color-border-secondary)"}}>{["Name","Method","URL","VUs","Duration","p95 (ms)","Threshold","Pass/Fail","Date",""].map(h=><th key={h} style={{padding:"6px 10px",textAlign:"left",fontWeight:600,color:"var(--color-text-secondary)"}}>{h}</th>)}</tr></thead>
-                <tbody>{perfHistory.map((h,i)=><tr key={i} onClick={()=>setHistoryDetail(h)} style={{borderBottom:"1px solid var(--color-border-tertiary)",cursor:"pointer"}} onMouseEnter={e=>e.currentTarget.style.background="var(--color-background-secondary)"} onMouseLeave={e=>e.currentTarget.style.background="transparent"}><td style={{padding:"6px 10px"}}>{h.testName||"—"}</td><td style={{padding:"6px 10px"}}>{h.mode==="flow"?<Tag c="blue">Flow</Tag>:(h.method||"GET")}</td><td style={{padding:"6px 10px",maxWidth:120,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={h.mode==="flow"?`${h.stepCount||0} step(s)`:(h.apiUrl||"")}>{h.mode==="flow"?`${h.stepCount||0} step(s)`:(h.apiUrl||"—")}</td><td style={{padding:"6px 10px"}}>{h.vus||"—"}</td><td style={{padding:"6px 10px"}}>{h.duration||"—"}</td><td style={{padding:"6px 10px"}}>{h.metrics?.p95!=null?h.metrics.p95:"—"}</td><td style={{padding:"6px 10px"}}>{h.p95Threshold?"≤"+h.p95Threshold+"ms":"—"}</td><td style={{padding:"6px 10px"}}><span style={{color:h.passed?"var(--color-text-success)":"var(--color-text-danger)",fontWeight:600}}>{h.passed?"✓ Pass":"✗ Fail"}</span></td><td style={{padding:"6px 10px",whiteSpace:"nowrap"}}>{h.syncedAt?new Date(h.syncedAt).toLocaleDateString():"—"}</td><td style={{padding:"6px 10px"}}><button onClick={e=>{e.stopPropagation();setHistoryDetail(h);}} style={{...ghostBtn,padding:"3px 10px",fontSize:11}}>📄 Report</button></td></tr>)}</tbody>
+                <tbody>{perfHistory.map((h,i)=><tr key={i} onClick={()=>setHistoryDetail(h)} style={{borderBottom:"1px solid var(--color-border-tertiary)",cursor:"pointer"}} onMouseEnter={e=>e.currentTarget.style.background="var(--color-background-secondary)"} onMouseLeave={e=>e.currentTarget.style.background="transparent"}><td style={{padding:"6px 10px"}}>{h.testName||"—"}</td><td style={{padding:"6px 10px"}}>{h.mode==="flow"?<Tag c="blue">Flow</Tag>:(h.method||"GET")}</td><td style={{padding:"6px 10px",maxWidth:120,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={h.mode==="flow"?`${h.stepCount||0} step(s)`:(h.apiUrl||"")}>{h.mode==="flow"?`${h.stepCount||0} step(s)`:(h.apiUrl||"—")}</td><td style={{padding:"6px 10px"}}>{h.vus||"—"}</td><td style={{padding:"6px 10px"}}>{h.duration||"—"}</td><td style={{padding:"6px 10px"}}>{h.metrics?.p95!=null?h.metrics.p95:"—"}</td><td style={{padding:"6px 10px"}}>{h.p95Threshold?"≤"+h.p95Threshold+"ms":"—"}</td><td style={{padding:"6px 10px"}}><span style={{color:h.passed?"var(--color-text-success)":"var(--color-text-danger)",fontWeight:600}}>{h.passed?"✓ Pass":"✗ Fail"}</span></td><td style={{padding:"6px 10px",whiteSpace:"nowrap"}}>{h.syncedAt?new Date(h.syncedAt).toLocaleDateString():"—"}</td><td style={{padding:"6px 10px",whiteSpace:"nowrap"}}><button onClick={e=>{e.stopPropagation();setHistoryDetail(h);}} style={{...ghostBtn,padding:"3px 10px",fontSize:11}}>📄 Report</button> <button onClick={e=>{e.stopPropagation();runAgainFromHistory(h);}} style={{...ghostBtn,padding:"3px 10px",fontSize:11}}>↻ Run Again</button></td></tr>)}</tbody>
               </table>
             </div>}
           </div>}
-          {historyDetail&&<PerfHistoryReportModal item={historyDetail} onClose={()=>setHistoryDetail(null)}/>}
+          {historyDetail&&<PerfHistoryReportModal item={historyDetail} onClose={()=>setHistoryDetail(null)} onRunAgain={runAgainFromHistory}/>}
           {perfTab==="test"&&<div style={{display:"flex",gap:20,alignItems:"flex-start"}}>
             {/* ── LEFT: form ── */}
             <div style={{flex:1,minWidth:0,display:"flex",flexDirection:"column",gap:0}}>
@@ -5064,6 +5109,7 @@ function App() {
   const [showOnboarding,setShowOnboarding]=useState(false);
   const [savedStories,setSavedStories]=useState(()=>[...DB.savedStories]);
   const [restoreTarget,setRestoreTarget]=useState(null);
+  const [perfRerunTarget,setPerfRerunTarget]=useState(null);
   const [activeSid,setActiveSid]=useState(""); const [activeProj,setActiveProj]=useState(null);
   const [renamingId,setRenamingId]=useState(null); const [renameVal,setRenameVal]=useState("");
   const [deleteConfirmId,setDeleteConfirmId]=useState(null);
@@ -5240,8 +5286,8 @@ function App() {
       {user.role==="admin"&&page==="members"&&<MembersPage/>}
       {user.role==="admin"&&page==="projects"&&<ProjectsPage/>}
       {user.role==="admin"&&page==="assign"&&<AssignmentsPage/>}
-      {user.role==="member"&&page==="workspace"&&<Workspace member={user.member} refreshSaved={refreshSaved} restoreTarget={restoreTarget} clearRestore={()=>setRestoreTarget(null)} onActiveSid={setActiveSid} onProjChange={setActiveProj} resetTrigger={resetTrigger}/>}
-      {user.role==="member"&&page==="history"&&<MemberHistoryPage member={user.member}/>}
+      {user.role==="member"&&page==="workspace"&&<Workspace member={user.member} refreshSaved={refreshSaved} restoreTarget={restoreTarget} clearRestore={()=>setRestoreTarget(null)} onActiveSid={setActiveSid} onProjChange={setActiveProj} resetTrigger={resetTrigger} perfRerunTarget={perfRerunTarget} clearPerfRerun={()=>setPerfRerunTarget(null)}/>}
+      {user.role==="member"&&page==="history"&&<MemberHistoryPage member={user.member} onRunAgain={h=>{setPerfRerunTarget(h);setPage("workspace");}}/>}
     </div>
   </div>;
 }
