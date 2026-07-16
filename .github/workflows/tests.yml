@@ -1,0 +1,25 @@
+name: tests
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  node-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # session.integration.test.js spawns the real server, which requires dotenv.
+      - name: Install production dependencies
+        run: npm install --omit=dev
+
+      - name: Run unit + integration tests
+        run: node --test tests/aio.test.js tests/qa-lib.test.js tests/session.integration.test.js tests/projects.integration.test.js tests/generation-contract.test.js
