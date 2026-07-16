@@ -15,6 +15,7 @@
 // Notes   :
 //   - Port 3456 (override with PORT env var)
 //   - k6 is bundled inside Docker — no separate install needed
+//   - newman must be installed globally (npm install -g newman) for API/Postman test execution
 //   - Sessions are in-memory — if container restarts, members must log out and back in
 //   - No .env file needed — credentials are managed inside the app per member
 // ─────────────────────────────────────────────────────────────────────────────
@@ -147,6 +148,19 @@ setInterval(() => {
 /* ── Demo / mock AI responses (used when API key is "demo") ─────────────── */
 function mockClaude(messages) {
   const prompt = (messages || []).map(m => m.content || '').join('\n');
+
+  // API test case generation — detect via marker phrase used only in the API-kind prompt
+  if (/return only a valid json array/i.test(prompt) && /api test case/i.test(prompt)) {
+    const type = /negative/i.test(prompt) ? 'negative' : /edge/i.test(prompt) ? 'edge' : 'happy';
+    const m = prompt.match(/Endpoint 1:\s*(GET|POST|PUT|PATCH|DELETE)\s+(\S+)/i);
+    const method = (m?.[1] || 'GET').toUpperCase();
+    const url = m?.[2] || 'https://api.example.com/resource';
+    const cases = [
+      { id:'TC-001', title:`Verify ${type==='happy'?'successful':type==='edge'?'boundary':'invalid'} request to ${url}`, type, method, url, headers:{ 'Content-Type':'application/json' }, body: ['POST','PUT','PATCH'].includes(method)?'{"example":"value"}':null, expectedStatus: type==='negative'?400:200, assertion: type==='happy'?'Response body contains expected fields':'Response returns an appropriate error', preconditions:'API endpoint is reachable', steps:[`Send ${method} request to ${url}`,'Inspect the response status code','Inspect the response body'], expected: type==='happy'?`Returns ${type==='negative'?400:200} with a valid JSON body`:'Returns an appropriate status code and error body', automatable:true },
+      { id:'TC-002', title:`Verify ${type==='happy'?'response schema':type==='edge'?'behavior with maximum payload size':'auth failure'} for ${url}`, type, method, url, headers:{ 'Content-Type':'application/json' }, body: ['POST','PUT','PATCH'].includes(method)?'{"example":"value"}':null, expectedStatus: type==='negative'?401:200, assertion:'Response matches the expected schema', preconditions:'API endpoint is reachable', steps:[`Send ${method} request to ${url}`,'Verify status code','Verify response schema'], expected:'Response matches the expected contract', automatable:true },
+    ];
+    return Promise.resolve(JSON.stringify(cases));
+  }
 
   // Test case generation — detect type from prompt text
   if (/return only a valid json array/i.test(prompt) && /test cases/i.test(prompt)) {
@@ -472,6 +486,78 @@ function runK6(scriptPath) {
   });
 }
 
+/* ── Postman Collection Runner (Newman) ─────────────────────────────────── */
+function runNewman(collection) {
+  return new Promise((resolve) => {
+    const runId  = crypto.randomBytes(16).toString('hex');
+    const colPath = path.join(os.tmpdir(), 'qa_newman_' + runId + '.json');
+    const outPath = path.join(os.tmpdir(), 'qa_newman_' + runId + '.out.json');
+    const cleanup = () => { try { fs.unlinkSync(colPath); } catch {} try { fs.unlinkSync(outPath); } catch {} };
+
+    try {
+      fs.writeFileSync(colPath, JSON.stringify(collection || {}));
+    } catch (e) { resolve({ lines:['Error writing collection: '+e.message], passed:[], failed:[], error:e.message }); return; }
+
+    const lines = [];
+    // Quote the paths: with shell:true a temp path containing a space (e.g. a Windows
+    // username with a space) would otherwise be split into separate args by the shell.
+    const q = p => '"' + p + '"';
+    const proc = spawn('newman', ['run', q(colPath), '--reporters', 'json', '--reporter-json-export', q(outPath)], { shell: true });
+    proc.stdout.on('data', d => d.toString().split('\n').filter(l=>l.trim()).forEach(l=>lines.push(l)));
+    proc.stderr.on('data', d => d.toString().split('\n').filter(l=>l.trim()).forEach(l=>lines.push(l)));
+
+    const timer = setTimeout(() => {
+      try { proc.kill('SIGTERM'); } catch {}
+      cleanup();
+      resolve({ lines:[...lines,'✗ Test run timed out after 5 minutes'], passed:[], failed:[], error:'timeout' });
+    }, 300000);
+
+    proc.on('close', () => {
+      clearTimeout(timer);
+      let passed = [], failed = [], gotReport = false;
+      try {
+        const out = JSON.parse(fs.readFileSync(outPath, 'utf8'));
+        gotReport = true;
+        const executions = out.run?.executions || [];
+        for (const ex of executions) {
+          const title = ex.item?.name || 'Request';
+          const assertions = ex.assertions || [];
+          const failedAssertions = assertions.filter(a => a.error);
+          if (ex.requestError) {
+            // Request itself failed (DNS, connection refused, timeout) — not a pass
+            const re = ex.requestError;
+            const reMsg = typeof re === 'string' ? re : (re.message || re.code || JSON.stringify(re));
+            failed.push({ title, error: ('Request failed: ' + reMsg).slice(0, 300) });
+          } else if (failedAssertions.length > 0) {
+            failed.push({ title, error: (failedAssertions[0].error?.message || 'Assertion failed').slice(0, 300) });
+          } else {
+            passed.push(title);
+          }
+        }
+      } catch (e) { /* no valid reporter output — handled below */ }
+      cleanup();
+      // If Newman never produced a report, decide whether it's a missing binary or a real failure.
+      // On Windows, `shell:true` means a missing command surfaces here as text, not as an ENOENT error event.
+      if (!gotReport) {
+        const joined = lines.join('\n').toLowerCase();
+        if (/not recognized as an internal or external command|command not found|no such file or directory|'newman' is not recognized/.test(joined)) {
+          resolve({ lines, passed: [], failed: [], error: 'not_installed' });
+          return;
+        }
+        resolve({ lines: [...lines, '✗ Newman produced no report output.'], passed: [], failed: [], error: 'no_output' });
+        return;
+      }
+      lines.push(''); lines.push('Results: '+passed.length+' passed, '+failed.length+' failed');
+      resolve({ lines, passed, failed, error: null });
+    });
+
+    proc.on('error', e => {
+      clearTimeout(timer); cleanup();
+      resolve({ lines:[], passed:[], failed:[], error: e.code==='ENOENT'?'not_installed':e.message });
+    });
+  });
+}
+
 /* ── HTTP Server ────────────────────────────────────────────────────────── */
 const server = http.createServer((req, res) => {
   // Security headers on every response
@@ -614,6 +700,21 @@ const server = http.createServer((req, res) => {
       try {
         const parsed = JSON.parse(body);
         const result = await runPlaywrightTests(parsed.files || {});
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(result));
+      } catch (e) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: e.message, lines: [], passed: [], failed: [] }));
+      }
+      return;
+    }
+
+    /* ── /api/postman/run (requires session) ── */
+    if (req.method === 'POST' && req.url === '/api/postman/run') {
+      if (!getSession(req)) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Authentication required' })); return; }
+      try {
+        const parsed = JSON.parse(body);
+        const result = await runNewman(parsed.collection || {});
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(result));
       } catch (e) {
