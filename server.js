@@ -34,14 +34,15 @@ const { spawn } = require('child_process');
 process.on('uncaughtException', err => console.error('[Server] Uncaught exception:', err.message));
 process.on('unhandledRejection', err => console.error('[Server] Unhandled rejection:', err && err.message));
 
-// In-memory session store: token -> { memberId, jiraUrl, jiraAuth, createdAt }
+// In-memory session store: token -> { memberId, jiraUrl, jiraAuth, aioToken, createdAt }
 const sessions = new Map();
-function createSession(memberId, jiraUrl, jiraEmail, jiraToken) {
+function createSession(memberId, jiraUrl, jiraEmail, jiraToken, aioToken) {
   const token = crypto.randomBytes(32).toString('hex');
   sessions.set(token, {
     memberId,
     jiraUrl:  jiraUrl  || '',
     jiraAuth: (jiraEmail && jiraToken) ? Buffer.from(jiraEmail + ':' + jiraToken).toString('base64') : '',
+    aioToken: aioToken || '',
     createdAt: Date.now()
   });
   return token;
@@ -61,7 +62,7 @@ setInterval(() => {
   for (const [t, s] of sessions)      if (now - s.createdAt > API_SESSION_TTL)   sessions.delete(t);
   for (const [t, s] of adminSessions) if (now - s.createdAt > ADMIN_SESSION_TTL) adminSessions.delete(t);
   for (const [t, s] of memberSessions) if (now - (s.createdAt || 0) > ADMIN_SESSION_TTL) memberSessions.delete(t);
-}, 60 * 60 * 1000);
+}, 60 * 60 * 1000).unref();
 
 /* ── Configuration ──────────────────────────────────────────────────────── */
 const PORT              = parseInt(process.env.PORT) || 3456;
@@ -87,7 +88,7 @@ function checkRateLimit(ip) {
 setInterval(() => {
   const now = Date.now();
   for (const [ip, e] of loginAttempts) if (now > e.resetAt) loginAttempts.delete(ip);
-}, 5 * 60 * 1000);
+}, 5 * 60 * 1000).unref();
 
 /* ── Input validators & sanitizers ──────────────────────────────────────── */
 function sanitizeFilename(name) {
@@ -132,7 +133,9 @@ function isValidGitUrl(s) {
 }
 
 /* ── File-based data store (admin dashboard sync) ───────────────────────── */
-const DATA_DIR  = path.join(__dirname, 'data');
+// DATA_DIR env override lets tests run against an isolated data directory
+// without touching a member's real credentials and encryption key.
+const DATA_DIR  = process.env.DATA_DIR || path.join(__dirname, 'data');
 const DATA_FILE = path.join(DATA_DIR, 'qa-platform-db.json');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
@@ -158,11 +161,12 @@ function decryptField(stored) {
   d.setAuthTag(Buffer.from(tagH, 'hex'));
   return d.update(Buffer.from(dataH, 'hex')) + d.final('utf8');
 }
-function encryptMemberCredentials(jiraUrl, jiraEmail, jiraToken) {
+function encryptMemberCredentials(jiraUrl, jiraEmail, jiraToken, aioToken) {
   return {
     jiraUrl:   jiraUrl   ? encryptField(jiraUrl)   : '',
     jiraEmail: jiraEmail ? encryptField(jiraEmail) : '',
-    jiraToken: jiraToken ? encryptField(jiraToken) : ''
+    jiraToken: jiraToken ? encryptField(jiraToken) : '',
+    aioToken:  aioToken  ? encryptField(aioToken)  : ''
   };
 }
 function decryptMemberCredentials(member) {
@@ -172,7 +176,8 @@ function decryptMemberCredentials(member) {
     return {
       jiraUrl:   c.jiraUrl   ? decryptField(c.jiraUrl)   : '',
       jiraEmail: c.jiraEmail ? decryptField(c.jiraEmail) : '',
-      jiraToken: c.jiraToken ? decryptField(c.jiraToken) : ''
+      jiraToken: c.jiraToken ? decryptField(c.jiraToken) : '',
+      aioToken:  c.aioToken  ? decryptField(c.aioToken)  : ''
     };
   } catch { return null; }
 }
@@ -282,7 +287,48 @@ setInterval(() => {
       codegenSessions.delete(id);
     }
   }
-}, 30 * 60 * 1000);
+}, 30 * 60 * 1000).unref();
+
+/* ── Claude AI (direct Anthropic API — used when ANTHROPIC_API_KEY is set) ── */
+function callAnthropicAPI(messages, system, maxTokens=4000, model='') {
+  return new Promise((resolve, reject) => {
+    const payload = JSON.stringify({
+      model: model || 'claude-haiku-4-5-20251001',
+      max_tokens: maxTokens,
+      system: system || undefined,
+      messages: messages.map(m => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: m.content }))
+    });
+    const req = https.request({
+      hostname: 'api.anthropic.com',
+      path: '/v1/messages',
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': process.env.ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01',
+        'Content-Length': Buffer.byteLength(payload)
+      },
+      timeout: 300000
+    }, res => {
+      let data = '';
+      res.on('data', d => data += d);
+      res.on('end', () => {
+        try {
+          const json = JSON.parse(data);
+          if (res.statusCode === 200 && json.content && json.content[0]) {
+            resolve(json.content.map(b => b.text || '').join(''));
+          } else {
+            reject(new Error('Anthropic API ' + res.statusCode + ': ' + (json.error ? json.error.message : data.slice(0, 300))));
+          }
+        } catch (e) { reject(new Error('Anthropic API parse error: ' + e.message)); }
+      });
+    });
+    req.on('timeout', () => { req.destroy(); reject(new Error('Anthropic API request timed out after 5 minutes.')); });
+    req.on('error', e => reject(new Error('Anthropic API request failed: ' + e.message)));
+    req.write(payload);
+    req.end();
+  });
+}
 
 /* ── Attached-project repo cache (frontend/backend Git URLs) ─────────────── */
 const REPO_CACHE_DIR = path.join(os.tmpdir(), 'qa-platform-repo-cache');
@@ -445,15 +491,15 @@ function resolveClaudeCli(forceRefresh = false) {
   const home = os.homedir();
   const candidates = isWin
     ? [
-        process.env.APPDATA ? path.join(process.env.APPDATA, 'npm', 'claude.cmd') : null, // npm default (MSI Node)
-        'C:\\nodejs\\claude.cmd',                                                     // npm global with ZIP-installed Node
-        path.join(home, '.local', 'bin', 'claude.exe'),                                   // native installer
+        process.env.APPDATA ? path.join(process.env.APPDATA, 'npm', 'claude.cmd') : null,
+        'C:\\nodejs\\claude.cmd',
+        path.join(home, '.local', 'bin', 'claude.exe'),
       ]
     : [
         '/usr/local/bin/claude',
-        path.join(home, '.local', 'bin', 'claude'),      // native installer
-        path.join(home, '.claude', 'bin', 'claude'),     // native installer (alt)
-        path.join(home, '.npm-global', 'bin', 'claude'), // common npm prefix
+        path.join(home, '.local', 'bin', 'claude'),
+        path.join(home, '.claude', 'bin', 'claude'),
+        path.join(home, '.npm-global', 'bin', 'claude'),
         '/usr/bin/claude',
       ];
   for (const candidate of candidates) {
@@ -466,9 +512,7 @@ function resolveClaudeCli(forceRefresh = false) {
   return null;
 }
 
-/* Builds the [command, args] pair to spawn the CLI portably.
- * Windows .cmd/.bat files cannot be spawned directly with shell:false -
- * they must run through cmd /c. Real executables spawn directly. */
+/* Builds the [command, args] pair to spawn the CLI portably. */
 function claudeSpawnSpec(cliPath, cliArgs) {
   const needsCmdShell = process.platform === 'win32' && /\.(cmd|bat)$/i.test(cliPath);
   return needsCmdShell
@@ -481,25 +525,17 @@ const CLAUDE_CLI_MISSING_MSG =
   'Install it with "npm install -g @anthropic-ai/claude-code" and sign in by running "claude", ' +
   'or set the CLAUDE_CLI_PATH environment variable. See the server console for details.';
 
-function callClaude(messages, system, maxTokens=4000) {
+function callClaude(messages, system, maxTokens=4000, model='') {
   return new Promise((resolve, reject) => {
     const fullPrompt = messages.map(m =>
       (m.role === 'user' ? 'Human' : 'Assistant') + ': ' + m.content
     ).join('\n\n');
-    // --allowedTools "" disables every built-in tool (Write/Edit/Bash/Read/...) — without it, the
-    // CLI can decide on its own to try editing a file in its cwd, hit a permission gate it can't
-    // resolve headlessly, and dump the resulting "I need permission to write it..." dialogue into
-    // what should have been pure generated text. This call must never be agentic, only text-in/text-out.
-    //
-    // The system role is passed via the CLI's own --system-prompt flag, NOT concatenated as a fake
-    // "[System: ...]" text block in front of the conversation — that shape is textbook prompt
-    // injection (an untrusted-looking system directive embedded in user content), and the model can
-    // correctly refuse the entire request on sight when it spots that pattern, especially once
-    // real repo source is also in the prompt (from the attached-project feature) making the whole
-    // thing look like an injection test case rather than a legitimate instruction.
+    // --allowedTools "" disables every built-in tool — keeps this call text-in/text-out only.
+    // System prompt uses --system-prompt flag (not injected as text) to avoid prompt-injection patterns.
     const cliPath = resolveClaudeCli();
     if (!cliPath) { reject(new Error(CLAUDE_CLI_MISSING_MSG)); return; }
     const baseArgs = ['-p', '--output-format', 'text', '--effort', 'low', '--strict-mcp-config', '--mcp-config', EMPTY_MCP, '--allowedTools', ''];
+    if (model) baseArgs.push('--model', model);
     if (system) baseArgs.push('--system-prompt', system);
     const { cmd, args } = claudeSpawnSpec(cliPath, baseArgs);
     console.log('[AI]   Spawning Claude CLI:', cliPath);
@@ -747,6 +783,184 @@ function attachToJira(jiraUrl, issueKey, auth, files) {
     req.write(body);
     req.end();
   });
+}
+
+/* ── AIO Tests Importer ─────────────────────────────────────────────────── */
+// Shared AIO Tests cloud endpoint (same for all cloud instances). Override with
+// AIO_BASE_URL env var if a member's instance differs.
+const AIO_BASE = process.env.AIO_BASE_URL || 'https://tcms.aiojiraapps.com/aio-tcms/api/v1';
+const AIO_PRIORITY_MAP = {
+  critical: 'Critical', highest: 'Critical', high: 'High', hi: 'High',
+  medium: 'Medium', med: 'Medium', normal: 'Medium', low: 'Low', lowest: 'Lowest'
+};
+
+// ── Pure helpers (exported for unit tests) ────────────────────────────────
+// Normalize an inbound priority string to an AIO canonical name (Medium by default).
+function aioResolvePriority(raw) {
+  return AIO_PRIORITY_MAP[String(raw || '').trim().toLowerCase()] || 'Medium';
+}
+// Dedup key for a case title — case-insensitive, whitespace-collapsed.
+function aioTitleKey(title) {
+  return String(title || '').trim().replace(/\s+/g, ' ').toLowerCase();
+}
+// Build the AIO step array from the platform's per-step arrays. Aligns lengths
+// (missing entries → ''), preserves order, and keeps the tail expected result if
+// per-step results are absent. Returns a single placeholder step for step-less cases.
+function aioBuildSteps(c) {
+  const steps = Array.isArray(c && c.steps) ? c.steps : [];
+  const stepResults = Array.isArray(c && c.stepResults) ? c.stepResults : [];
+  const stepData = Array.isArray(c && c.stepData) ? c.stepData : [];
+  if (!steps.length) {
+    return [{ stepType: 'TEXT', step: '', data: String((c && c.testData) || ''), expectedResult: String((c && c.expected) || '') }];
+  }
+  return steps.map((s, i) => ({
+    stepType: 'TEXT',
+    step: String(s || ''),
+    data: String(stepData[i] || ''),
+    expectedResult: String(stepResults[i] || (i === steps.length - 1 ? ((c && c.expected) || '') : ''))
+  }));
+}
+// Build the outbound AIO create-case payload. `priorityIdByName` is the
+// project-config priority-name→ID map; falls back to {name} when unknown.
+function aioBuildCasePayload(c, priorityIdByName, folderId, requirementId) {
+  const prioName = aioResolvePriority(c && c.priority);
+  const pid = priorityIdByName ? priorityIdByName[prioName.toLowerCase()] : undefined;
+  const payload = {
+    title: String((c && c.title) || '').trim(),
+    precondition: (c && c.preconditions) || null,
+    steps: aioBuildSteps(c),
+    priority: (pid != null) ? { ID: pid } : { name: prioName }
+  };
+  if (folderId != null) { payload.folder = { ID: folderId }; payload.folderID = folderId; }
+  if (requirementId != null) payload.jiraRequirementIDs = [requirementId];
+  return payload;
+}
+
+// Thin AIO REST call. Returns {status, json, raw}. Never throws on HTTP errors (caller inspects status).
+function aioFetch(token, method, projectKey, subPath, bodyObj) {
+  return new Promise((resolve, reject) => {
+    const url = new URL(AIO_BASE + '/project/' + encodeURIComponent(projectKey) + subPath);
+    const payload = bodyObj ? JSON.stringify(bodyObj) : null;
+    const opts = {
+      hostname: url.hostname,
+      path:     url.pathname + url.search,
+      method:   method,
+      timeout:  REQ_TIMEOUT,
+      headers: {
+        'Authorization': 'AioAuth ' + token,
+        'Content-Type':  'application/json',
+        'Accept':        'application/json',
+        ...(payload ? { 'Content-Length': Buffer.byteLength(payload) } : {})
+      }
+    };
+    const req = https.request(opts, r => {
+      let data = ''; r.on('data', d => data += d);
+      r.on('end', () => {
+        let json = null; try { json = data ? JSON.parse(data) : null; } catch {}
+        resolve({ status: r.statusCode, json, raw: data });
+      });
+    });
+    req.on('timeout', () => { req.destroy(new Error('AIO request timed out')); });
+    req.on('error', reject);
+    if (payload) req.write(payload);
+    req.end();
+  });
+}
+
+// Orchestrates importing platform test cases into AIO Tests. Mirrors the reference
+// Python importer's payloads/endpoints. Returns a {created, skipped, failed, ...} summary.
+async function aioImport(session, opts) {
+  const { projectKey, parentFolder, storyKey, cases, dryRun } = opts;
+  const token = session.aioToken;
+  if (!token) throw new Error('AIO token not configured. Add it in Settings.');
+  if (!projectKey) throw new Error('AIO project key missing (set the Jira Project Key on the project).');
+  if (!Array.isArray(cases) || cases.length === 0) throw new Error('No approved cases to import.');
+
+  // 1) Verify connection + load priorities / script type / case type from project config.
+  const cfgRes = await aioFetch(token, 'GET', projectKey, '/config');
+  if (cfgRes.status === 401) throw new Error('AIO authentication failed (401). Check the AIO API token.');
+  if (cfgRes.status === 404) throw new Error(`AIO project '${projectKey}' not found (404). Check the project key.`);
+  if (cfgRes.status >= 400 || !cfgRes.json) throw new Error('AIO /config request failed (HTTP ' + cfgRes.status + ').');
+  const cfg = cfgRes.json;
+  const pickDefault = arr => { arr = arr || []; return arr.find(x => x.isDefault) || arr.find(x => !x.isArchived) || arr[0] || null; };
+  const priorities = {};
+  for (const p of (cfg.casePriorities || cfg.priorities || [])) {
+    const n = String(p.name || '').trim().toLowerCase(); const id = (p.ID != null ? p.ID : p.id);
+    if (n && id != null) priorities[n] = id;
+  }
+  const st = pickDefault(cfg.caseScriptTypes); const scriptType = (st && st.ID != null) ? { ID: st.ID } : null;
+  const ct = pickDefault(cfg.caseTypes);       const caseType   = (ct && ct.ID != null) ? { ID: ct.ID } : null;
+
+  // 2) Resolve target folder (READ-ONLY — this AIO instance can't create folders via API).
+  let folderId = null;
+  if (parentFolder) {
+    const fRes = await aioFetch(token, 'GET', projectKey, '/testcase/folder');
+    const flat = [];
+    const flatten = (nodes, parent) => {
+      for (const n of nodes || []) {
+        const fid = (n.ID != null ? n.ID : n.id); const name = n.name || n.title || '';
+        flat.push({ fid, name, parent });
+        flatten(n.children || n.subFolders || [], fid);
+      }
+    };
+    if (fRes.json) flatten(fRes.json, null);
+    const findF = (name, parent) => {
+      const hit = flat.find(f => String(f.name).trim().toLowerCase() === String(name).trim().toLowerCase()
+        && (parent == null || f.parent === parent));
+      return hit ? hit.fid : null;
+    };
+    const parentId = findF(parentFolder, null);
+    if (parentId != null) folderId = storyKey ? (findF(storyKey, parentId) != null ? findF(storyKey, parentId) : parentId) : parentId;
+  }
+
+  // 3) Resolve the Jira story to its numeric ID for the requirement link (best-effort).
+  let requirementId = null;
+  if (storyKey && session.jiraUrl && session.jiraAuth) {
+    try {
+      const issue = await proxyJira(session.jiraUrl, `/issue/${storyKey}?fields=id`, 'GET', session.jiraAuth);
+      if (issue && issue.id) requirementId = parseInt(issue.id, 10);
+    } catch { /* non-fatal — import without the link */ }
+  }
+
+  // 4) Dedup: collect existing case titles in the target folder.
+  const existing = new Set();
+  if (folderId != null) {
+    let startAt = 0; const pageSize = 100;
+    while (true) {
+      const lr = await aioFetch(token, 'GET', projectKey, `/testcase?startAt=${startAt}&maxResults=${pageSize}`);
+      if (!lr.json) break;
+      const items = Array.isArray(lr.json) ? lr.json : (lr.json.items || lr.json.testCases || []);
+      if (!Array.isArray(items) || items.length === 0) break;
+      for (const c of items) {
+        const f = c.folder || {}; const fid = (f && typeof f === 'object') ? f.ID : null;
+        if (fid === folderId) { const t = aioTitleKey(c.title); if (t) existing.add(t); }
+      }
+      if (items.length < pageSize) break;
+      startAt += pageSize;
+    }
+  }
+
+  // 5) Create each case (multi-step payload built from the platform's per-step arrays).
+  const summary = { created: 0, skipped: 0, failed: 0, errors: [], folderId, requirementId, dryRun: !!dryRun, total: cases.length };
+  for (const c of cases) {
+    const title = String(c.title || '').trim();
+    if (!title) continue;
+    if (existing.has(aioTitleKey(title))) { summary.skipped++; continue; }
+
+    const payload = aioBuildCasePayload(c, priorities, folderId, requirementId);
+    if (scriptType) payload.scriptType = scriptType;
+    if (caseType) payload.caseType = caseType;
+
+    if (dryRun) { summary.created++; existing.add(title.toLowerCase()); continue; }
+    try {
+      const cr = await aioFetch(token, 'POST', projectKey, '/testcase', payload);
+      if (cr.status === 200 || cr.status === 201) { summary.created++; existing.add(title.toLowerCase()); }
+      else { summary.failed++; summary.errors.push(`${c.id || title.slice(0, 30)}: HTTP ${cr.status} ${String(cr.raw || '').slice(0, 150)}`); }
+    } catch (e) {
+      summary.failed++; summary.errors.push(`${c.id || title.slice(0, 30)}: ${e.message}`);
+    }
+  }
+  return summary;
 }
 
 /* ── Playwright Test Runner ─────────────────────────────────────────────── */
@@ -1341,6 +1555,21 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  /* ── Serve shared browser-side lib (also required by Node unit tests) ── */
+  if (req.method === 'GET' && req.url === '/qa-lib.js') {
+    try {
+      const js = fs.readFileSync(path.join(__dirname, 'public', 'qa-lib.js'), 'utf8');
+      res.writeHead(200, {
+        'Content-Type': 'application/javascript; charset=utf-8',
+        'Cache-Control': 'no-store, no-cache, must-revalidate'
+      });
+      res.end(js);
+    } catch (e) {
+      res.writeHead(500); res.end('Could not read qa-lib.js: ' + e.message);
+    }
+    return;
+  }
+
   /* ── Serve app ── */
   if (req.method === 'GET' && (req.url === '/' || req.url === '/index.html')) {
     try {
@@ -1511,7 +1740,7 @@ const server = http.createServer((req, res) => {
         console.log('[Member] Login:', member.name);
         // Always create an API session — Jira creds used if saved, otherwise session still works for AI via CLI
         const creds = decryptMemberCredentials(member);
-        const sessionToken = createSession(member.id, creds?.jiraUrl||'', creds?.jiraEmail||'', creds?.jiraToken||'');
+        const sessionToken = createSession(member.id, creds?.jiraUrl||'', creds?.jiraEmail||'', creds?.jiraToken||'', creds?.aioToken||'');
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ token, member: { id: member.id, name: member.name, email: member.email, role: member.role }, sessionToken }));
       } catch (e) {
@@ -1576,12 +1805,15 @@ const server = http.createServer((req, res) => {
           res.writeHead(403, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'Forbidden' })); return;
         }
-        const { jiraUrl, jiraEmail, jiraToken } = JSON.parse(body);
+        const { jiraUrl, jiraEmail, jiraToken, aioToken } = JSON.parse(body);
         const member = (serverDB.members || []).find(m => m.id === memberId);
         if (!member) { res.writeHead(404, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Member not found' })); return; }
-        member.credentials = encryptMemberCredentials(jiraUrl || '', jiraEmail || '', jiraToken || '');
+        // Preserve any existing aioToken if caller omitted it (backward-compatible save).
+        const existing = decryptMemberCredentials(member) || {};
+        const nextAio = (aioToken != null) ? aioToken : (existing.aioToken || '');
+        member.credentials = encryptMemberCredentials(jiraUrl || '', jiraEmail || '', jiraToken || '', nextAio);
         saveServerDB(serverDB);
-        const sessionToken = createSession(memberId, jiraUrl, jiraEmail, jiraToken);
+        const sessionToken = createSession(memberId, jiraUrl, jiraEmail, jiraToken, nextAio);
         console.log('[Member] Credentials saved:', member.name);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ ok: true, sessionToken }));
@@ -1604,7 +1836,7 @@ const server = http.createServer((req, res) => {
         const member = (serverDB.members || []).find(m => m.id === ms.memberId);
         const creds = member ? decryptMemberCredentials(member) : null;
         // GAP-04: allow refresh without Jira credentials — AI features still work; Jira calls fail independently
-        const sessionToken = createSession(ms.memberId, creds?.jiraUrl || '', creds?.jiraEmail || '', creds?.jiraToken || '');
+        const sessionToken = createSession(ms.memberId, creds?.jiraUrl || '', creds?.jiraEmail || '', creds?.jiraToken || '', creds?.aioToken || '');
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ sessionToken }));
       } catch (e) {
@@ -2008,7 +2240,7 @@ const server = http.createServer((req, res) => {
         res.end(JSON.stringify({ error: 'Too many attempts. Please wait 15 minutes.' })); return;
       }
       try {
-        const { memberId, jiraUrl, jiraEmail, jiraToken } = JSON.parse(body);
+        const { memberId, jiraUrl, jiraEmail, jiraToken, aioToken } = JSON.parse(body);
         // Accept either a valid member token OR an existing session token (survives server restarts)
         const memberToken  = req.headers['x-member-token'];
         const sessionCheck = req.headers['x-session-token'];
@@ -2026,7 +2258,7 @@ const server = http.createServer((req, res) => {
           res.end(JSON.stringify({ error: 'Invalid Jira URL. Must be a public HTTPS address.' }));
           return;
         }
-        const sessionToken = createSession(memberId, jiraUrl, jiraEmail, jiraToken);
+        const sessionToken = createSession(memberId, jiraUrl, jiraEmail, jiraToken, aioToken);
         console.log('[Auth] Session created');
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ sessionToken }));
@@ -2042,9 +2274,12 @@ const server = http.createServer((req, res) => {
       const session = getSession(req);
       if (!session) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Authentication required' })); return; }
       try {
-        const { messages, system, max } = JSON.parse(body);
-        console.log('[AI]   Request received');
-        const text = await callClaude(messages, system, max||4000);
+        const { messages, system, max, model } = JSON.parse(body);
+        const useAPI = !!process.env.ANTHROPIC_API_KEY;
+        console.log('[AI]   Request received' + (model ? ' (model: ' + model + ')' : '') + (useAPI ? ' [direct API]' : ' [CLI]'));
+        const text = useAPI
+          ? await callAnthropicAPI(messages, system, max||4000, model||'')
+          : await callClaude(messages, system, max||4000, model||'');
         console.log('[AI]   Done');
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ text }));
@@ -2102,6 +2337,30 @@ const server = http.createServer((req, res) => {
         res.end(JSON.stringify({ ok: true }));
       } catch (e) {
         console.error('[Jira] Attach error:', e.message);
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: e.message }));
+      }
+      return;
+    }
+
+    /* ── /api/aio/import ── */
+    if (req.method === 'POST' && req.url === '/api/aio/import') {
+      const session = getSession(req);
+      if (!session) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Authentication required' })); return; }
+      try {
+        const { projectKey, parentFolder, storyKey, cases, dryRun } = JSON.parse(body);
+        if (!session.aioToken) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'AIO token not configured. Open Settings and add your AIO Tests API token, then reconnect.' }));
+          return;
+        }
+        console.log('[AIO]  Import request —', (dryRun ? 'DRY-RUN ' : ''), (Array.isArray(cases) ? cases.length : 0), 'case(s), project', projectKey, 'story', storyKey || 'none');
+        const summary = await aioImport(session, { projectKey, parentFolder, storyKey, cases, dryRun });
+        console.log('[AIO]  Done — created', summary.created, 'skipped', summary.skipped, 'failed', summary.failed);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(summary));
+      } catch (e) {
+        console.error('[AIO]  Error:', e.message);
         res.writeHead(500, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: e.message }));
       }
@@ -2687,6 +2946,8 @@ Return ONLY valid JSON (no markdown wrapper, no extra text):
           id: parsed.id || crypto.randomBytes(16).toString('hex'),
           name: parsed.name,
           description: parsed.description || '',
+          jiraProjKey: parsed.jiraProjKey || '',
+          platform: parsed.platform || 'web',
           language: (['ar','en','mixed'].includes(parsed.language)) ? parsed.language : 'ar',
           frontendRepoUrl: parsed.frontendRepoUrl || '',
           backendRepoUrl: parsed.backendRepoUrl || '',
@@ -2734,6 +2995,8 @@ Return ONLY valid JSON (no markdown wrapper, no extra text):
         const parsed = JSON.parse(body);
         if (parsed.name !== undefined) proj.name = parsed.name;
         if (parsed.description !== undefined) proj.description = parsed.description;
+        if (parsed.jiraProjKey !== undefined) proj.jiraProjKey = parsed.jiraProjKey;
+        if (parsed.platform !== undefined) proj.platform = parsed.platform;
         if (parsed.frontendRepoUrl !== undefined) proj.frontendRepoUrl = parsed.frontendRepoUrl;
         if (parsed.backendRepoUrl !== undefined) proj.backendRepoUrl = parsed.backendRepoUrl;
         if (parsed.language && ['ar','en','mixed'].includes(parsed.language)) proj.language = parsed.language;
@@ -2829,10 +3092,8 @@ async function checkDependencies() {
     p.on('exit', code => resolve(code === 0));
     p.on('error', () => resolve(false));
   });
-  // GAP-08: use resolveClaudeCli() so health check matches what AI calls actually use
   const claudeExe = resolveClaudeCli() || process.env.CLAUDE_CLI_PATH || 'claude';
   const pwCmd = playwrightCmd(['--version']);
-  // GAP-14: check k6 version and log warning if below v0.46
   const k6VersionStr = await new Promise(resolve => {
     const p = require('child_process').spawn('k6', ['version'], { shell: true, timeout: 8000 });
     let out = '';
@@ -2852,7 +3113,7 @@ async function checkDependencies() {
   saveServerDB(serverDB);
 }
 
-// GAP-03: graceful shutdown — let in-flight requests drain before exiting
+// Graceful shutdown
 process.on('SIGTERM', () => {
   console.log('[Shutdown] SIGTERM received — closing server gracefully…');
   server.close(() => {
@@ -2866,7 +3127,8 @@ process.on('SIGINT', () => {
   server.close(() => process.exit(0));
 });
 
-server.listen(PORT, () => {
+// Skip startup when loaded via require() from tests
+if (require.main === module) server.listen(PORT, () => {
   console.log('');
   console.log('  QA AI Platform is running');
   console.log('  App  → http://localhost:' + PORT + '/');
@@ -2885,3 +3147,8 @@ server.listen(PORT, () => {
   const repoCacheDir = path.join(os.tmpdir(), 'qa-platform-repo-cache');
   try { if (fs.existsSync(repoCacheDir)) { fs.rmSync(repoCacheDir, { recursive: true, force: true }); } } catch (e) {}
 });
+
+// Exported for unit tests. Not part of the runtime HTTP surface.
+if (typeof module !== 'undefined') {
+  module.exports = { aioResolvePriority, aioTitleKey, aioBuildSteps, aioBuildCasePayload };
+}

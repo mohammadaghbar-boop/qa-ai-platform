@@ -11,6 +11,7 @@
 <script src="https://unpkg.com/@babel/standalone@7.26.5/babel.min.js" crossorigin="anonymous"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js" crossorigin="anonymous"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js" crossorigin="anonymous"></script>
+<script src="/qa-lib.js"></script>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   body {
@@ -20,6 +21,8 @@
     min-height: 100vh;
   }
   :root {
+    --sitech-navy: #1F4E9C;
+    --sitech-navy-tint: rgba(31,78,156,0.09);
     --color-background-primary: #ffffff;
     --color-background-secondary: #f8fafc;
     --color-background-tertiary: #f1f5f9;
@@ -174,6 +177,53 @@ const SESSION_TOKEN_KEY = "qa_api_session_token";
 const ADMIN_TOKEN_KEY   = "qa_admin_token";
 const MEMBER_TOKEN_KEY  = "qa_member_token";
 
+// Auth tokens live in sessionStorage for the tab. When "Remember Me" is on they
+// are ALSO mirrored to localStorage so they survive a browser close alongside the
+// persisted user session. Without this, reopening the app (Remember Me on) restores
+// the logged-in member from localStorage but leaves sessionStorage empty — so any
+// call that mints a session (e.g. Test Connection) fails with "Could not create test
+// session" until the user logs out and back in.
+function _rememberOn() {
+  try { return !!localStorage.getItem(MEMBER_TOKEN_KEY); } catch { return false; }
+}
+// Persist the member token at login. When remember is on, mirror it to localStorage.
+function persistMemberToken(memberTok, remember) {
+  try {
+    if (memberTok) sessionStorage.setItem(MEMBER_TOKEN_KEY, memberTok);
+    if (remember && memberTok) localStorage.setItem(MEMBER_TOKEN_KEY, memberTok);
+    else localStorage.removeItem(MEMBER_TOKEN_KEY);
+  } catch {}
+}
+// Persist a freshly minted API session token, mirroring to localStorage in remember mode.
+function persistSessionToken(sessionTok) {
+  try {
+    if (!sessionTok) return;
+    sessionStorage.setItem(SESSION_TOKEN_KEY, sessionTok);
+    if (_rememberOn()) localStorage.setItem(SESSION_TOKEN_KEY, sessionTok);
+  } catch {}
+}
+// Clear all auth tokens from both storages (logout).
+function clearAuthTokens() {
+  try {
+    sessionStorage.removeItem(MEMBER_TOKEN_KEY);  localStorage.removeItem(MEMBER_TOKEN_KEY);
+    sessionStorage.removeItem(SESSION_TOKEN_KEY); localStorage.removeItem(SESSION_TOKEN_KEY);
+  } catch {}
+}
+// On load, rehydrate sessionStorage from the localStorage mirror (present only when
+// Remember Me was on). Lets all existing sessionStorage.getItem call sites work unchanged.
+(function _hydrateAuthTokens() {
+  try {
+    if (!sessionStorage.getItem(MEMBER_TOKEN_KEY)) {
+      const lm = localStorage.getItem(MEMBER_TOKEN_KEY);
+      if (lm) sessionStorage.setItem(MEMBER_TOKEN_KEY, lm);
+    }
+    if (!sessionStorage.getItem(SESSION_TOKEN_KEY)) {
+      const ls = localStorage.getItem(SESSION_TOKEN_KEY);
+      if (ls) sessionStorage.setItem(SESSION_TOKEN_KEY, ls);
+    }
+  } catch {}
+})();
+
 async function _refreshSession() {
   const mt = sessionStorage.getItem(MEMBER_TOKEN_KEY);
   if (!mt) return null;
@@ -184,7 +234,7 @@ async function _refreshSession() {
     });
     if (!r.ok) return null;
     const d = await r.json();
-    if (d.sessionToken) { sessionStorage.setItem(SESSION_TOKEN_KEY, d.sessionToken); return d.sessionToken; }
+    if (d.sessionToken) { persistSessionToken(d.sessionToken); return d.sessionToken; }
   } catch (e) { console.warn("Session refresh failed:", e.message); }
   return null;
 }
@@ -197,11 +247,11 @@ async function _ensureSession() {
 }
 
 /* ─── Claude API ─────────────────────────────────────────────────────────── */
-async function callAI(messages, sys="", max=4000, _legacy="") {
+async function callAI(messages, sys="", max=4000, _legacy="", model="") {
   const doCall = (token) => fetch(API_BASE + "/api/ai", {
     method: "POST",
     headers: { "Content-Type": "application/json", "X-Session-Token": token || "" },
-    body: JSON.stringify({ messages, system: sys, max })
+    body: JSON.stringify({ messages, system: sys, max, model: model || undefined })
   });
   try {
     let token = await _ensureSession();
@@ -528,6 +578,18 @@ function Tag({c="blue",children}) {
   return <span style={{display:"inline-block",padding:"3px 10px",borderRadius:20,fontSize:12,fontWeight:500,background:bg,color:tx,border:"1px solid "+br}}>{children}</span>;
 }
 const Lbl = ({children}) => <label style={{fontSize:13,fontWeight:500,color:"var(--color-text-secondary)",marginBottom:5,display:"block"}}>{children}</label>;
+const Logo = ({size=32,withText=true,textSize=22,showSub=true}) => <div style={{display:"flex",alignItems:"center",gap:10}}>
+  <svg width={size} height={Math.round(size*0.833)} viewBox="0 0 108 90" style={{flexShrink:0}}>
+    <rect x="0" y="0" width="62" height="62" rx="14" fill="#90AAD9"/>
+    <rect x="20" y="20" width="62" height="62" rx="14" fill="#4472C4"/>
+    <rect x="38" y="47" width="66" height="40" rx="14" fill="#1F4E9C"/>
+  </svg>
+  {withText&&<div style={{display:"flex",flexDirection:"column",lineHeight:1.05}}>
+    <span style={{fontSize:textSize,fontWeight:700,letterSpacing:"-0.01em",color:"#16264F"}}>ITQAN</span>
+    {showSub&&<span style={{fontSize:Math.max(8,Math.round(textSize*0.32)),fontWeight:600,letterSpacing:"0.18em",color:"#4A76CF"}}>PLATFORM</span>}
+  </div>}
+</div>;
+const BackLink = ({onClick,children="Back to Dashboard"}) => <div onClick={onClick} style={{display:"inline-flex",alignItems:"center",gap:7,cursor:"pointer",color:"var(--sitech-navy)",fontSize:14,fontWeight:500,marginBottom:12}}><span style={{fontSize:22,lineHeight:1}}>←</span>{children}</div>;
 const H1 = ({children}) => <div style={{fontSize:21,fontWeight:700,marginBottom:16,letterSpacing:"-0.01em"}}>{children}</div>;
 const H2 = ({children}) => <div style={{fontSize:15,fontWeight:600,marginBottom:12}}>{children}</div>;
 
@@ -612,9 +674,10 @@ const ONE_WEEK=7*24*60*60*1000;
 function NotifBell({userId}) {
   const [open,setOpen]=useState(false);
   const [,tick]=useState(0);
-  const [pos,setPos]=useState({bottom:0,left:0});
+  const [pos,setPos]=useState({top:0,left:0});
   const [shown,setShown]=useState(NOTIF_PAGE);
   const btnRef=useRef(null);
+  const panelRef=useRef(null);
   const now=Date.now();
   const thirtyDaysAgo = now - 30 * 24 * 60 * 60 * 1000;
   const rawNotifs = DB.notifs.filter(n => n.to === userId);
@@ -625,15 +688,21 @@ function NotifBell({userId}) {
   const visible=withinWeek.slice(0,shown);
   const hasMore=withinWeek.length>shown;
   const toggle=()=>{
-    if(btnRef.current){const r=btnRef.current.getBoundingClientRect();const panelW=300;const left=Math.min(r.right+8,window.innerWidth-panelW-8);setPos({bottom:window.innerHeight-r.bottom+4,left});}
+    if(btnRef.current){const r=btnRef.current.getBoundingClientRect();const panelW=300;const left=Math.max(8,Math.min(r.right-panelW,window.innerWidth-panelW-8));setPos({top:r.bottom+6,left});}
     if(!open) setShown(NOTIF_PAGE);
     setOpen(o=>!o);tick(x=>x+1);
   };
+  useEffect(()=>{
+    if(!open)return;
+    const onDocClick=e=>{ if(btnRef.current?.contains(e.target)||panelRef.current?.contains(e.target))return; setOpen(false); };
+    document.addEventListener("mousedown",onDocClick);
+    return ()=>document.removeEventListener("mousedown",onDocClick);
+  },[open]);
   return <div style={{position:"relative"}}>
     <button ref={btnRef} onClick={toggle} style={{padding:"6px 10px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",position:"relative",color:"var(--color-text-secondary)",fontSize:14}}>
       🔔{unread.length>0&&<span style={{position:"absolute",top:-6,right:-6,background:"var(--color-text-danger)",color:"#fff",borderRadius:20,padding:"0 5px",fontSize:10,minWidth:16,textAlign:"center"}}>{unread.length}</span>}
     </button>
-    {open&&<div style={{position:"fixed",left:pos.left,bottom:pos.bottom,width:300,background:"var(--color-background-secondary)",border:"1px solid var(--color-border-secondary)",borderRadius:12,zIndex:9999,boxShadow:"0 8px 24px rgba(0,0,0,.14)"}}>
+    {open&&<div ref={panelRef} style={{position:"fixed",left:pos.left,top:pos.top,width:300,maxHeight:"70vh",display:"flex",flexDirection:"column",background:"var(--color-background-secondary)",border:"1px solid var(--color-border-secondary)",borderRadius:12,zIndex:9999,boxShadow:"0 8px 24px rgba(0,0,0,.14)"}}>
       <div style={{padding:"12px 16px",borderBottom:"1px solid var(--color-border-tertiary)",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
         <div style={{fontWeight:500,fontSize:14}}>Notifications <span style={{fontSize:11,fontWeight:400,color:"var(--color-text-tertiary)"}}>· last 7 days</span></div>
         {unread.length>0&&<button onClick={()=>{unread.forEach(n=>n.read=true);saveDB();tick(x=>x+1);}} style={{padding:"3px 8px",borderRadius:6,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:12,color:"var(--color-text-secondary)"}}>Mark all read</button>}
@@ -1058,7 +1127,7 @@ function MemberHistoryPage({member,onRunAgain}) {
 }
 
 /* ─── Admin Pages ─────────────────────────────────────────────────────────── */
-function MembersPage() {
+function MembersPage({onBack}) {
   const [list,setList]=useState([...DB.members]);
   const [f,setF]=useState({name:"",email:"",password:"",role:"Junior QA Engineer"});
   const [editing,setEditing]=useState(null);
@@ -1117,6 +1186,7 @@ function MembersPage() {
   const th={textAlign:"left",padding:"8px 12px",borderBottom:"1px solid var(--color-border-tertiary)",fontSize:12,fontWeight:500,color:"var(--color-text-secondary)"};
   const td={padding:"10px 12px",borderBottom:"1px solid var(--color-border-tertiary)"};
   return <div>
+    <BackLink onClick={onBack}/>
     <H1>Members</H1>
     {!editing&&<div style={card}><H2>Add member</H2>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
@@ -1149,7 +1219,7 @@ function MembersPage() {
   </div>;
 }
 
-function ProjectsPage() {
+function ProjectsPage({onBack}) {
   const [list,setList]=useState([...DB.projects]);
   const EMPTY_F={name:"",jiraProjKey:"",platform:"web",frontendRepoUrl:"",backendRepoUrl:"",language:"ar"};
   const [f,setF]=useState({...EMPTY_F});
@@ -1224,6 +1294,7 @@ function ProjectsPage() {
   const th={textAlign:"left",padding:"8px 12px",borderBottom:"1px solid var(--color-border-tertiary)",fontSize:12,fontWeight:500,color:"var(--color-text-secondary)"};
   const td={padding:"10px 12px",borderBottom:"1px solid var(--color-border-tertiary)"};
   return <div>
+    <BackLink onClick={onBack}/>
     <H1>Projects</H1>
     <div style={{...card,marginBottom:12,padding:"12px 16px",background:"var(--color-background-info)",border:"1px solid var(--color-border-secondary)"}}>
       <div style={{fontSize:13,color:"var(--color-text-secondary)"}}>ℹ️ Jira credentials (URL, email, API token) are configured per member in their Settings. AI runs via Claude CLI — no API key needed.</div>
@@ -1231,7 +1302,7 @@ function ProjectsPage() {
     <div style={card}><H2>{editing?"Edit":"New"} project</H2>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
         <div><Lbl>Name</Lbl><input style={inp} value={f.name} onChange={e=>setF(p=>({...p,name:e.target.value}))} placeholder="App QA"/></div>
-        <div><Lbl>Platform</Lbl><select style={sel} value={f.platform} onChange={e=>setF(p=>({...p,platform:e.target.value}))}><option value="web">Web</option></select></div>
+        <div><Lbl>Platform</Lbl><select style={sel} value={f.platform} onChange={e=>setF(p=>({...p,platform:e.target.value}))}><option value="web">Web</option><option value="mobile">Mobile</option><option value="both">Web + Mobile</option></select></div>
         <div><Lbl>Jira Project Key</Lbl><input style={inp} value={f.jiraProjKey} onChange={e=>setF(p=>({...p,jiraProjKey:e.target.value}))} placeholder="PROJ"/></div>
         <div><Lbl>Language</Lbl><select style={sel} value={f.language||"ar"} onChange={e=>setF(p=>({...p,language:e.target.value}))}><option value="ar">Arabic RTL</option><option value="en">English LTR</option><option value="mixed">Mixed Language</option></select></div>
       </div>
@@ -1271,7 +1342,7 @@ function ProjectsPage() {
   </div>;
 }
 
-function AssignmentsPage() {
+function AssignmentsPage({onBack}) {
   const adminTok=()=>sessionStorage.getItem(ADMIN_TOKEN_KEY)||"";
   const [list,setList]=useState([...DB.assignments]);
   const [mId,setMId]=useState("");
@@ -1337,6 +1408,7 @@ function AssignmentsPage() {
   const th={textAlign:"left",padding:"8px 12px",borderBottom:"1px solid var(--color-border-tertiary)",fontSize:12,fontWeight:500,color:"var(--color-text-secondary)"};
   const td={padding:"10px 12px",borderBottom:"1px solid var(--color-border-tertiary)"};
   return <div>
+    <BackLink onClick={onBack}/>
     <H1>Assignments</H1>
     {!editing&&<div style={card}><H2>Assign member</H2>
       <div style={{marginBottom:12}}>
@@ -1381,7 +1453,7 @@ function AssignmentsPage() {
   </div>;
 }
 
-function DashboardPage() {
+function DashboardPage({onNavigate}) {
   const [sd,setSd]=useState(null);
   const [tab,setTab]=useState("sessions");
   const [loading,setLoading]=useState(true);
@@ -1442,12 +1514,12 @@ function DashboardPage() {
   const pr=tp+tf>0?Math.round(tp/(tp+tf)*100):0;
   const perfPassed=perfs.filter(x=>x.passed).length;
   const cards=[
-    {l:"Members",v:membersFromServer.length,c:"info"},
-    {l:"Projects",v:DB.projects.length,c:"success"},
-    {l:"Test Sessions",v:sessions.length,c:"warning"},
-    {l:"Bugs Filed",v:bugs.length,c:"danger"},
-    {l:"Pass Rate",v:pr+"%",c:pr>=80?"success":pr>=50?"warning":"danger"},
-    {l:"Perf Tests",v:perfs.length,c:"info"},
+    {l:"Members",v:membersFromServer.length,c:"info",to:()=>onNavigate&&onNavigate("members")},
+    {l:"Projects",v:DB.projects.length,c:"success",to:()=>onNavigate&&onNavigate("projects")},
+    {l:"Test Sessions",v:sessions.length,c:"warning",to:()=>setTab("sessions")},
+    {l:"Bugs Filed",v:bugs.length,c:"danger",to:()=>setTab("bugs")},
+    {l:"Pass Rate",v:pr+"%",c:pr>=80?"success":pr>=50?"warning":"danger",to:()=>setTab("sessions")},
+    {l:"Perf Tests",v:perfs.length,c:"info",to:()=>setTab("perf")},
   ];
   const th={textAlign:"left",padding:"8px 10px",borderBottom:"1px solid var(--color-border-tertiary)",fontSize:12,fontWeight:500,color:"var(--color-text-secondary)"};
   const td={padding:"8px 10px",borderBottom:"1px solid var(--color-border-tertiary)",fontSize:13};
@@ -1474,7 +1546,11 @@ function DashboardPage() {
       <button onClick={()=>{localStorage.removeItem("qa_sync_warnings");setSyncWarnings([]);}} style={{marginLeft:8,fontSize:11,color:"#92400E",background:"none",border:"none",cursor:"pointer",textDecoration:"underline"}}>Dismiss</button>
     </div>}
     <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12,marginBottom:20}}>
-      {cards.map(x=><div key={x.l} style={{...card,marginBottom:0,padding:18}}><div style={{fontSize:28,fontWeight:500,color:`var(--color-text-${x.c})`}}>{x.v}</div><div style={{fontSize:13,color:"var(--color-text-secondary)",marginTop:2}}>{x.l}</div></div>)}
+      {cards.map(x=><div key={x.l} onClick={x.to}
+        onMouseEnter={e=>{e.currentTarget.style.boxShadow="0 4px 14px rgba(0,0,0,.08)";}}
+        onMouseLeave={e=>{e.currentTarget.style.boxShadow="none";}}
+        style={{...card,marginBottom:0,padding:18,cursor:"pointer",transition:"box-shadow 0.15s"}}>
+        <div style={{fontSize:28,fontWeight:500,color:`var(--color-text-${x.c})`}}>{x.v}</div><div style={{fontSize:13,color:"var(--color-text-secondary)",marginTop:2}}>{x.l}</div></div>)}
     </div>
     <div style={{display:"flex",gap:8,marginBottom:16}}>{tabBtn("sessions","📋 Sessions")}{tabBtn("bugs","🐛 Bugs")}{tabBtn("perf","⚡ Performance")}{tabBtn("coverage","📊 Coverage")}</div>
 
@@ -1723,7 +1799,7 @@ function Workspace({member,refreshSaved,restoreTarget,clearRestore,onActiveSid,o
   const [selectedProjId,setSelectedProjId]=React.useState(memberProjects[0]?.id||"");
   const proj=memberProjects.find(x=>x.id===selectedProjId)||memberProjects[0]||null;
 const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); const [sdata,setSdata]=useState(null);
-  const [platform,setPlatform]=useState("web"); const [ctypes,setCtypes]=useState([]);
+  const [platform,setPlatform]=useState("web"); const [ctypes,setCtypes]=useState([]); const [genModel,setGenModel]=useState("claude-sonnet-5");
   const [readyFilter,setReadyFilter]=useState("all");
   const [gapData,setGapData]=useState(null); const [cases,setCases]=useState([]);
   const [needsClarification,setNeedsClarification]=useState([]);
@@ -2209,7 +2285,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
       const rawNew=JSON.parse(match[0]).map(c=>({...c,status:"pending"}));
       setCases(cs=>{
         const merged=[...cs,...rawNew];
-        return merged.map((c,i)=>({...c,id:"TC-"+String(i+1).padStart(3,"0")}));
+        return merged.map((c,i)=>({...c,id:"TC-"+sid+"-"+String(i+1).padStart(2,"0")}));
       });
       setSelGaps([]);
       setPhase("ready");
@@ -2223,7 +2299,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
   const dedupRules=`\nDEDUPLICATION RULES — apply before finalizing the list:\n1. SEMANTIC DEDUP, NOT JUST TEXT DEDUP. Before adding a case, check if it asserts the SAME underlying (trigger + expected outcome) pair as an existing/kept case, even if worded differently. "Verify X is visible only when status is Y", "Verify X is not available when status is not Y", and "Verify X cannot happen when status is Z (Z != Y)" are the SAME test — generate ONE case with the positive assertion. Only add a separate negative case if the negative path has a genuinely different mechanism (different error message, different response code, different UI treatment) — not just the logical inverse of the same check.\n2. ONE CANONICAL CASE PER RULE. For each AC/business rule/exception, generate exactly ONE case unless it has genuinely distinct sub-behaviors (3 different named error messages for 3 different triggers = 3 cases; 1 trigger and 1 outcome restated 4 ways = 1 case).\n3. Before adding a case, check it against every case already in the list (including the KEPT CASES below): does an existing case test the same (component, trigger, expected result)? If yes, does the new one exercise a genuinely distinct boundary/data variant/failure mode? If it only restates the same tuple with different phrasing or a trivial variation, DISCARD it.\n4. MERGE PARAMETERIZED CHECKS. If several candidates differ only in input value (min length, max length, special chars, empty, whitespace-only, etc. all testing the same field-rendering/validation behavior), do NOT generate separate cases — generate ONE case whose testData/steps describe the full set of input variants to try.\n5. FLAG, DON'T GUESS, undefined requirements. If a candidate case would assert behavior not explicitly stated in the story (list sort order, max attachment count, exact timing of a status change, etc.), do NOT generate it as a normal case — instead add it to needsClarification with the assumption it's making, so a human confirms the requirement exists first.\n6. Before finalizing, do an internal pass: group drafts by (component + trigger + expected-outcome-category) and collapse each group to its single best-worded canonical case.`;
   const doGen=async()=>{
     setLoading(true);
-    const selectedTypes=ctypes.includes("all")?["happy","edge","negative"]:ctypes;
+    const selectedTypes=ctypes.includes("all")?["happy","edge","boundary","negative","regression"]:ctypes;
     const existingTypes=[...new Set(cases.map(c=>c.type))];
     const newTypes=selectedTypes.filter(t=>!existingTypes.includes(t));
     const keptCases=cases.filter(c=>selectedTypes.includes(c.type));
@@ -2244,39 +2320,35 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
 
     // All new types are already cached — restore without any API call
     if(typesNeedingAPI.length===0){
-      const finalCases=keptAndCached.map((c,i)=>({...c,id:"TC-"+String(i+1).padStart(3,"0")}));
+      const finalCases=keptAndCached.map((c,i)=>({...c,id:"TC-"+sid+"-"+String(i+1).padStart(2,"0")}));
       setCases(finalCases);setPhase("ready");setReadyFilter("all");setLoading(false);return;
     }
 
-    setLmsg("Generating "+typesNeedingAPI.map(t=>t+" flow").join(", ")+" in parallel…");
     const ctx=sdata&&!sdata.sim?`Story ID: ${sid}\nSummary: "${sdata.summary}"\n\nFull Description / Acceptance Criteria:\n${sdata.description?.slice(0,20000)||"No description provided."}`:"Simulate a realistic feature story with 5 clear, distinct acceptance criteria covering different aspects of the feature.";
     const typeGuide={
       happy:"MAIN SUCCESS paths — valid inputs, correct credentials, expected user journeys, normal operations where everything works as designed.",
-      edge:"BOUNDARY and LIMIT conditions only — min/max field lengths, zero/empty values, very long strings, special characters, date boundaries, maximum file sizes. Do NOT duplicate negative error scenarios.",
-      negative:"INVALID inputs and ERROR conditions only — wrong passwords, unauthorized access, missing required fields, incorrect data formats, network errors, permission denied. Do NOT duplicate edge/boundary cases."
+      edge:"UNUSUAL BUT VALID states — empty lists, single-item edge, concurrent users acting on the same resource simultaneously, last-item-in-a-set behavior. Do NOT duplicate negative/error scenarios and do NOT invent failure-injection or provider-unavailability scenarios unless the story explicitly names them.",
+      boundary:"EXPLICIT LIMITS stated in the story or ACs only — field length limits, threshold values, count caps. If no explicit numeric or size limit appears in the story text, generate 0 boundary cases. Do NOT invent limits or apply generic 'min/max integer' patterns to fields whose range is not defined in the story.",
+      negative:"INVALID inputs and documented error states only — wrong values, missing required fields, unauthorized role access, states the story explicitly says should be rejected. Do NOT invent failure-injection, provider-unavailability, idempotency, or security logging scenarios unless the story explicitly names them.",
+      regression:"PRE-EXISTING behaviors (features that worked BEFORE this story) that the story's changes could break — cover only functionality that the story text explicitly modifies or touches. A case verifying behavior INTRODUCED BY this story is NEVER regression, even when phrased negatively (e.g. 'X does not happen at creation time' where X is a rule this story defines) — classify it by what it verifies (happy/edge/negative). Do NOT invent risk scenarios or duplicate cases from other types."
     };
     try {
-      const rawNew=[]; const rawClar=[];
-      for(let i=0;i<typesNeedingAPI.length;i++){
-        const type=typesNeedingAPI[i];
-        setLmsg(`Generating ${type} flow… (${i+1} of ${typesNeedingAPI.length})`);
-        const keptCtx=keptAndCached.length>0?`\n\nKEPT CASES ALREADY IN THE LIST (do not duplicate these — see dedup rule 3):\n${keptAndCached.map(c=>`- [${c.type}] ${c.title}`).join("\n")}`:"";
-        const r=await callAI([{role:"user",content:`You are a senior QA engineer. Your task is to generate comprehensive, DEDUPLICATED ${type} test cases for the story below.\n\nPlatform: ${platform}\n${ctx}${keptCtx}\n\nTYPE: ${type.toUpperCase()} — ${typeGuide[type]||""}\n\nSTEP 1 — Extract ALL Acceptance Criteria:\nRead the full description above and number every acceptance criterion you find (AC-1, AC-2, AC-3, …). Do not skip any.\n\nSTEP 2 — Generate test cases:\nFor EACH AC you identified, draft candidate ${type} test cases that verify that AC, then apply the deduplication rules below before finalizing.\n${dedupRules}\n\nOther rules:\n- Every title must start with "Verify".\n- No duplicate test case titles.\n- Every AC must have at least one surviving test case — missing an AC is a defect, but a bloated near-duplicate list is also a defect.\n- automatable:false only for offline/camera/biometrics/hardware-dependent tests.\n- priority: one of "Critical", "High", "Medium", "Low" based on risk and importance.\n- description: one sentence describing what this test case validates.\n- testData: specific values, credentials, inputs, or (for merged parameterized checks) the full list of input variants needed (empty string if none).\n- preconditions: system state required before executing (e.g. "User is logged in as admin").\n- steps: array of action strings (what the tester does).\n- stepResults: array of expected results — SAME LENGTH as steps, one per step describing what should happen after that step.\n- expected: the overall final expected outcome of the test case.\n\nReturn ONLY valid JSON with no markdown or explanation, in this exact shape:\n{"cases":[{"id":"TC-001","title":"Verify ...","description":"...","type":"${type}","platform":"${platform}","priority":"High","preconditions":"...","testData":"...","steps":["Step 1","Step 2","Step 3"],"stepResults":["Expected after step 1","Expected after step 2","Expected after step 3"],"expected":"...","automatable":true}],"needsClarification":[{"item":"Short description of the untestable assumption","assumption":"What would have to be true for this to be testable"}]}`}],SYS,8000,proj.anthropicKey||"");
-        const cleaned=r.replace(/```json|```/g,"").trim();
-        const match=cleaned.match(/\{[\s\S]*\}/);
-        if(!match) throw new Error("Invalid response for "+type+" cases. Make sure server.js is running.");
-        const parsed=JSON.parse(match[0]);
-        const newCases=(parsed.cases||[]).map(c=>({...c,type,status:"pending"}));
-        rawNew.push(...newCases);
-        // Update cache with freshly generated cases for this type
-        updatedCache[type]=newCases;
-        rawClar.push(...(parsed.needsClarification||[]).map(x=>({...x,type})));
-      }
-      if(typesNeedingAPI.length>0)setCasesByType(updatedCache);
+      const keptCtx=keptAndCached.length>0?`\n\nKEPT CASES ALREADY IN THE LIST (do not duplicate these — see dedup rule 3):\n${keptAndCached.map(c=>`- [${c.type}] ${c.title}`).join("\n")}`:"";
+      const typesBlock=typesNeedingAPI.map(t=>`- ${t.toUpperCase()}: ${typeGuide[t]||""}`).join("\n");
+      setLmsg(`Generating ${typesNeedingAPI.join(" + ")} test cases in one pass…`);
+      const r=await callAI([{role:"user",content:`You are a senior QA engineer. Generate ONE deduplicated set of test cases for the story below, covering ALL of these requested types in a single pass:\n${typesBlock}\n\nSTORY-SCOPE RULE (non-negotiable): Every test case you generate MUST be explicitly grounded in the story text, ACs, described flows, or Data Dictionary fields shown below. Do NOT extrapolate: no failure-injection, no idempotency, no security logging, no provider-unavailability, no concurrency, no boundary values for fields whose limits are not stated in the story — unless the story text explicitly names them. A test case with no direct traceable link to a specific AC, flow, or DD field in the story is out of scope and must not appear in your output.\n\nTYPE OWNERSHIP RULE (non-negotiable): Each distinct scenario appears EXACTLY ONCE in your output, assigned to the single most specific type. Never re-label the same (trigger + expected outcome) under a second type — a scenario tested as happy must not reappear as regression; a limit tested as boundary must not reappear as edge or negative. If a requested type has no genuinely distinct story-grounded scenarios left after the others are covered, return ZERO cases for that type — an empty type is correct, a duplicated one is a defect.\n\nPlatform: ${platform}\n${ctx}${keptCtx}\n\nSTEP 1 — Extract ALL Acceptance Criteria:\nRead the full description above and number every acceptance criterion you find (AC-1, AC-2, AC-3, …). Do not skip any.\n\nSTEP 2 — Generate test cases:\nFor EACH AC you identified, draft candidate test cases that verify that AC, assign each to its single most specific requested type, then apply the deduplication rules below before finalizing.\n${dedupRules}\n\nSTEP 3 — ARCHITECTURAL RISK PATTERNS:\nBefore applying ANY pattern below, confirm it is (a) explicitly named or directly implied by the story text above AND (b) testable from the story's own ACs without inventing new requirements. Most simple CRUD or single-entity UI stories trigger zero patterns — generating 0 cases here is correct and expected. Do NOT apply a pattern speculatively just because the technology could theoretically have that risk. A pattern that does apply produces ONE case under ONE type — never a copy per type.\n\nEXTERNAL DEPENDENCY: ONLY IF the story explicitly names a third-party service call AND describes what should happen when it fails — cover unavailability, rejection, and partial-success. Skip if the story only mentions the happy-path integration.\n\nMULTI-HOP WORKFLOWS: ONLY IF the story describes a sequence of calls across systems AND explicitly states what must happen on mid-flow failure.\n\nASYNCHRONOUS / EVENT-DRIVEN: ONLY IF the story explicitly mentions webhooks, background jobs, or queues.\n\nCONCURRENT OPERATIONS: ONLY IF the story explicitly states that concurrent access by multiple users is a concern.\n\nSERVER-SIDE VALIDATION: ONLY IF the story defines specific business rules with numeric or state constraints (amounts, thresholds, status gates).\n\nSTATE-CHANGING OPERATIONS: ONLY IF the story explicitly requires partial-failure handling or idempotency.\n\nDATA PERSISTENCE AND AUDIT: ONLY IF the story explicitly requires an audit trail, history record, or specific fields to be persisted.\n\nREGRESSION — STATE PROPAGATION: ONLY IF the story explicitly changes a shared field or status that other features consume.\n\nOther rules:\n- ATOMIC ASSERTIONS: each test case verifies ONE primary behavior so a failure pinpoints exactly what broke. Do not bundle UI visibility + DB persistence + status transition into one case — split them. A case may have multiple steps, but its expected outcome must be a single verifiable claim.\n- NO INVENTED IMPLEMENTATION DETAILS: never write concrete SQL, table names, column names, API paths, or config keys unless they appear verbatim in the story. Describe the verification intent instead (e.g. "query the wallet record bound to this client and confirm the identifier is persisted") — the executing tester maps it to the real schema.\n- SPECIFIED-VALUE ASSERTIONS: whenever the story specifies an EXACT value, template, format, or rendering rule — a Data Dictionary field value, a UI element table (e.g. Title = "X {placeholder}", amount shown without +/- sign), or a message template (MSG-*, SMS, error text with {placeholders}) — the covering test case must assert that exact content with correctly interpolated values, not merely that the element/message exists or was sent. "An SMS is sent" is INSUFFICIENT when the story defines the SMS body; assert the body and each interpolated placeholder value. Presence-only checks against specified values are coverage defects.\n- DISPLAYED-VALUE CORRECTNESS: when a field shows a system-derived value (creation date/time, amounts, reference numbers), assert it EQUALS the actual underlying value from the triggering action — not merely that the field is populated.\n- Every title must start with "Verify".\n- No duplicate test case titles.\n- Every AC must have at least one surviving test case — missing an AC is a defect, but a bloated near-duplicate list is also a defect.\n- type: MUST be one of [${typesNeedingAPI.map(t=>`"${t}"`).join(", ")}] — assign each case to its single most specific type.\n- automatable:false only for offline/camera/biometrics/hardware-dependent tests.\n- automationTarget: the preferred tool (e.g. "Playwright", "Appium", "k6", "SQL") when automatable=true; empty string when automatable=false.\n- priority: one of "Critical", "High", "Medium", "Low" based on risk and importance.\n- description: one sentence describing what this test case validates.\n- testData: specific values, credentials, inputs, or (for merged parameterized checks) the full list of input variants needed (empty string if none).\n- preconditions: system state required before executing (e.g. "User is logged in as admin").\n- steps: array of action strings (what the tester does).\n- stepResults: array of expected results — SAME LENGTH as steps, one per step describing what should happen after that step.\n- expected: the overall final expected outcome of the test case.\n\nWORKFLOW-FIRST DESIGN: Build test cases around complete business workflows rather than individual acceptance criteria or UI components. Do not create standalone validation-only test cases if the same validation can naturally be performed within an existing workflow without reducing failure isolation.\n\nReturn ONLY valid JSON with no markdown or explanation, in this exact shape:\n{"cases":[{"id":"TC-001","title":"Verify ...","description":"...","type":"happy","platform":"${platform}","priority":"High","preconditions":"...","testData":"...","steps":["Step 1","Step 2","Step 3"],"stepResults":["Expected after step 1","Expected after step 2","Expected after step 3"],"expected":"...","automatable":true,"automationTarget":"Playwright"}],"needsClarification":[{"item":"Short description of the untestable assumption","assumption":"What would have to be true for this to be testable"}]}`}],SYS,12000,proj.anthropicKey||"",genModel);
+      const cleaned=r.replace(/```json|```/g,"").trim();
+      const match=cleaned.match(/\{[\s\S]*\}/);
+      if(!match) throw new Error("Invalid response generating test cases. Make sure server.js is running.");
+      const parsed=JSON.parse(match[0]);
+      const rawNew=(parsed.cases||[]).map(c=>({...c,type:typesNeedingAPI.includes(c.type)?c.type:typesNeedingAPI[0],priority:c.priority||"Medium",status:"pending"}));
+      const rawClar=(parsed.needsClarification||[]).map(x=>({...x}));
+      typesNeedingAPI.forEach(t=>{const tc=rawNew.filter(c=>c.type===t);if(tc.length>0)updatedCache[t]=tc;});
+      setCasesByType({...updatedCache});
       const norm=t=>t.toLowerCase().replace(/[^a-z0-9]/g," ").replace(/\s+/g," ").trim();
       const seen=new Set(keptAndCached.map(c=>norm(c.title)));
       const newDeduped=rawNew.filter(c=>{const k=norm(c.title);if(seen.has(k))return false;seen.add(k);return true;});
-      const finalCases=[...keptAndCached,...newDeduped].map((c,i)=>({...c,id:"TC-"+String(i+1).padStart(3,"0")}));
+      const finalCases=[...keptAndCached,...newDeduped].map((c,i)=>({...c,id:"TC-"+sid+"-"+String(i+1).padStart(2,"0")}));
       setCases(finalCases);
       const clarSeen=new Set(needsClarification.map(x=>norm(x.item)));
       const clarDeduped=rawClar.filter(x=>{const k=norm(x.item);if(clarSeen.has(k))return false;clarSeen.add(k);return true;});
@@ -2288,6 +2360,36 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
   // Gap-fill mode: given the story + the FULL existing case list (any type, any origin —
   // generated, manually added, imported), add ONLY new cases that close real coverage gaps.
   // Never rewrites/merges/duplicates existing cases, even if worded differently.
+  const doAioImport=async()=>{
+    if(approved.length===0){alert("No approved cases to import.");return;}
+    const projectKey=proj?.jiraProjKey||"";
+    if(!projectKey){alert("This project has no Jira Project Key set (needed as the AIO project key). Ask your QA Lead to add it.");return;}
+    const payload={projectKey,parentFolder:(proj?.aioParentFolder||"").trim()||null,storyKey:sid,cases:approved};
+    const token=sessionStorage.getItem(SESSION_TOKEN_KEY)||"";
+    if(!token){alert("No active session. Open Settings and connect first.");return;}
+    const callImport=async(dryRun)=>{
+      const r=await fetch(API_BASE+"/api/aio/import",{method:"POST",headers:{"Content-Type":"application/json","X-Session-Token":token},body:JSON.stringify({...payload,dryRun})});
+      const d=await r.json();
+      if(!r.ok)throw new Error(d.error||"Import failed (HTTP "+r.status+")");
+      return d;
+    };
+    setLoading(true);setLmsg("AIO: running dry-run preview…");
+    try{
+      const pre=await callImport(true);
+      setLoading(false);
+      const folderMsg=pre.folderId!=null?`folder ID ${pre.folderId}`:"project root (no matching folder)";
+      const linkMsg=pre.requirementId!=null?`linked to ${sid}`:`NOT linked (story ID unresolved)`;
+      const ok=window.confirm(`AIO import preview for ${sid}:\n\n• ${pre.created} case(s) would be CREATED\n• ${pre.skipped} skipped as duplicates\n• Target: ${folderMsg}\n• Requirement: ${linkMsg}\n\nProceed with the real import?`);
+      if(!ok){setLmsg("");return;}
+      setLoading(true);setLmsg(`AIO: importing ${pre.created} case(s)…`);
+      const res=await callImport(false);
+      setLoading(false);
+      let msg=`AIO import complete for ${sid}:\n\n✓ created: ${res.created}\n↷ skipped (duplicate): ${res.skipped}\n✗ failed: ${res.failed}`;
+      if(res.failed>0&&res.errors?.length)msg+=`\n\nFirst errors:\n- ${res.errors.slice(0,5).join("\n- ")}`;
+      alert(msg);
+    }catch(e){setLoading(false);setLmsg("");alert("AIO import error:\n\n"+e.message);}
+  };
+
   const doFindGaps=async()=>{
     if(cases.length===0){alert("Generate or add test cases first — gap analysis compares against your existing list.");return;}
     const pendingCases = cases.filter(c => !c.status || c.status === 'pending');
@@ -2609,6 +2711,14 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
     }
     reset();
   };
+  // "New story" / start-over — always available so the user can discard the current
+  // work and start fresh (previously gated behind hasSaved, which trapped users who
+  // ran e.g. gap analysis but hadn't saved). Confirm first when there is unsaved work.
+  const startNewStory=()=>{
+    if(phase==="coverage"){saveAndReset();return;}
+    if(!hasSaved&&!window.confirm("Discard the current story and start over? Any unsaved work in this session will be lost."))return;
+    reset();
+  };
   const restoreStory=snap=>{
     if(snap.testKind==="ui-design"){
       setTestKind("ui-design");
@@ -2738,7 +2848,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
       <span style={{color:"#4ade80",fontSize:17}}>✓</span>{toast}
     </div>}
     <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",marginBottom:16}}>
-      <div><div style={{fontSize:20,fontWeight:500,marginBottom:4}}>QA Workspace</div>
+      <div><div style={{fontSize:20,fontWeight:500,marginBottom:4}}>{sid&&sdata?.summary?sdata.summary:"QA Workspace"}</div>
         <div style={{fontSize:13,color:"var(--color-text-secondary)",display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
           {proj&&<><span>Project: <b>{proj.name}</b></span><Tag c="blue">{proj.jiraProjKey}</Tag></>}
           {testKind==="functional"&&phase!=="input"&&<Tag c="blue">web</Tag>}
@@ -2751,7 +2861,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
       </div>
       <div style={{display:"flex",gap:8}}>
         {testKind==="functional"&&phase!=="input"&&sid&&<button onClick={openSaveModal} style={ghostBtn} title="Save current session to history">💾 Save</button>}
-        {testKind==="functional"&&phase!=="input"&&sid&&<button onClick={phase==="coverage"?saveAndReset:reset} disabled={phase!=="coverage"&&!hasSaved} title={phase==="coverage"?"Start a new story":hasSaved?"Start a new story":"Save first to enable"} style={{...ghostBtn,opacity:(phase==="coverage"||hasSaved)?1:0.4,cursor:(phase==="coverage"||hasSaved)?"pointer":"not-allowed"}}>↩ New story</button>}
+        {testKind==="functional"&&phase!=="input"&&sid&&<button onClick={startNewStory} title="Start a new story" style={ghostBtn}>↩ New story</button>}
         {testKind==="functional"&&phase!=="input"&&<button onClick={()=>setChat(o=>!o)} style={ghostBtn}>{chat?"Hide chat":"🤖 AI Chat"}</button>}
         {testKind==="non-functional"&&(phase==="perfTest"||phase==="perfResult")&&<button onClick={openSaveModal} disabled={!perfForm.testName.trim()} title="Save this test session to history" style={{...ghostBtn,opacity:perfForm.testName.trim()?1:0.4,cursor:perfForm.testName.trim()?"pointer":"not-allowed"}}>💾 Save</button>}
         {testKind==="non-functional"&&(phase==="perfTest"||phase==="perfResult")&&<button onClick={resetPerf} style={ghostBtn} title="Start a new performance test">↩ New Test</button>}
@@ -2878,7 +2988,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
               const r2=await fetch(API_BASE+"/api/ui-design/analyze",{method:"POST",headers:{"Content-Type":"application/json","X-Member-Token":sessionStorage.getItem(MEMBER_TOKEN_KEY)||""},body:JSON.stringify({figmaImageBase64:figmaBase64,pageUrl:uidForm.pageUrl,figmaUrl:uidForm.figmaUrl||"",mode:"generate-cases",jiraTicketKey:uidJiraTicketKey||"",storyRequirements:combinedReqs,storyFileImages:[...storyFileImages,...selectedSvgs],svgAssetNames})});
               const d2=await r2.json();
               if(d2.error)throw new Error(d2.error);
-              const cases=(d2.testCases||[]).map((c,i)=>({...c,id:c.id||"TC-"+String(i+1).padStart(3,"0"),status:"pending"}));
+              const cases=(d2.testCases||[]).map((c,i)=>({...c,id:c.id||"TC-"+(uidJiraTicketKey||"UI")+"-"+String(i+1).padStart(2,"0"),status:"pending"}));
               setUidCases(cases);
               setPhase("uidCases");
             }catch(e){alert("Error: "+e.message);}
@@ -4192,12 +4302,20 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
         {!loading&&phase==="ctype"&&<div style={card}>
           <div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:16}}>Story: <b>{sid}</b></div><H2>Which test case types?</H2>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:20}}>
-            {(()=>{const ect=[...new Set(cases.map(c=>c.type))];return [{k:"happy",l:"Happy flow",d:"Core successful journeys"},{k:"edge",l:"Edge cases",d:"Boundary values"},{k:"negative",l:"Negative cases",d:"Error handling"},{k:"all",l:"All of the above",d:"Full coverage"}].map(o=>{const hasCases=o.k==="all"?false:ect.includes(o.k);const isDisabled=ctypes.includes("all")&&o.k!=="all";const count=hasCases?cases.filter(c=>c.type===o.k).length:0;const isChecked=ctypes.includes(o.k);return <label key={o.k} style={{display:"flex",gap:10,padding:14,borderRadius:10,border:"1px solid "+(hasCases&&isChecked?"var(--color-text-success)":isChecked?"var(--color-text-info)":"var(--color-border-secondary)"),background:hasCases&&isChecked?"var(--color-background-success)":isChecked?"var(--color-background-info)":isDisabled?"var(--color-background-tertiary)":"var(--color-background-primary)",cursor:isDisabled?"not-allowed":"pointer",opacity:isDisabled?0.45:1}}>
+            {(()=>{const ect=[...new Set(cases.map(c=>c.type))];return [{k:"happy",l:"Happy flow",d:"Core successful journeys"},{k:"edge",l:"Edge cases",d:"Unusual but valid states"},{k:"boundary",l:"Boundary cases",d:"At/near documented limits"},{k:"negative",l:"Negative cases",d:"Error & auth handling"},{k:"regression",l:"Regression cases",d:"Existing behavior still works"},{k:"all",l:"All of the above",d:"Full coverage (all layers)"}].map(o=>{const hasCases=o.k==="all"?false:ect.includes(o.k);const isDisabled=ctypes.includes("all")&&o.k!=="all";const count=hasCases?cases.filter(c=>c.type===o.k).length:0;const isChecked=ctypes.includes(o.k);return <label key={o.k} style={{display:"flex",gap:10,padding:14,borderRadius:10,border:"1px solid "+(hasCases&&isChecked?"var(--color-text-success)":isChecked?"var(--color-text-info)":"var(--color-border-secondary)"),background:hasCases&&isChecked?"var(--color-background-success)":isChecked?"var(--color-background-info)":isDisabled?"var(--color-background-tertiary)":"var(--color-background-primary)",cursor:isDisabled?"not-allowed":"pointer",opacity:isDisabled?0.45:1}}>
               <input type="checkbox" checked={isChecked} disabled={isDisabled} onChange={()=>{if(o.k==="all"){setCtypes(p=>p.includes("all")?[]:["all"]);}else{setCtypes(p=>{const w=p.filter(x=>x!=="all"&&x!==o.k);return p.includes(o.k)?w:[...w,o.k];});}}} style={{marginTop:2}}/>
               <div><div style={{fontWeight:500,display:"flex",alignItems:"center",gap:6}}>{o.l}{hasCases&&<span style={{fontSize:11,color:"var(--color-text-success)",fontWeight:400}}>✓ {count} cases</span>}</div><div style={{fontSize:12,color:hasCases&&isChecked?"var(--color-text-success)":"var(--color-text-secondary)",marginTop:2}}>{hasCases&&isChecked?"Will be kept — uncheck to remove":hasCases&&!isChecked?"Will be removed":o.d}</div></div>
             </label>;});})()}
           </div>
-          {(()=>{const ect=[...new Set(cases.map(c=>c.type))];const sel=ctypes.includes("all")?["happy","edge","negative"]:ctypes;const notInCases=sel.filter(t=>!ect.includes(t));const hasNew=notInCases.some(t=>!casesByType[t]?.length);return <Btn v="primary" onClick={()=>(ctypes.length>0||ect.length>0)&&doGen()} disabled={ctypes.length===0&&ect.length===0}>{hasNew?"Generate test cases →":"View generated cases →"}</Btn>;})()}
+          <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16,flexWrap:"wrap"}}>
+            <span style={{fontSize:13,color:"var(--color-text-secondary)"}}>Generation model</span>
+            <select style={{...sel,width:"auto",minWidth:200}} value={genModel} onChange={e=>setGenModel(e.target.value)}>
+              <option value="claude-sonnet-5">Sonnet 5 — balanced (recommended)</option>
+              <option value="claude-opus-4-8">Opus 4.8 — max quality (slower)</option>
+              <option value="claude-haiku-4-5-20251001">Haiku 4.5 — fastest draft</option>
+            </select>
+          </div>
+          {(()=>{const ect=[...new Set(cases.map(c=>c.type))];const sel=ctypes.includes("all")?["happy","edge","boundary","negative","regression"]:ctypes;const notInCases=sel.filter(t=>!ect.includes(t));const hasNew=notInCases.some(t=>!casesByType[t]?.length);return <Btn v="primary" onClick={()=>(ctypes.length>0||ect.length>0)&&doGen()} disabled={ctypes.length===0&&ect.length===0}>{hasNew?"Generate test cases →":"View generated cases →"}</Btn>;})()}
         </div>}
 
         {!loading&&phase==="ready"&&<div>
@@ -4298,7 +4416,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
               <div style={{gridColumn:"1/-1"}}><Lbl>Title <span style={{color:"var(--color-text-danger)"}}>*</span></Lbl><input style={{...inp,borderColor:newCaseErr&&!newCase.title.trim()?"var(--color-text-danger)":undefined}} value={newCase.title} onChange={e=>{setNewCase(p=>({...p,title:e.target.value}));if(newCaseErr)setNewCaseErr("");}} placeholder="e.g. Submit form with valid data"/></div>
               <div><Lbl>Type</Lbl><select style={sel} value={newCase.type} onChange={e=>setNewCase(p=>({...p,type:e.target.value}))}><option value="happy">Happy flow</option><option value="edge">Edge case</option><option value="negative">Negative</option></select></div>
-              <div><Lbl>Platform</Lbl><select style={sel} value={newCase.platform} onChange={e=>setNewCase(p=>({...p,platform:e.target.value}))}><option value="web">Web</option></select></div>
+              <div><Lbl>Platform</Lbl><select style={sel} value={newCase.platform} onChange={e=>setNewCase(p=>({...p,platform:e.target.value}))}><option value="web">Web</option><option value="mobile">Mobile</option><option value="both">Web + Mobile</option></select></div>
               <div style={{gridColumn:"1/-1"}}><Lbl>Preconditions</Lbl><input style={inp} value={newCase.preconditions} onChange={e=>setNewCase(p=>({...p,preconditions:e.target.value}))} placeholder="e.g. User is logged in"/></div>
             </div>
             <Lbl>Steps</Lbl>
@@ -4328,6 +4446,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
             <div style={{display:"flex",gap:10}}>
               <Btn v="primary" onClick={()=>{exportExcel(cases,sid);setAppUrl("");setPhase("urlPrompt");}}>⬇ Export AIO Excel</Btn>
               <Btn v="ghost" onClick={()=>{exportCSV(cases,sid);setAppUrl("");setPhase("urlPrompt");}}>⬇ Export AIO CSV</Btn>
+              <Btn v="success" onClick={doAioImport}>⬆ Import to AIO Tests</Btn>
               <button onClick={()=>{setAppUrl("");setPhase("urlPrompt");}} style={ghostBtn}>Skip</button>
             </div>
           </div>
@@ -4850,18 +4969,19 @@ function LoginPage({onLogin}) {
       if(!r.ok){setErr(d.error||"Invalid credentials");setBusy(false);return;}
       if(remember){localStorage.setItem(CREDS_KEY,JSON.stringify({mode,email}));}
       else{localStorage.removeItem(CREDS_KEY);}
-      sessionStorage.setItem(MEMBER_TOKEN_KEY,d.token);
-      if(d.sessionToken)sessionStorage.setItem(SESSION_TOKEN_KEY,d.sessionToken);
+      persistMemberToken(d.token,remember);
+      if(d.sessionToken)persistSessionToken(d.sessionToken);
       onLogin({role:"member",member:d.member,id:d.member.id,hasSession:!!d.sessionToken},remember);
     }catch{setErr("Cannot reach server. Make sure node server.js is running.");}
     setBusy(false); return;
   };
-  return <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"linear-gradient(135deg, #f1f5f9 0%, #e2e8f0 100%)"}}>
+  return <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",backgroundColor:"#f5f6f8",backgroundImage:"radial-gradient(circle farthest-side at 50% 50%, transparent 40%, #f5f6f8 100%), url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='22' height='22'%3E%3Crect x='9' y='9' width='4' height='4' fill='rgba(90,110,150,0.35)'/%3E%3C/svg%3E\"), radial-gradient(circle at 50% 38%, rgba(74,114,207,0.16), rgba(74,114,207,0) 55%)",backgroundSize:"auto, 22px 22px, auto",backgroundPosition:"center, center, center",backgroundRepeat:"no-repeat, repeat, no-repeat"}}>
     <div style={{...card,width:400,padding:40,boxShadow:"var(--shadow-lg)",animation:"qa-fade-up 0.35s ease both"}}>
-      <div style={{fontSize:24,fontWeight:800,marginBottom:3,letterSpacing:"-0.02em"}}>QA AI Platform</div>
+      <div style={{marginBottom:14,display:"flex",justifyContent:"center"}}><Logo size={60} withText={false}/></div>
+      <div style={{fontSize:24,fontWeight:800,marginBottom:3,letterSpacing:"-0.02em",color:"var(--sitech-navy)",textAlign:"center"}}>ITQAN</div>
       <div style={{fontSize:13,color:"var(--color-text-tertiary)",marginBottom:28}}>AI-powered QA workflow management</div>
       <div style={{display:"flex",gap:8,marginBottom:22,padding:4,borderRadius:12,background:"var(--color-background-secondary)",border:"1px solid var(--color-border-tertiary)"}}>
-        {["admin","member"].map(r=><button key={r} className="qa-btn" onClick={()=>{setMode(r);setErr("");setEmail(saved?.mode===r?saved.email:"");setPass(saved?.mode===r?saved.pass:"");}} style={{flex:1,padding:"8px 0",borderRadius:9,border:"none",background:r===mode?"#ffffff":"transparent",color:r===mode?"var(--color-text-primary)":"var(--color-text-secondary)",cursor:"pointer",fontSize:14,fontWeight:r===mode?600:400,boxShadow:r===mode?"var(--shadow-sm)":"none"}}>{r==="admin"?"QA Lead":"Team Member"}</button>)}
+        {["admin","member"].map(r=><button key={r} className="qa-btn" onClick={()=>{setMode(r);setErr("");setEmail(saved?.mode===r?saved.email:"");setPass(saved?.mode===r?saved.pass:"");}} style={{flex:1,padding:"8px 0",borderRadius:9,border:"none",background:r===mode?"var(--sitech-navy)":"transparent",color:r===mode?"#ffffff":"var(--color-text-secondary)",cursor:"pointer",fontSize:14,fontWeight:r===mode?600:400,boxShadow:r===mode?"var(--shadow-sm)":"none"}}>{r==="admin"?"QA Lead":"Team Member"}</button>)}
       </div>
       <form onSubmit={e=>{e.preventDefault();login();}} autoComplete="on">
       <Lbl>{mode==="admin"?"Username":"Email"}</Lbl>
@@ -4872,7 +4992,7 @@ function LoginPage({onLogin}) {
         <input type="checkbox" checked={remember} onChange={e=>setRemember(e.target.checked)}/> Remember me
       </label>
       {err&&<div style={{color:"var(--color-text-danger)",fontSize:13,marginBottom:12}}>{err}</div>}
-      <button type="submit" disabled={busy} style={{width:"100%",padding:"8px 0",borderRadius:8,border:"none",background:"var(--color-text-info)",color:"#fff",cursor:busy?"not-allowed":"pointer",fontSize:14,fontWeight:500,opacity:busy?0.7:1}}>{busy?"Signing in…":"Sign in"}</button>
+      <button type="submit" disabled={busy} style={{width:"100%",padding:"8px 0",borderRadius:8,border:"none",background:"var(--sitech-navy)",color:"#fff",cursor:busy?"not-allowed":"pointer",fontSize:14,fontWeight:500,opacity:busy?0.7:1}}>{busy?"Signing in…":"Sign in"}</button>
       </form>
       {mode==="member"&&!showForgot&&<button onClick={()=>setShowForgot(true)} style={{background:"none",border:"none",cursor:"pointer",fontSize:12,color:"var(--color-text-tertiary)",marginTop:14,textDecoration:"underline"}}>Forgot password?</button>}
       {mode==="member"&&showForgot&&<div style={{marginTop:16,paddingTop:16,borderTop:"1px solid var(--color-border-tertiary)"}}>
@@ -4884,7 +5004,7 @@ function LoginPage({onLogin}) {
           <input type="password" style={inp} value={confirmPwd} onChange={e=>setConfirmPwd(e.target.value)} placeholder="Confirm new password"/>
           {resetErr&&<div style={{color:"var(--color-text-danger)",fontSize:12}}>{resetErr}</div>}
           <div style={{display:"flex",gap:8}}>
-            <button onClick={doReset} disabled={resetBusy} style={{flex:1,padding:"8px 0",borderRadius:8,border:"none",background:"var(--color-text-info)",color:"#fff",cursor:resetBusy?"not-allowed":"pointer",fontSize:13,fontWeight:500,opacity:resetBusy?0.7:1}}>{resetBusy?"Resetting…":"Reset Password"}</button>
+            <button onClick={doReset} disabled={resetBusy} style={{flex:1,padding:"8px 0",borderRadius:8,border:"none",background:"var(--sitech-navy)",color:"#fff",cursor:resetBusy?"not-allowed":"pointer",fontSize:13,fontWeight:500,opacity:resetBusy?0.7:1}}>{resetBusy?"Resetting…":"Reset Password"}</button>
             <button onClick={()=>{setShowForgot(false);setResetErr("");setResetToken("");setNewPwd("");setConfirmPwd("");}} style={{padding:"8px 14px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:13,color:"var(--color-text-secondary)"}}>Cancel</button>
           </div>
         </div>}
@@ -4981,7 +5101,7 @@ function AdminChangeUsernameModal({onClose}) {
 /* ─── Member Config Dialog ────────────────────────────────────────────────── */
 const FIGMA_TOKEN_KEY = id => `qa_figma_token_${id}`;
 function MemberConfigDialog({memberId, onClose}) {
-  const [f,setF]=useState({jiraUrl:"",jiraEmail:"",jiraToken:"",figmaToken:""});
+  const [f,setF]=useState({jiraUrl:"",jiraEmail:"",jiraToken:"",aioToken:"",figmaToken:""});
   const [testing,setTesting]=useState(false);
   const [testMsg,setTestMsg]=useState("");
   const [saving,setSaving]=useState(false);
@@ -5002,7 +5122,7 @@ function MemberConfigDialog({memberId, onClose}) {
       const cleanUrl=(()=>{try{return new URL(f.jiraUrl.trim()).origin;}catch{return f.jiraUrl.trim();}})();
       const sr=await fetch(API_BASE+"/api/auth/session",{method:"POST",headers:{"Content-Type":"application/json","X-Member-Token":mt,"X-Session-Token":st},body:JSON.stringify({memberId,jiraUrl:cleanUrl,jiraEmail:f.jiraEmail,jiraToken:f.jiraToken})});
       const sd=await sr.json();
-      if(!sd.sessionToken)throw new Error("Could not create test session");
+      if(!sd.sessionToken)throw new Error(sd.error||"Could not create test session — please sign out and sign back in.");
       const r=await fetch(API_BASE+"/api/jira",{method:"POST",headers:{"Content-Type":"application/json","X-Session-Token":sd.sessionToken},body:JSON.stringify({path:"/myself",method:"GET"})});
       const d=await r.json();
       if(d.error)throw new Error(d.error);
@@ -5023,7 +5143,13 @@ function MemberConfigDialog({memberId, onClose}) {
       const d=await r.json();
       if(r.status===401){setSaveErr("Session expired — please sign out and sign back in.");setSaving(false);return;}
       if(!r.ok)throw new Error(d.error||"Save failed");
-      if(d.sessionToken)sessionStorage.setItem(SESSION_TOKEN_KEY,d.sessionToken);
+      if(d.sessionToken)persistSessionToken(d.sessionToken);
+      // Mint a new session carrying the AIO token so import works immediately without re-login.
+      const st=sessionStorage.getItem(SESSION_TOKEN_KEY)||"";
+      const cleanUrl=(()=>{try{return new URL(f.jiraUrl.trim()).origin;}catch{return f.jiraUrl.trim();}})();
+      const sr=await fetch(API_BASE+"/api/auth/session",{method:"POST",headers:{"Content-Type":"application/json","X-Member-Token":mt||"","X-Session-Token":st},body:JSON.stringify({memberId,jiraUrl:cleanUrl,jiraEmail:f.jiraEmail.trim(),jiraToken:f.jiraToken.trim(),aioToken:f.aioToken.trim()})});
+      const sd=await sr.json();
+      if(sd.sessionToken)persistSessionToken(sd.sessionToken);
       // Save Figma token locally (not sent to server — stays in browser)
       if(f.figmaToken.trim())localStorage.setItem(FIGMA_TOKEN_KEY(memberId),f.figmaToken.trim());
       else localStorage.removeItem(FIGMA_TOKEN_KEY(memberId));
@@ -5060,6 +5186,11 @@ function MemberConfigDialog({memberId, onClose}) {
           </button>
           {testMsg&&<div style={{marginTop:6,fontSize:12,color:testMsg.startsWith("✓")?"var(--color-text-success)":"var(--color-text-danger)"}}>{testMsg}</div>}
         </div>}
+        <div style={{borderTop:"1px solid var(--color-border-tertiary)",paddingTop:12,marginTop:2}}>
+          <Lbl>AIO Tests API Token <span style={{fontWeight:400,color:"var(--color-text-tertiary)"}}>— optional, enables direct import to AIO Tests</span></Lbl>
+          <input type="password" style={inp} value={f.aioToken} onChange={e=>sf({aioToken:e.target.value})} placeholder="••••••"/>
+          <div style={{fontSize:11,color:"var(--color-text-tertiary)",marginTop:3}}>Get yours from AIO Tests → Profile → API Token.</div>
+        </div>
         <div style={{borderTop:"1px solid var(--color-border-tertiary)",paddingTop:14,marginTop:4}}>
           <div style={{fontWeight:600,fontSize:14,marginBottom:2}}>🎨 Figma (optional)</div>
           <div style={{fontSize:12,color:"var(--color-text-tertiary)",marginBottom:10}}>Required for UI Design Testing. Stored only in your browser.</div>
@@ -5115,6 +5246,34 @@ function App() {
   const [deleteConfirmId,setDeleteConfirmId]=useState(null);
   const [renamingCatId,setRenamingCatId]=useState(null); const [renameCatVal,setRenameCatVal]=useState("");
   const [storySearch,setStorySearch]=useState("");
+  const [storiesOpen,setStoriesOpen]=useState(false);
+  const storiesBtnRef=useRef(null);
+  const storiesPanelRef=useRef(null);
+  const [storiesPos,setStoriesPos]=useState({top:0,left:0});
+  const toggleStories=()=>{
+    if(storiesBtnRef.current){const r=storiesBtnRef.current.getBoundingClientRect();const panelW=300;const left=Math.min(r.left,window.innerWidth-panelW-8);setStoriesPos({top:r.bottom+6,left});}
+    setStoriesOpen(o=>!o);
+  };
+  useEffect(()=>{
+    if(!storiesOpen)return;
+    const onDocClick=e=>{ if(storiesBtnRef.current?.contains(e.target)||storiesPanelRef.current?.contains(e.target))return; setStoriesOpen(false); };
+    document.addEventListener("mousedown",onDocClick);
+    return ()=>document.removeEventListener("mousedown",onDocClick);
+  },[storiesOpen]);
+  const [userMenuOpen,setUserMenuOpen]=useState(false);
+  const userMenuBtnRef=useRef(null);
+  const userMenuPanelRef=useRef(null);
+  const [userMenuPos,setUserMenuPos]=useState({top:0,left:0});
+  const toggleUserMenu=()=>{
+    if(userMenuBtnRef.current){const r=userMenuBtnRef.current.getBoundingClientRect();const panelW=200;const left=Math.max(8,Math.min(r.right-panelW,window.innerWidth-panelW-8));setUserMenuPos({top:r.bottom+6,left});}
+    setUserMenuOpen(o=>!o);
+  };
+  useEffect(()=>{
+    if(!userMenuOpen)return;
+    const onDocClick=e=>{ if(userMenuBtnRef.current?.contains(e.target)||userMenuPanelRef.current?.contains(e.target))return; setUserMenuOpen(false); };
+    document.addEventListener("mousedown",onDocClick);
+    return ()=>document.removeEventListener("mousedown",onDocClick);
+  },[userMenuOpen]);
   const renameCat=(id,name)=>{if(!name.trim())return;DB.categories=DB.categories.map(c=>c.id===id?{...c,name:name.trim()}:c);saveDB();refreshSaved();setRenamingCatId(null);};
   const [,forceUpdate]=useState(0);
   const [resetTrigger,setResetTrigger]=useState(0);
@@ -5153,7 +5312,7 @@ function App() {
       if(!localStorage.getItem(onboardedKey)){setShowOnboarding(true);}
     }
   };
-  const handleLogout=()=>{localStorage.removeItem('qa_ws_'+_currentMemberId);_currentMemberId="";localStorage.removeItem(SESSION_KEY);sessionStorage.removeItem(SESSION_KEY);sessionStorage.removeItem(SESSION_TOKEN_KEY);sessionStorage.removeItem(ADMIN_TOKEN_KEY);sessionStorage.removeItem(MEMBER_TOKEN_KEY);setUser(null);setPage("workspace");setShowConfig(false);setShowChangePwd(false);};
+  const handleLogout=()=>{localStorage.removeItem('qa_ws_'+_currentMemberId);_currentMemberId="";localStorage.removeItem(SESSION_KEY);sessionStorage.removeItem(SESSION_KEY);sessionStorage.removeItem(ADMIN_TOKEN_KEY);clearAuthTokens();setUser(null);setPage("workspace");setShowConfig(false);setShowChangePwd(false);};
   useEffect(()=>{
     const onAuthFailure=()=>handleLogout();
     window.addEventListener('qa-auth-failure',onAuthFailure);
@@ -5163,7 +5322,7 @@ function App() {
   const adminNav=[{sec:"Overview",items:[{id:"dashboard",label:"Dashboard",icon:"📊"}]},{sec:"Manage",items:[{id:"members",label:"Members",icon:"👥"},{id:"projects",label:"Projects",icon:"📁"},{id:"assign",label:"Assignments",icon:"🔗"}]}];
   const memberNav=[{sec:"Work",items:[{id:"workspace",label:"Workspace",icon:"🖥"},{id:"history",label:"History",icon:"🕐"}]}];
   const nav=user.role==="admin"?adminNav:memberNav;
-  return <div style={{fontFamily:"-apple-system,BlinkMacSystemFont,'Segoe UI','Inter',sans-serif",color:"var(--color-text-primary)",minHeight:"100vh",background:"#f1f5f9",display:"flex"}}>
+  return <div style={{fontFamily:"-apple-system,BlinkMacSystemFont,'Segoe UI','Inter',sans-serif",color:"var(--color-text-primary)",minHeight:"100vh",backgroundColor:"#f5f6f8",backgroundImage:"radial-gradient(circle farthest-side at 50% 50%, transparent 40%, #f5f6f8 100%), url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='22' height='22'%3E%3Crect x='9' y='9' width='4' height='4' fill='rgba(120,130,140,0.10)'/%3E%3C/svg%3E\")",backgroundSize:"auto, 22px 22px",backgroundPosition:"center, center",backgroundRepeat:"no-repeat, repeat",backgroundAttachment:"fixed, fixed",display:"flex",flexDirection:"column"}}>
     {showConfig&&user?.role==="member"&&<MemberConfigDialog memberId={user.id} onClose={()=>setShowConfig(false)}/>}
     {showChangePwd&&user?.role==="admin"&&<AdminChangePasswordModal forced={!!user.forceChangePwd} onClose={()=>{setShowChangePwd(false);setUser(u=>({...u,forceChangePwd:false}));}}/>}
     {showChangeUsername&&user?.role==="admin"&&<AdminChangeUsernameModal onClose={()=>setShowChangeUsername(false)}/>}
@@ -5183,55 +5342,57 @@ function App() {
         <Btn v="primary" onClick={()=>{localStorage.setItem('qa_onboarded_'+user.id,'1');setShowOnboarding(false);}}>Get Started</Btn>
       </div>
     </div>}
-    <div style={{width:224,minHeight:"100vh",background:"#ffffff",borderRight:"1px solid var(--color-border-tertiary)",display:"flex",flexDirection:"column",flexShrink:0,boxShadow:"1px 0 0 rgba(15,23,42,0.06)"}}>
-      <div style={{padding:"18px 20px 14px",borderBottom:"1px solid var(--color-border-tertiary)"}}>
-        <div style={{fontWeight:700,fontSize:15,letterSpacing:"-0.01em",color:"var(--color-text-primary)"}}>QA AI Platform</div>
-        <div style={{fontSize:11,color:"var(--color-text-tertiary)",marginTop:3}}>{user.role==="admin"?"QA Lead · Admin":(user.member?.name+" · "+user.member?.role)}</div>
+    <div style={{display:"flex",alignItems:"center",gap:4,background:"#ffffff",border:"1px solid var(--color-border-tertiary)",borderRadius:16,margin:"14px 16px 0",padding:"0 16px",height:58,flexShrink:0,overflowX:"auto",position:"sticky",top:14,zIndex:50,boxShadow:"0 6px 20px rgba(0,0,0,.08)"}}>
+      <div style={{display:"flex",alignItems:"center",paddingRight:16,marginRight:12,borderRight:"1px solid var(--color-border-tertiary)",height:"100%",flexShrink:0}}>
+        <Logo size={30} textSize={15}/>
       </div>
-      <div style={{flex:1,paddingTop:8,overflowY:"auto"}}>
-        {nav.map(g=><div key={g.sec}>
-          <div style={{padding:"14px 20px 4px",fontSize:10,fontWeight:600,color:"var(--color-text-tertiary)",textTransform:"uppercase",letterSpacing:"0.09em"}}>{g.sec}</div>
-          {g.items.map(n=>{const ob=n.id==="bugs"?DB.bugs.filter(b=>b.status==="Open").length:0;
-            return <div key={n.id} onClick={()=>{setPage(n.id);tick(x=>x+1);}} style={{padding:"9px 16px",margin:"1px 8px",borderRadius:9,cursor:"pointer",fontSize:13,fontWeight:page===n.id?600:400,background:page===n.id?"rgba(79,70,229,0.09)":"transparent",color:page===n.id?"var(--accent)":"var(--color-text-secondary)",display:"flex",alignItems:"center",gap:8,transition:"background 0.15s ease, color 0.15s ease"}}>
-              <span>{n.icon}</span>{n.label}{ob>0&&<span style={{marginLeft:"auto",background:"var(--color-text-danger)",color:"#fff",borderRadius:20,padding:"0 6px",fontSize:11}}>{ob}</span>}
-            </div>;})}
-        </div>)}
-        {user.role==="member"&&savedStories.length>0&&(()=>{
-          const projFiltered=activeProj?savedStories.filter(s=>storyMatchesProject(s,activeProj.jiraProjKey,activeProj.id)):savedStories;
-          const visibleStories=storySearch.trim()?projFiltered.filter(s=>(s.name||s.sid||"").toLowerCase().includes(storySearch.trim().toLowerCase())):projFiltered;
-          if(projFiltered.length===0)return null;
-          const isActive=s=>s.testKind==="ui-design"?activeSid===("uid:"+s.id)&&page==="workspace":s.testKind==="non-functional"?activeSid===("perf:"+s.id)&&page==="workspace":s.sid===activeSid&&page==="workspace";
-          const StoryCard=({s})=>(
-            <div key={s.id} style={{borderRadius:7,padding:"8px 9px",background:isActive(s)?"var(--color-background-info)":"var(--color-background-primary)",border:isActive(s)?"1px solid var(--color-text-info)":"1px solid var(--color-border-tertiary)",cursor:renamingId===s.id?"default":"pointer",transition:"border-color 0.15s",borderLeft:isActive(s)?"3px solid var(--color-text-info)":"1px solid var(--color-border-tertiary)"}}
-              onMouseEnter={e=>{if(renamingId!==s.id&&!isActive(s))e.currentTarget.style.borderColor="var(--color-border-primary)";}}
-              onMouseLeave={e=>{if(!isActive(s))e.currentTarget.style.borderColor="var(--color-border-tertiary)";}}
-              onClick={()=>{if(renamingId!==s.id){setRestoreTarget(s);setPage("workspace");}}}>
-              {renamingId===s.id
-                ?<div style={{display:"flex",gap:4}} onClick={e=>e.stopPropagation()}>
-                    <input autoFocus style={{flex:1,fontSize:12,padding:"3px 7px",borderRadius:5,border:"1px solid var(--color-border-primary)",background:"var(--color-background-secondary)",color:"var(--color-text-primary)",outline:"none"}} value={renameVal} onChange={e=>setRenameVal(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")renameSnap(s.id,renameVal||s.name||s.sid||"Session");if(e.key==="Escape")setRenamingId(null);}}/>
-                    <button onClick={()=>renameSnap(s.id,renameVal||s.name||s.sid||"Session")} style={{background:"none",border:"none",cursor:"pointer",color:"var(--color-text-success)",fontSize:14,padding:"0 2px"}}>✓</button>
+      {nav.map((g,gi)=><div key={g.sec} style={{display:"flex",alignItems:"center",gap:2,paddingRight:12,marginRight:12,borderRight:gi<nav.length-1?"1px solid var(--color-border-tertiary)":"none",flexShrink:0}}>
+        {g.items.map(n=>{const ob=n.id==="bugs"?DB.bugs.filter(b=>b.status==="Open").length:0;
+          return <div key={n.id} onClick={()=>{setPage(n.id);tick(x=>x+1);}} style={{padding:"7px 12px",cursor:"pointer",fontSize:14,fontWeight:page===n.id?600:400,background:page===n.id?"var(--sitech-navy-tint)":"transparent",color:page===n.id?"var(--sitech-navy)":"var(--color-text-secondary)",borderRadius:7,display:"flex",alignItems:"center",gap:6,whiteSpace:"nowrap",transition:"background 0.15s ease, color 0.15s ease"}}>
+            <span>{n.icon}</span>{n.label}{ob>0&&<span style={{background:"var(--color-text-danger)",color:"#fff",borderRadius:20,padding:"0 6px",fontSize:11}}>{ob}</span>}
+          </div>;})}
+      </div>)}
+      {user.role==="member"&&savedStories.length>0&&(()=>{
+        const projFiltered=activeProj?savedStories.filter(s=>storyMatchesProject(s,activeProj.jiraProjKey,activeProj.id)):savedStories;
+        const _sq=storySearch.trim().toLowerCase();
+        const visibleStories=_sq?projFiltered.filter(s=>[s.name,s.sid,s.uidJiraTicketKey,s.perfForm?.testName].filter(Boolean).join(" ").toLowerCase().includes(_sq)):projFiltered;
+        if(projFiltered.length===0)return null;
+        const isActive=s=>s.testKind==="ui-design"?activeSid===("uid:"+s.id)&&page==="workspace":s.testKind==="non-functional"?activeSid===("perf:"+s.id)&&page==="workspace":s.sid===activeSid&&page==="workspace";
+        const StoryCard=({s})=>(
+          <div key={s.id} style={{borderRadius:7,padding:"8px 9px",background:isActive(s)?"var(--color-background-info)":"var(--color-background-primary)",border:isActive(s)?"1px solid var(--color-text-info)":"1px solid var(--color-border-tertiary)",cursor:renamingId===s.id?"default":"pointer",transition:"border-color 0.15s",borderLeft:isActive(s)?"3px solid var(--color-text-info)":"1px solid var(--color-border-tertiary)"}}
+            onMouseEnter={e=>{if(renamingId!==s.id&&!isActive(s))e.currentTarget.style.borderColor="var(--color-border-primary)";}}
+            onMouseLeave={e=>{if(!isActive(s))e.currentTarget.style.borderColor="var(--color-border-tertiary)";}}
+            onClick={()=>{if(renamingId!==s.id){setRestoreTarget(s);setPage("workspace");setStoriesOpen(false);}}}>
+            {renamingId===s.id
+              ?<div style={{display:"flex",gap:4}} onClick={e=>e.stopPropagation()}>
+                  <input autoFocus style={{flex:1,fontSize:12,padding:"3px 7px",borderRadius:5,border:"1px solid var(--color-border-primary)",background:"var(--color-background-secondary)",color:"var(--color-text-primary)",outline:"none"}} value={renameVal} onChange={e=>setRenameVal(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")renameSnap(s.id,renameVal||s.name||s.sid||"Session");if(e.key==="Escape")setRenamingId(null);}}/>
+                  <button onClick={()=>renameSnap(s.id,renameVal||s.name||s.sid||"Session")} style={{background:"none",border:"none",cursor:"pointer",color:"var(--color-text-success)",fontSize:14,padding:"0 2px"}}>✓</button>
+                </div>
+              :<div>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+                    <span style={{fontSize:12,fontWeight:500,color:"var(--color-text-primary)",flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{s.name}</span>
+                    <div style={{display:"flex",gap:1,marginLeft:4,flexShrink:0,opacity:0.7}} onClick={e=>e.stopPropagation()}>
+                      <button title="Rename" onClick={()=>{setRenamingId(s.id);setRenameVal(s.name);}} style={{background:"none",border:"none",cursor:"pointer",color:"var(--color-text-tertiary)",fontSize:11,padding:"2px 3px",borderRadius:3}}>✎</button>
+                      <button title="Delete" onClick={()=>setDeleteConfirmId(s.id)} style={{background:"none",border:"none",cursor:"pointer",color:"var(--color-text-danger)",fontSize:11,padding:"2px 3px",borderRadius:3}}>✕</button>
+                    </div>
                   </div>
-                :<div>
-                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
-                      <span style={{fontSize:12,fontWeight:500,color:"var(--color-text-primary)",flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{s.name}</span>
-                      <div style={{display:"flex",gap:1,marginLeft:4,flexShrink:0,opacity:0.7}} onClick={e=>e.stopPropagation()}>
-                        <button title="Rename" onClick={()=>{setRenamingId(s.id);setRenameVal(s.name);}} style={{background:"none",border:"none",cursor:"pointer",color:"var(--color-text-tertiary)",fontSize:11,padding:"2px 3px",borderRadius:3}}>✎</button>
-                        <button title="Delete" onClick={()=>setDeleteConfirmId(s.id)} style={{background:"none",border:"none",cursor:"pointer",color:"var(--color-text-danger)",fontSize:11,padding:"2px 3px",borderRadius:3}}>✕</button>
-                      </div>
-                    </div>
-                    <div style={{display:"flex",gap:3,flexWrap:"wrap"}}>
-                      {s.testKind==="ui-design"
-                        ?<><Tag c="purple">UI</Tag>{s.uidJiraTicketKey&&<Tag c="blue">{s.uidJiraTicketKey}</Tag>}{(s.uidCases?.length||0)>0&&<Tag c="green">{s.uidCases.length} TC</Tag>}{s.uidVisualResult&&<Tag c="green">✓</Tag>}</>
-                        :s.testKind==="non-functional"
-                        ?<><Tag c="amber">PERF</Tag><Tag c="blue">{s.perfForm?.method||"GET"}</Tag>{s.perfResult&&<Tag c={s.perfResult.passed?"green":"red"}>{s.perfResult.passed?"✓ Pass":"✗ Fail"}</Tag>}</>
-                        :<><Tag c="blue">{s.sid}</Tag>{(s.cases?.filter(c=>c.status==="approved")?.length||0)>0&&<Tag c="green">{s.cases.filter(c=>c.status==="approved").length} TC</Tag>}{s.coverageText&&<Tag c="green">✓</Tag>}</>}
-                    </div>
-                  </div>}
-            </div>);
-          const cats=DB.categories;
-          const grouped=cats.map(c=>({cat:c,stories:visibleStories.filter(s=>s.categoryId===c.id)})).filter(g=>g.stories.length>0);
-          const uncategorized=visibleStories.filter(s=>!s.categoryId);
-          return <div style={{padding:"6px 12px 12px"}}>
+                  <div style={{display:"flex",gap:3,flexWrap:"wrap"}}>
+                    {s.testKind==="ui-design"
+                      ?<><Tag c="purple">UI</Tag>{s.uidJiraTicketKey&&<Tag c="blue">{s.uidJiraTicketKey}</Tag>}{(s.uidCases?.length||0)>0&&<Tag c="green">{s.uidCases.length} TC</Tag>}{s.uidVisualResult&&<Tag c="green">✓</Tag>}</>
+                      :s.testKind==="non-functional"
+                      ?<><Tag c="amber">PERF</Tag><Tag c="blue">{s.perfForm?.method||"GET"}</Tag>{s.perfResult&&<Tag c={s.perfResult.passed?"green":"red"}>{s.perfResult.passed?"✓ Pass":"✗ Fail"}</Tag>}</>
+                      :<><Tag c="blue">{s.sid}</Tag>{(s.cases?.filter(c=>c.status==="approved")?.length||0)>0&&<Tag c="green">{s.cases.filter(c=>c.status==="approved").length} TC</Tag>}{s.coverageText&&<Tag c="green">✓</Tag>}</>}
+                  </div>
+                </div>}
+          </div>);
+        const cats=DB.categories;
+        const grouped=cats.map(c=>({cat:c,stories:visibleStories.filter(s=>s.categoryId===c.id)})).filter(g=>g.stories.length>0);
+        const uncategorized=visibleStories.filter(s=>!s.categoryId);
+        return <div style={{position:"relative",flexShrink:0,marginRight:12}}>
+          <div ref={storiesBtnRef} onClick={toggleStories} style={{padding:"7px 12px",cursor:"pointer",fontSize:14,fontWeight:400,color:"var(--color-text-secondary)",borderRadius:7,display:"flex",alignItems:"center",gap:6,whiteSpace:"nowrap"}}>
+            <span>📑</span>Saved Stories<span style={{fontSize:10,color:"var(--color-text-tertiary)"}}>{projFiltered.length}</span><span style={{fontSize:9,marginLeft:2}}>{storiesOpen?"▲":"▼"}</span>
+          </div>
+          {storiesOpen&&<div ref={storiesPanelRef} style={{position:"fixed",top:storiesPos.top,left:storiesPos.left,width:300,maxHeight:"70vh",overflowY:"auto",background:"var(--color-background-secondary)",border:"1px solid var(--color-border-secondary)",borderRadius:12,zIndex:9999,boxShadow:"0 8px 24px rgba(0,0,0,.14)",padding:"6px 12px 12px"}}>
             <div style={{fontSize:11,fontWeight:500,color:"var(--color-text-tertiary)",textTransform:"uppercase",letterSpacing:"0.07em",padding:"10px 8px 6px"}}>Saved Stories</div>
             {projFiltered.length > 4 && <input value={storySearch} onChange={e=>setStorySearch(e.target.value)} placeholder="Search stories..." style={{width:"100%",boxSizing:"border-box",fontSize:11,padding:"4px 8px",borderRadius:5,border:"1px solid var(--color-border-secondary)",background:"var(--color-background-secondary)",color:"var(--color-text-primary)",marginBottom:6,outline:"none"}}/>}
             {visibleStories.length===0&&storySearch.trim()&&<div style={{fontSize:11,color:"var(--color-text-tertiary)",padding:"4px 8px"}}>No stories match.</div>}
@@ -5265,20 +5426,26 @@ function App() {
                 </div>
               </div>
             </div>}
-          </div>;
-        })()}
-      </div>
-      <div style={{padding:"14px 20px",borderTop:"1px solid var(--color-border-tertiary)"}}>
-        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
-          <div><div style={{fontSize:13,fontWeight:600}}>{user.role==="admin"?"Admin":user.member?.name}</div><div style={{fontSize:11,color:"var(--color-text-tertiary)",marginTop:1}}>{user.role==="admin"?"QA Lead":user.member?.role}</div></div>
-          <NotifBell userId={user.role==="admin"?"admin":user.id}/>
+          </div>}
+        </div>;
+      })()}
+      <div style={{flex:1}}/>
+      <div style={{display:"flex",alignItems:"center",gap:12,flexShrink:0,paddingLeft:12}}>
+        <NotifBell userId={user.role==="admin"?"admin":user.id}/>
+        <div style={{position:"relative"}}>
+          <div ref={userMenuBtnRef} onClick={toggleUserMenu} style={{textAlign:"right",cursor:"pointer"}}>
+            <div style={{fontSize:13,fontWeight:600,color:"var(--sitech-navy)"}}>{user.role==="admin"?"Admin":user.member?.name}</div>
+            <div style={{fontSize:11,color:"var(--color-text-tertiary)"}}>{user.role==="admin"?"QA Lead":user.member?.role}</div>
+          </div>
+          {userMenuOpen&&<div ref={userMenuPanelRef} style={{position:"fixed",top:userMenuPos.top,left:userMenuPos.left,width:200,background:"var(--color-background-secondary)",border:"1px solid var(--color-border-secondary)",borderRadius:12,zIndex:9999,boxShadow:"0 8px 24px rgba(0,0,0,.14)",padding:8,display:"flex",flexDirection:"column",gap:4}}>
+            {user.role==="member"&&<button className="qa-btn" onClick={()=>{setShowConfig(true);setUserMenuOpen(false);}} style={{width:"100%",padding:"7px 0",borderRadius:9,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:13,color:"var(--color-text-secondary)",display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>
+              {sessionStorage.getItem(SESSION_TOKEN_KEY)?<><span style={{color:"var(--color-text-success)"}}>●</span> Settings</>:<><span style={{color:"var(--color-text-warning)"}}>●</span> Settings</>}
+            </button>}
+            {user.role==="admin"&&<button className="qa-btn" onClick={()=>{setShowChangePwd(true);setUserMenuOpen(false);}} style={{width:"100%",padding:"7px 0",borderRadius:9,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:13,color:"var(--color-text-secondary)"}}>🔒 Change Password</button>}
+            {user.role==="admin"&&<button className="qa-btn" onClick={()=>{setShowChangeUsername(true);setUserMenuOpen(false);}} style={{width:"100%",padding:"7px 0",borderRadius:9,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:13,color:"var(--color-text-secondary)"}}>👤 Change Username</button>}
+            <button className="qa-btn" onClick={handleLogout} style={{width:"100%",padding:"8px 0",borderRadius:9,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:13,color:"var(--color-text-secondary)"}}>Sign out</button>
+          </div>}
         </div>
-        {user.role==="member"&&<button className="qa-btn" onClick={()=>setShowConfig(true)} style={{width:"100%",padding:"7px 0",borderRadius:9,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:13,color:"var(--color-text-secondary)",marginBottom:8,display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>
-          {sessionStorage.getItem(SESSION_TOKEN_KEY)?<><span style={{color:"var(--color-text-success)"}}>●</span> Settings</>:<><span style={{color:"var(--color-text-warning)"}}>●</span> Settings</>}
-        </button>}
-        {user.role==="admin"&&<button className="qa-btn" onClick={()=>setShowChangePwd(true)} style={{width:"100%",padding:"7px 0",borderRadius:9,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:13,color:"var(--color-text-secondary)",marginBottom:6}}>🔒 Change Password</button>}
-        {user.role==="admin"&&<button className="qa-btn" onClick={()=>setShowChangeUsername(true)} style={{width:"100%",padding:"7px 0",borderRadius:9,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:13,color:"var(--color-text-secondary)",marginBottom:8}}>👤 Change Username</button>}
-        <button className="qa-btn" onClick={handleLogout} style={{width:"100%",padding:"8px 0",borderRadius:9,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:13,color:"var(--color-text-secondary)"}}>Sign out</button>
       </div>
     </div>
     <div style={{flex:1,padding:28,overflow:"auto",minHeight:"100vh"}}>
