@@ -5042,7 +5042,8 @@ function App() {
         </div>)}
         {user.role==="member"&&savedStories.length>0&&(()=>{
           const projFiltered=activeProj?savedStories.filter(s=>storyMatchesProject(s,activeProj.jiraProjKey,activeProj.id)):savedStories;
-          const visibleStories=storySearch.trim()?projFiltered.filter(s=>(s.name||s.sid||"").toLowerCase().includes(storySearch.trim().toLowerCase())):projFiltered;
+          const _sq=storySearch.trim().toLowerCase();
+          const visibleStories=_sq?projFiltered.filter(s=>[s.name,s.sid,s.uidJiraTicketKey,s.perfForm?.testName].filter(Boolean).join(" ").toLowerCase().includes(_sq)):projFiltered;
           if(projFiltered.length===0)return null;
           const isActive=s=>s.testKind==="ui-design"?activeSid===("uid:"+s.id)&&page==="workspace":s.testKind==="non-functional"?activeSid===("perf:"+s.id)&&page==="workspace":s.sid===activeSid&&page==="workspace";
           const StoryCard=({s})=>(

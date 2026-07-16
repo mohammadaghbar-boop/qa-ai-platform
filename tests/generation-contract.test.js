@@ -147,3 +147,15 @@ test('New story button is not gated behind hasSaved', () => {
   assert.ok(fn, 'startNewStory body must be found');
   assert.match(fn[0], /window\.confirm/, 'startNewStory must confirm before discarding unsaved work');
 });
+
+// ── Saved-story search must match by name AND key (sid) ──────────────────────
+test('saved-story search matches both name and sid (not name-only)', () => {
+  // The old bug: filter used (s.name||s.sid) which short-circuits on name, so
+  // searching by Jira key never matched stories that have a name.
+  assert.ok(!/\(s\.name\|\|s\.sid\|\|""\)\.toLowerCase\(\)\.includes/.test(html),
+    'search must not use the name-only-fallback filter');
+  const line = html.match(/const visibleStories=_sq\?projFiltered\.filter\([^\n]*\)/);
+  assert.ok(line, 'search filter must build a haystack from multiple fields');
+  assert.match(line[0], /s\.name/, 'search must include name');
+  assert.match(line[0], /s\.sid/, 'search must include sid (Jira key)');
+});
