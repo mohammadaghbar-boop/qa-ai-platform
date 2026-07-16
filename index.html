@@ -364,6 +364,13 @@ function dlFile(content, name, mime="text/plain") {
   a.href = url; a.download = name; a.click();
   URL.revokeObjectURL(url);
 }
+function isValidHttpUrl(s) {
+  try { const u = new URL(s); return u.protocol === "http:" || u.protocol === "https:"; } catch { return false; }
+}
+function bugExportText(b) {
+  const steps = (b.steps||[]).map((s,i)=>`${i+1}. ${s}`).join("\n") || "—";
+  return `Bug: ${b.summary}\nSeverity: ${b.sev}\n\nSteps to Reproduce:\n${steps}\n\nExpected Result:\n${b.expected||"—"}\n\nActual Result:\n${b.actual||"—"}\n\nStory:\n${b.sid}${b.who?" · Filed by "+b.who:""}\n`;
+}
 function toGapData(v) {
   if (!v) return null;
   return typeof v === "string" ? { legacy:true, raw:v } : v;
@@ -1814,7 +1821,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
   const [jKey,setJKey]=useState(null); const [bugDone,setBugDone]=useState(null);
   const [showBugForm,setShowBugForm]=useState(false); const [bf,setBf]=useState({summary:"",sev:"High",steps:[""],expected:"",actual:"",attachments:[]});
   const [fixed,setFixed]=useState(false); const [hist,setHist]=useState([]); const [chat,setChat]=useState(false); const [hasSaved,setHasSaved]=useState(false);
-  const [showAddCase,setShowAddCase]=useState(false); const [newCase,setNewCase]=useState({title:"",type:"happy",platform:"web",preconditions:"",steps:[""],expected:"",automatable:true}); const [newCaseErr,setNewCaseErr]=useState("");
+  const [showAddCase,setShowAddCase]=useState(false); const [newCase,setNewCase]=useState({title:"",type:"happy",platform:"web",preconditions:"",steps:[""],expected:"",automatable:true,method:"GET",url:"",expectedStatus:200}); const [newCaseErr,setNewCaseErr]=useState("");
   const [selectedForScripts,setSelectedForScripts]=useState([]); const [coverageText,setCoverageText]=useState(""); const [sessionBugs,setSessionBugs]=useState([]); const [appUrl,setAppUrl]=useState("");
   const [codegenSessionId,setCodegenSessionId]=useState(null); const [codegenScript,setCodegenScript]=useState(""); const [codegenStatus,setCodegenStatus]=useState("idle");
   const [attachCheck,setAttachCheck]=useState(null); const [attachStatus,setAttachStatus]=useState("idle"); const [autoExecute,setAutoExecute]=useState(false); const [forceManual,setForceManual]=useState(false);
@@ -1844,6 +1851,12 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
   const [perfChat,setPerfChat]=useState(false);
   const [curlDraft,setCurlDraft]=useState("");
   const [curlErr,setCurlErr]=useState("");
+
+  // ── API Test kind state ───────────────────────────────────────────────────
+  const API_ENDPOINT_DEFAULT=()=>({id:uid(),name:"",method:"GET",url:"",expectedStatus:200,authType:"none",token:"",basicUsername:"",basicPassword:"",requestBody:"",headers:[]});
+  const [apiEndpoints,setApiEndpoints]=useState([API_ENDPOINT_DEFAULT()]);
+  const [apiCollection,setApiCollection]=useState(null);
+  const [storyTab,setStoryTab]=useState("jira");
 
   // ── UI Design Testing state ───────────────────────────────────────────────
   const [uidForm,setUidForm]=useState({pageUrl:"",figmaUrl:"",figmaToken:"",selectedNodeId:""});
@@ -1890,8 +1903,8 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
       : ["Project","Test Type","User Story","Analysis","Generate","Review","Export","Scripts","Execute","Bug Report","Coverage"];
   const WS_IDX = {
     project:0, testType:1,
-    input:2, mode:3, gap:3, ctype:4, ready:4,
-    review:5, jira:6, urlPrompt:7, checkingAttachment:7, attachError:7, codegenRecording:7, scriptSelect:7, autoReady:7,
+    input:2, mode:3, gap:3, ctype:4, ready:4, apiEndpoints:4,
+    review:5, jira:6, urlPrompt:7, checkingAttachment:7, attachError:7, codegenRecording:7, scriptSelect:7, autoReady:7, apiScripts:7,
     runAsk:8, running:8, result:8, manualExec:8, bugReport:9, coverage:10,
     perfTest:2, perfResult:3,
     uidJiraTicket:2, uidSetup:3, uidCases:4, uidRun:5, uidResults:6, uidBugs:7, uidReport:8
@@ -1958,12 +1971,14 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
       if(s.uidStoryRequirements)setUidStoryRequirements(s.uidStoryRequirements);
       if(s.uidStoryFiles?.length)setUidStoryFiles(s.uidStoryFiles);
       if(s.uidSvgFiles?.length)setUidSvgFiles(s.uidSvgFiles);
+      if(s.apiEndpoints?.length)setApiEndpoints(s.apiEndpoints);
+      if(s.apiCollection)setApiCollection(s.apiCollection);
     }catch{}
   },[]);
   // Save workspace state on every change
   useEffect(()=>{
     if(phase==="input"||phase==="testType"){localStorage.removeItem(WS_SNAP);return;}
-    try{const uidFormSafe={...uidForm,figmaToken:""};const wsState={phase,testKind,sid,sdata,platform,ctypes,gapData,cases,scripts,tab,result,execLines,coverageText,sessionBugs,selectedForScripts,appUrl,uidForm:uidFormSafe,uidCases,uidVisualResult,uidFigmaImg,uidManualFigmaImg,uidJiraTicketKey,uidStoryId,uidScript,uidDemandName,uidSelectedForScript,uidJiraMode,uidStoryRequirements,uidStoryFiles,uidSvgFiles};localStorage.setItem(WS_SNAP,JSON.stringify(wsState));
+    try{const uidFormSafe={...uidForm,figmaToken:""};const wsState={phase,testKind,sid,sdata,platform,ctypes,gapData,cases,scripts,tab,result,execLines,coverageText,sessionBugs,selectedForScripts,appUrl,uidForm:uidFormSafe,uidCases,uidVisualResult,uidFigmaImg,uidManualFigmaImg,uidJiraTicketKey,uidStoryId,uidScript,uidDemandName,uidSelectedForScript,uidJiraMode,uidStoryRequirements,uidStoryFiles,uidSvgFiles,apiEndpoints,apiCollection};localStorage.setItem(WS_SNAP,JSON.stringify(wsState));
     setSyncStatus('syncing');
     serverStorage.saveWorkspace(member.id, wsState).then(ok => {
       setSyncStatus(ok ? 'ok' : 'failed');
@@ -2105,13 +2120,13 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
   React.useEffect(()=>{
     if(!sid||!sdata)return;
     const existing=DB.savedStories.find(s=>s.sid===sid);
-    const snap={id:existing?.id||uid(),name:existing?.name||(sdata?.summary||sid),categoryId:existing?.categoryId||null,phase,sid,sdata,cases:[...cases],gapData,platform,ctypes:[...ctypes],scripts:{...scripts},result,sessionBugs:[...sessionBugs],coverageText,selectedForScripts:[...selectedForScripts],appUrl,savedAt:Date.now()};
+    const snap={id:existing?.id||uid(),name:existing?.name||(sdata?.summary||sid),categoryId:existing?.categoryId||null,phase,sid,sdata,cases:[...cases],gapData,platform,ctypes:[...ctypes],scripts:{...scripts},result,sessionBugs:[...sessionBugs],coverageText,selectedForScripts:[...selectedForScripts],appUrl,testKind,apiEndpoints:[...apiEndpoints],apiCollection,savedAt:Date.now()};
     if(existing){DB.savedStories=DB.savedStories.map(s=>s.sid===sid?snap:s);}
     else{DB.savedStories.unshift(snap);}
     saveDB();if(refreshSaved)refreshSaved();
   },[phase,cases.length,result,coverageText]);
   if (!proj) return <div style={card}><div style={{color:"var(--color-text-warning)",fontWeight:500}}>No project assigned. Contact your QA lead.</div></div>;
-  const doSwitchProj=(id)=>{setSelectedProjId(id);setPhase("testType");setTestKind("functional");setPerfForm(PERF_FORM_DEFAULT);setPerfResult(null);setPerfStoryId(null);setSid("");setSdata(null);setCases([]);setNeedsClarification([]);setCoverageSummary("");setResult(null);setExecLines([]);setScripts({web:""});setHasSaved(false);setUidForm({pageUrl:"",figmaUrl:"",figmaToken:"",selectedNodeId:""});setUidCases([]);setUidVisualResult(null);setUidFigmaImg(null);setUidScreenshotImg(null);setUidFigmaFrames([]);setUidJiraStatus({});setUidManualFigmaImg(null);setUidJiraTicketKey("");setUidStoryId(null);setUidAiotestStatus({importing:false,done:false,error:""});setUidTicketSearch("");setUidTicketResults([]);setUidTicketSearching(false);};
+  const doSwitchProj=(id)=>{setSelectedProjId(id);setPhase("testType");setTestKind("functional");setPerfForm(PERF_FORM_DEFAULT);setPerfResult(null);setPerfStoryId(null);setSid("");setSdata(null);setCases([]);setNeedsClarification([]);setCoverageSummary("");setResult(null);setExecLines([]);setScripts({web:""});setHasSaved(false);setUidForm({pageUrl:"",figmaUrl:"",figmaToken:"",selectedNodeId:""});setUidCases([]);setUidVisualResult(null);setUidFigmaImg(null);setUidScreenshotImg(null);setUidFigmaFrames([]);setUidJiraStatus({});setUidManualFigmaImg(null);setUidJiraTicketKey("");setUidStoryId(null);setUidAiotestStatus({importing:false,done:false,error:""});setUidTicketSearch("");setUidTicketResults([]);setUidTicketSearching(false);setApiEndpoints([API_ENDPOINT_DEFAULT()]);setApiCollection(null);setStoryTab("jira");};
   const switchProj=(id)=>{
     if(id===selectedProjId)return;
     if(sid){setSwitchTarget(id);return;}
@@ -2120,7 +2135,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
   const confirmSwitch=()=>{
     if(sid&&sdata){
       const existing=DB.savedStories.find(s=>s.sid===sid);
-      const snap={id:existing?.id||uid(),name:existing?.name||(sdata?.summary||sid),categoryId:existing?.categoryId||null,phase,sid,sdata,cases:[...cases],gapData,platform,ctypes:[...ctypes],scripts:{...scripts},result,sessionBugs:[...sessionBugs],coverageText,selectedForScripts:[...selectedForScripts],appUrl,savedAt:Date.now()};
+      const snap={id:existing?.id||uid(),name:existing?.name||(sdata?.summary||sid),categoryId:existing?.categoryId||null,phase,sid,sdata,cases:[...cases],gapData,platform,ctypes:[...ctypes],scripts:{...scripts},result,sessionBugs:[...sessionBugs],coverageText,selectedForScripts:[...selectedForScripts],appUrl,testKind,apiEndpoints:[...apiEndpoints],apiCollection,savedAt:Date.now()};
       if(existing){DB.savedStories=DB.savedStories.map(s=>s.sid===sid?snap:s);}else{DB.savedStories.unshift(snap);}
       saveDB();if(refreshSaved)refreshSaved();
     }
@@ -2227,6 +2242,64 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
     setPhase("mode");
   };
 
+  // Manual story import (for engineers whose Jira isn't reachable from this platform).
+  const parseJiraXml=(text)=>{
+    const doc=new DOMParser().parseFromString(text,"text/xml");
+    if(doc.querySelector("parsererror")) throw new Error("File is not valid XML.");
+    const stripHtml=html=>{const d=document.createElement("div");d.innerHTML=html||"";return (d.textContent||"").replace(/ /g," ").replace(/[ \t]+\n/g,"\n").trim();};
+    const pick=selr=>{const el=doc.querySelector(selr);return el?el.textContent.trim():"";};
+    const summary=pick("item > summary")||pick("summary")||stripHtml(pick("item > title")||pick("title")).replace(/^\[[^\]]+\]\s*/,"");
+    if(!summary) throw new Error("Could not find a <summary> (or <title>) in the XML.");
+    const descRaw=pick("item > description")||pick("description");
+    const labels=[...doc.querySelectorAll("item > labels > label, labels > label")].map(l=>l.textContent.trim()).filter(Boolean);
+    return {
+      key: pick("item > key")||pick("key"),
+      summary,
+      description: stripHtml(descRaw),
+      labels,
+      type: pick("item > type")||pick("type")||"Story",
+      status: pick("item > status")||pick("status")||"In Progress",
+      assignee: pick("item > assignee")||pick("assignee")||"—",
+      priority: pick("item > priority")||pick("priority")||"Medium"
+    };
+  };
+  const handleStoryImport=(file)=>{
+    setFetchError("");
+    if(file.size>1*1024*1024){setFetchError("File is too large (max 1 MB).");return;}
+    const reader=new FileReader();
+    reader.onload=ev=>{
+      try{
+        const text=String(ev.target.result||"");
+        let parsed;
+        if(/\.json$/i.test(file.name)){
+          parsed=JSON.parse(text);
+          if(!parsed||typeof parsed!=="object"||!parsed.summary||!parsed.description){
+            throw new Error('JSON file must include at least "summary" and "description" fields.');
+          }
+        } else if(/\.xml$/i.test(file.name)){
+          parsed=parseJiraXml(text);
+        } else {
+          const lines=text.split(/\r?\n/);
+          const summary=(lines[0]||"").trim();
+          if(!summary) throw new Error("File is empty.");
+          parsed={summary,description:lines.slice(1).join("\n").trim()};
+        }
+        const key=parsed.key||(proj.jiraProjKey+"-M"+uid().toUpperCase());
+        const sd={key,summary:parsed.summary||key,description:parsed.description||"",labels:parsed.labels||[],type:parsed.type||"Story",status:parsed.status||"In Progress",assignee:parsed.assignee||"—",priority:parsed.priority||"Medium",source:"manual"};
+        if(sdata?.key && sdata.key!==key){
+          saveStoryToCache(sdata.key,{phase,sdata,platform,ctypes,gapData,cases,needsClarification,scripts,result,sessionBugs,coverageText,appUrl});
+        }
+        setSid(key); setSdata(sd); setPlatform("web");
+        setGapData(null); setCases([]); setCtypes([]); setCasesByType({}); setNeedsClarification([]); setCoverageSummary(""); setResult(null); setSessionBugs([]); setCoverageText(""); setAppUrl("");
+        setPhase("mode");
+      }catch(e){
+        setFetchError("Could not import file: "+e.message);
+      }
+    };
+    reader.onerror=()=>setFetchError("Could not read the file.");
+    reader.readAsText(file);
+  };
+
   const doGap=async()=>{
     // ── STEP 1: JS-side content guard — stop before calling AI on empty/placeholder content ──
     if(!sdata?.sim){
@@ -2299,6 +2372,38 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
   const dedupRules=`\nDEDUPLICATION RULES — apply before finalizing the list:\n1. SEMANTIC DEDUP, NOT JUST TEXT DEDUP. Before adding a case, check if it asserts the SAME underlying (trigger + expected outcome) pair as an existing/kept case, even if worded differently. "Verify X is visible only when status is Y", "Verify X is not available when status is not Y", and "Verify X cannot happen when status is Z (Z != Y)" are the SAME test — generate ONE case with the positive assertion. Only add a separate negative case if the negative path has a genuinely different mechanism (different error message, different response code, different UI treatment) — not just the logical inverse of the same check.\n2. ONE CANONICAL CASE PER RULE. For each AC/business rule/exception, generate exactly ONE case unless it has genuinely distinct sub-behaviors (3 different named error messages for 3 different triggers = 3 cases; 1 trigger and 1 outcome restated 4 ways = 1 case).\n3. Before adding a case, check it against every case already in the list (including the KEPT CASES below): does an existing case test the same (component, trigger, expected result)? If yes, does the new one exercise a genuinely distinct boundary/data variant/failure mode? If it only restates the same tuple with different phrasing or a trivial variation, DISCARD it.\n4. MERGE PARAMETERIZED CHECKS. If several candidates differ only in input value (min length, max length, special chars, empty, whitespace-only, etc. all testing the same field-rendering/validation behavior), do NOT generate separate cases — generate ONE case whose testData/steps describe the full set of input variants to try.\n5. FLAG, DON'T GUESS, undefined requirements. If a candidate case would assert behavior not explicitly stated in the story (list sort order, max attachment count, exact timing of a status change, etc.), do NOT generate it as a normal case — instead add it to needsClarification with the assumption it's making, so a human confirms the requirement exists first.\n6. Before finalizing, do an internal pass: group drafts by (component + trigger + expected-outcome-category) and collapse each group to its single best-worded canonical case.`;
   const doGen=async()=>{
     setLoading(true);
+    // ── API test kind: generate endpoint-oriented cases, then hand off to the shared review flow ──
+    if(testKind==="api"){
+      const selTypes=ctypes.includes("all")?["happy","edge","negative"]:ctypes;
+      const existing=[...new Set(cases.map(c=>c.type))];
+      const newTypes=selTypes.filter(t=>!existing.includes(t));
+      const kept=cases.filter(c=>selTypes.includes(c.type));
+      if(newTypes.length===0){setCases(kept.map((c,i)=>({...c,id:"TC-"+String(i+1).padStart(3,"0")})));setPhase("ready");setReadyFilter("all");setLoading(false);return;}
+      const epList=apiEndpoints.map((e,i)=>`Endpoint ${i+1}: ${e.method} ${e.url}${e.name?` (${e.name})`:""} — expected status ${e.expectedStatus}${["POST","PUT","PATCH"].includes(e.method)&&e.requestBody?`, sample body: ${e.requestBody.slice(0,300)}`:""}`).join("\n");
+      const apiGuide={
+        happy:"MAIN SUCCESS path per endpoint — valid parameters/body, correct auth, expected status code, well-formed response.",
+        edge:"BOUNDARY conditions for query/body params only — min/max lengths, empty/zero values, very large payloads, special characters. Do NOT duplicate negative/auth-failure scenarios.",
+        negative:"INVALID inputs and ERROR conditions only — auth failures (missing/invalid token), missing required fields, invalid data types, malformed JSON, wrong HTTP method. Do NOT duplicate edge/boundary cases."
+      };
+      try{
+        const rawNew=[];
+        for(let i=0;i<newTypes.length;i++){
+          const type=newTypes[i];
+          setLmsg(`Generating ${type} API test cases… (${i+1} of ${newTypes.length})`);
+          const r=await callAI([{role:"user",content:`You are a senior QA engineer writing API test cases for story "${sid}" (${proj.jiraProjKey}).\n\nEndpoints under test:\n${epList}\n\nTYPE: ${type.toUpperCase()} — ${apiGuide[type]||""}\n\nINSTRUCTIONS:\n1. Generate ${type} API test cases covering status-code assertions, response schema/field checks, auth-failure cases, missing/invalid parameter cases, and boundary values for query/body params as relevant to type "${type}".\n2. Cover every endpoint above at least once.\n3. Each case MUST carry enough structured data to build a Postman request: method, url, headers (object), body (string or null), expectedStatus (number), and an optional short assertion description.\n4. Every title must start with "Verify". No duplicate titles.\n\nReturn ONLY a valid JSON array (no markdown, no explanation), each object in this exact shape:\n[{"id":"TC-001","title":"Verify ...","description":"...","type":"${type}","method":"GET","url":"https://...","headers":{},"body":null,"expectedStatus":200,"assertion":"...","priority":"High","preconditions":"...","testData":"","steps":["Send request","Inspect response"],"stepResults":["Request sent","Response inspected"],"expected":"...","automatable":true}]`}],SYS,6000,proj.anthropicKey||"");
+          const match=r.replace(/```json|```/g,"").trim().match(/\[[\s\S]*\]/);
+          if(!match) throw new Error("Invalid response for "+type+" cases. Make sure server.js is running.");
+          rawNew.push(...JSON.parse(match[0]).map(c=>({...c,type,status:"pending"})));
+        }
+        const norm=t=>t.toLowerCase().replace(/[^a-z0-9]/g," ").replace(/\s+/g," ").trim();
+        const seen=new Set(kept.map(c=>norm(c.title)));
+        const merged=[...kept,...rawNew.filter(c=>{const k=norm(c.title);if(seen.has(k))return false;seen.add(k);return true;})];
+        setCases(merged.map((c,i)=>({...c,id:"TC-"+String(i+1).padStart(3,"0")})));
+      }catch(e){setLoading(false);alert("Failed to generate test cases:\n\n"+e.message);return;}
+      setPhase("ready");setReadyFilter("all");setLoading(false);
+      return;
+    }
+
     const selectedTypes=ctypes.includes("all")?["happy","edge","boundary","negative","regression"]:ctypes;
     const existingTypes=[...new Set(cases.map(c=>c.type))];
     const newTypes=selectedTypes.filter(t=>!existingTypes.includes(t));
@@ -2650,13 +2755,133 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
     }
   };
 
+  // ── API kind: build a Postman v2.1 collection from the approved cases ──
+  // Pure builder returning {collection, eligible} so the preview and the run share one source of
+  // truth (the run pool can never drift from what the collection actually contains).
+  const buildApiCollection=()=>{
+    const findEndpoint=(url,method)=>{
+      const base=(url||"").split("?")[0];
+      return apiEndpoints.find(e=>e.url&&e.url===url)
+        ||apiEndpoints.find(e=>e.url&&(base.startsWith(e.url.split("?")[0])||e.url.split("?")[0].startsWith(base)))
+        ||apiEndpoints.find(e=>e.method===method)
+        ||apiEndpoints[0]||null;
+    };
+    const normHeaders=h=>{
+      if(Array.isArray(h)) return h.filter(x=>x&&x.key).map(x=>({key:String(x.key),value:String(x.value??"")}));
+      if(h&&typeof h==="object") return Object.entries(h).map(([k,v])=>({key:k,value:String(v)}));
+      return [];
+    };
+    const eligible=approved.filter(c=>c.url&&isValidHttpUrl(c.url));
+    const items=eligible.map(c=>{
+      const method=(c.method||"GET").toUpperCase();
+      const hdrs=normHeaders(c.headers);
+      const hasAuthHeader=hdrs.some(h=>h.key.toLowerCase()==="authorization");
+      let bodyRaw=null;
+      if(["POST","PUT","PATCH"].includes(method)&&c.body){
+        bodyRaw=typeof c.body==="string"?c.body:JSON.stringify(c.body,null,2);
+        if(!hdrs.some(h=>h.key.toLowerCase()==="content-type")) hdrs.push({key:"Content-Type",value:"application/json"});
+      }
+      let urlObj;
+      try{ const u=new URL(c.url); urlObj={raw:c.url,protocol:u.protocol.replace(":",""),host:u.hostname.split("."),...(u.port?{port:u.port}:{}),path:u.pathname.split("/").filter(Boolean),query:[...u.searchParams.entries()].map(([key,value])=>({key,value}))}; }
+      catch{ urlObj={raw:c.url}; }
+      const ep=findEndpoint(c.url,method);
+      let auth;
+      if(!hasAuthHeader){
+        if(ep?.authType==="bearer"&&ep.token) auth={type:"bearer",bearer:[{key:"token",value:ep.token,type:"string"}]};
+        else if(ep?.authType==="basic"&&ep.basicUsername) auth={type:"basic",basic:[{key:"username",value:ep.basicUsername,type:"string"},{key:"password",value:ep.basicPassword||"",type:"string"}]};
+      }
+      const expectedStatus=c.expectedStatus||200;
+      const exec=[
+        `pm.test(${JSON.stringify(c.id+": "+c.title+" - status code is "+expectedStatus)}, function () {`,
+        `    pm.response.to.have.status(${expectedStatus});`,
+        `});`
+      ];
+      if(c.assertion){
+        exec.push(
+          `pm.test(${JSON.stringify(String(c.assertion))}, function () {`,
+          `    pm.expect(pm.response.text().length).to.be.above(0);`,
+          `});`
+        );
+      }
+      return {
+        name: c.id+": "+c.title,
+        request:{
+          method,
+          header: hdrs,
+          ...(bodyRaw!==null?{body:{mode:"raw",raw:bodyRaw,options:{raw:{language:"json"}}}}:{}),
+          url: urlObj,
+          ...(auth?{auth}:{})
+        },
+        event:[{listen:"test",script:{type:"text/javascript",exec}}]
+      };
+    });
+    return { collection:{info:{name:"AIO_"+sid,schema:"https://schema.getpostman.com/json/collection/v2.1.0/collection.json"},item:items}, eligible };
+  };
+  const doApiScripts=()=>{ const {collection}=buildApiCollection(); setApiCollection(collection); setPhase("apiScripts"); };
+
+  const doRunApi=async()=>{
+    setPhase("running"); setExecLines([]);
+    const addLine=l=>setExecLines(ls=>[...ls,l]);
+    // Build fresh so the run pool and the requests sent to Newman are always the same set.
+    const {collection,eligible:pool}=buildApiCollection();
+    setApiCollection(collection);
+    addLine("▶ Starting Newman runner…");
+    addLine("→ Sending "+(collection.item||[]).length+" request(s) to the server…");
+    try{
+      const abortCtrl=new AbortController();
+      const fetchTimeout=setTimeout(()=>abortCtrl.abort(),330000);
+      const r=await fetch(API_BASE+"/api/postman/run",{method:"POST",headers:{"Content-Type":"application/json","X-Session-Token":sessionStorage.getItem(SESSION_TOKEN_KEY)||""},body:JSON.stringify({collection}),signal:abortCtrl.signal});
+      const reader=r.body.getReader(); const decoder=new TextDecoder(); let buf=""; let data=null;
+      while(true){
+        const {value,done}=await reader.read();
+        if(done)break;
+        buf+=decoder.decode(value,{stream:true});
+        let idx;
+        while((idx=buf.indexOf("\n"))>=0){
+          const chunk=buf.slice(0,idx); buf=buf.slice(idx+1);
+          if(!chunk.trim())continue;
+          let msg; try{msg=JSON.parse(chunk);}catch{continue;}
+          if(msg.type==="line")addLine(msg.line);
+          else if(msg.type==="done")data=msg;
+        }
+      }
+      clearTimeout(fetchTimeout);
+      data=data||{error:"Test runner closed the connection unexpectedly",lines:[],passed:[],failed:[]};
+      if(data.error==="not_installed"){
+        addLine(""); addLine("✗ Newman is not installed on the server.");
+        addLine("  To install: npm install -g newman"); addLine("  Then restart the server and try again.");
+        setResult({pass:[],fail:pool,failedCases:pool.map(c=>({...c,_pwError:"Newman is not installed on the server. Install it with: npm install -g newman"})),total:pool.length}); setPhase("result"); return;
+      }
+      const passedSet=new Set(data.passed||[]);
+      const failedMap=new Map((data.failed||[]).map(f=>[f.title,f.error]));
+      const pass=[],fail=[];
+      for(const c of pool){
+        const label=c.id+": "+c.title;
+        const fp=[...failedMap.entries()].find(([t])=>t===label||t.includes(c.id));
+        const pp=[...passedSet].find(t=>t===label||t.includes(c.id));
+        if(fp) fail.push({...c,_pwError:fp[1]});
+        else if(pp) pass.push(c);
+        else fail.push({...c,_pwError:data.error==="timeout"?"Test run timed out":(data.error?String(data.error):"No result returned from Newman for this request.")});
+      }
+      DB.sessions.push({name:member.name,sid,platform:"api",passed:pass.length,failed:fail.length}); saveDB();
+      if(fail.length>0) pushNotif("admin","⚠ "+fail.length+" failure(s) in "+sid+" — "+member.name);
+      else pushNotif("admin","✓ All tests passed for "+sid+" — "+member.name);
+      setHist(h=>[...h,{sid,passed:pass.length,failed:fail.length}]);
+      setResult({pass,fail,failedCases:fail,total:pool.length}); setPhase("result");
+      syncToServer("session",{memberId:member.id,memberName:member.name,projectId:proj?.id||"",projectName:proj?.name||"",sid,summary:sdata?.summary||sid,platform:"api",passed:pass.length,failed:fail.length,total:pool.length});
+    }catch(e){
+      addLine(""); addLine("✗ Failed to connect to test runner: "+e.message);
+      setResult({pass:[],fail:pool,failedCases:pool,total:pool.length}); setPhase("result");
+    }
+  };
+
   const approve=id=>setCases(cs=>cs.map(c=>c.id===id?{...c,status:"approved"}:c));
   const reject=id=>setCases(cs=>cs.map(c=>c.id===id?{...c,status:"rejected"}:c));
   const editC=(id,k,v)=>setCases(cs=>cs.map(c=>c.id===id?{...c,[k]:v}:c));
   const editS=(id,si,v)=>setCases(cs=>cs.map(c=>{if(c.id!==id)return c;const s=[...c.steps];s[si]=v;return{...c,steps:s};}));
   const addStep=id=>setCases(cs=>cs.map(c=>c.id===id?{...c,steps:[...(c.steps||[]),"New step"]}:c));
   const delStep=(id,si)=>setCases(cs=>cs.map(c=>c.id===id?{...c,steps:(c.steps||[]).filter((_,i)=>i!==si)}:c));
-  const reset=()=>{localStorage.removeItem(WS_SNAP);setPhase("project");setTestKind("functional");setPerfResult(null);setPerfForm(PERF_FORM_DEFAULT);setPerfChat(false);setSid("");setSdata(null);setPlatform("web");setCtypes([]);setReadyFilter("all");setGapData(null);setCases([]);setCasesByType({});setEditOn(false);setScripts({web:""});setProjFiles(null);setExecLines([]);setResult(null);setJKey(null);setBugDone(null);setShowBugForm(false);setFixed(false);setChat(false);setShowAddCase(false);setSelectedForScripts([]);setCoverageText("");setSessionBugs([]);setHasSaved(false);setAppUrl("");setScriptCache({});setUidForm({pageUrl:"",figmaUrl:"",figmaToken:"",selectedNodeId:""});setUidCases([]);setUidVisualResult(null);setUidFigmaImg(null);setUidManualFigmaImg(null);setUidJiraTicketKey("");setUidStoryId(null);setPerfStoryId(null);setUidJiraStatus({});setUidAiotestStatus({importing:false,done:false,error:""});setUidReportComment("");setUidCommentStatus({sending:false,done:false,error:""});setCurlDraft("");setCurlErr("");};
+  const reset=()=>{localStorage.removeItem(WS_SNAP);setPhase("project");setTestKind("functional");setPerfResult(null);setPerfForm(PERF_FORM_DEFAULT);setPerfChat(false);setSid("");setSdata(null);setPlatform("web");setCtypes([]);setReadyFilter("all");setGapData(null);setCases([]);setCasesByType({});setEditOn(false);setScripts({web:""});setProjFiles(null);setExecLines([]);setResult(null);setJKey(null);setBugDone(null);setShowBugForm(false);setFixed(false);setChat(false);setShowAddCase(false);setSelectedForScripts([]);setCoverageText("");setSessionBugs([]);setHasSaved(false);setAppUrl("");setScriptCache({});setUidForm({pageUrl:"",figmaUrl:"",figmaToken:"",selectedNodeId:""});setUidCases([]);setUidVisualResult(null);setUidFigmaImg(null);setUidManualFigmaImg(null);setUidJiraTicketKey("");setUidStoryId(null);setPerfStoryId(null);setUidJiraStatus({});setUidAiotestStatus({importing:false,done:false,error:""});setUidReportComment("");setUidCommentStatus({sending:false,done:false,error:""});setCurlDraft("");setCurlErr("");setApiEndpoints([API_ENDPOINT_DEFAULT()]);setApiCollection(null);setStoryTab("jira");};
   const resetPerf=()=>{setPerfForm(PERF_FORM_DEFAULT);setPerfResult(null);setPerfStoryId(null);setPerfChat(false);setHasSaved(false);setPhase("perfTest");setCurlDraft("");setCurlErr("");};
   // saveModal: null | {step:1,name:""} | {step:2,name:"",newCat:""}
   const openSaveModal=()=>{
@@ -2696,7 +2921,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
       return;
     }
     const existing=DB.savedStories.find(s=>s.sid===sid);
-    const snap={id:existing?.id||uid(),name,categoryId:categoryId||null,phase,sid,sdata,cases:[...cases],gapData,platform,ctypes:[...ctypes],scripts:{...scripts},result,sessionBugs:[...sessionBugs],coverageText,selectedForScripts:[...selectedForScripts],appUrl,savedAt:Date.now()};
+    const snap={id:existing?.id||uid(),name,categoryId:categoryId||null,phase,sid,sdata,cases:[...cases],gapData,platform,ctypes:[...ctypes],scripts:{...scripts},result,sessionBugs:[...sessionBugs],coverageText,selectedForScripts:[...selectedForScripts],appUrl,testKind,apiEndpoints:[...apiEndpoints],apiCollection,savedAt:Date.now()};
     if(existing){DB.savedStories=DB.savedStories.map(s=>s.sid===sid?snap:s);}
     else{DB.savedStories.unshift(snap);}
     saveDB(); if(refreshSaved)refreshSaved(); setHasSaved(true); setSaveModal(null); showToast("Session saved successfully");
@@ -2704,7 +2929,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
   const saveAndReset=()=>{
     if(sid&&sdata){
       const existing=DB.savedStories.find(s=>s.sid===sid);
-      const snap={id:existing?.id||uid(),name:existing?.name||(sdata?.summary||sid),categoryId:existing?.categoryId||null,phase,sid,sdata,cases:[...cases],gapData,platform,ctypes:[...ctypes],scripts:{...scripts},result,sessionBugs:[...sessionBugs],coverageText,selectedForScripts:[...selectedForScripts],appUrl,savedAt:Date.now()};
+      const snap={id:existing?.id||uid(),name:existing?.name||(sdata?.summary||sid),categoryId:existing?.categoryId||null,phase,sid,sdata,cases:[...cases],gapData,platform,ctypes:[...ctypes],scripts:{...scripts},result,sessionBugs:[...sessionBugs],coverageText,selectedForScripts:[...selectedForScripts],appUrl,testKind,apiEndpoints:[...apiEndpoints],apiCollection,savedAt:Date.now()};
       if(existing){DB.savedStories=DB.savedStories.map(s=>s.sid===sid?snap:s);}
       else{DB.savedStories.unshift(snap);}
       saveDB(); if(refreshSaved)refreshSaved();
@@ -2751,7 +2976,8 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
       setPhase(snap.perfResult?"perfResult":"perfTest");
       return;
     }
-    setTestKind("functional");
+    setTestKind(snap.testKind==="api"?"api":"functional");
+    setApiEndpoints(snap.apiEndpoints&&snap.apiEndpoints.length?snap.apiEndpoints:[API_ENDPOINT_DEFAULT()]);setApiCollection(snap.apiCollection||null);
     setSid(snap.sid);setSdata(snap.sdata);setPlatform(snap.platform);setCtypes(snap.ctypes||[]);setGapData(toGapData(snap.gapData||snap.gapText));setCases(snap.cases||[]);setScripts(snap.scripts||{web:""});setResult(snap.result||null);setSessionBugs(snap.sessionBugs||[]);setCoverageText(snap.coverageText||"");setSelectedForScripts(snap.selectedForScripts||[]);setAppUrl(snap.appUrl||"");setExecLines([]);setJKey(null);setBugDone(null);setShowBugForm(false);setFixed(false);setEditOn(false);setChat(false);setShowAddCase(false);
     const lastPhase=snap.phase||(snap.coverageText?"coverage":snap.result?"result":snap.cases?.some(c=>c.status==="approved")?"review":"ctype");
     setPhase(lastPhase);
@@ -2773,10 +2999,16 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
     }
     if(i===2){setPhase("input");return;}
     if(i===3&&sdata){setPhase(gapData?"gap":"mode");return;}
-    if(i===4&&sdata){const et=[...new Set(cases.map(c=>c.type))];setCtypes(et.length>0?et:[]);setPhase("ctype");return;}
+    if(i===4&&sdata){
+      if(testKind==="api"){setPhase("apiEndpoints");return;}
+      const et=[...new Set(cases.map(c=>c.type))];setCtypes(et.length>0?et:[]);setPhase("ctype");return;
+    }
     if(i===5&&cases.length>0){setPhase("review");return;}
     if(i===6&&approved.length>0){setPhase("jira");return;}
-    if(i===7){setPhase(scripts.web?"autoReady":"urlPrompt");return;}
+    if(i===7){
+      if(testKind==="api"){ if(apiCollection){setPhase("apiScripts");}else if(approved.length>0){doApiScripts();}else{setPhase("apiScripts");} return; }
+      setPhase(scripts.web?"autoReady":"urlPrompt");return;
+    }
     if(i===8&&result){setPhase("result");return;}
     if(i===9){setPhase("bugReport");return;}
     if(i===10){setPhase("coverage");return;}
@@ -2784,10 +3016,11 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
   const addManualCase=()=>{
     if(!newCase.title.trim()){setNewCaseErr("Title is required.");return;}
     if(!newCase.expected.trim()){setNewCaseErr("Expected result is required.");return;}
+    if(testKind==="api"&&(!newCase.url||!newCase.url.trim()||!isValidHttpUrl(newCase.url))){setNewCaseErr("A valid http(s) URL is required for API test cases.");return;}
     setNewCaseErr("");
     const id="TC-M"+String(cases.filter(c=>c.id.startsWith("TC-M")).length+1).padStart(3,"0");
     setCases(cs=>[...cs,{...newCase,id,status:"pending",steps:newCase.steps.filter(s=>s.trim())}]);
-    setNewCase({title:"",type:"happy",platform:"web",preconditions:"",steps:[""],expected:"",automatable:true});
+    setNewCase({title:"",type:"happy",platform:"web",preconditions:"",steps:[""],expected:"",automatable:true,method:"GET",url:"",expectedStatus:200});
     setShowAddCase(false);
   };
   const curScript=scripts.web;
@@ -2852,7 +3085,8 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
         <div style={{fontSize:13,color:"var(--color-text-secondary)",display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
           {proj&&<><span>Project: <b>{proj.name}</b></span><Tag c="blue">{proj.jiraProjKey}</Tag></>}
           {testKind==="functional"&&phase!=="input"&&<Tag c="blue">web</Tag>}
-          {testKind==="functional"&&sdata&&<Tag c={sdata.sim?"":sdata.pasted?"blue":"green"}>{sdata.sim?"AI simulation":sdata.pasted?"Pasted story":"Jira ✓"}</Tag>}
+          {testKind==="api"&&phase!=="input"&&<Tag c="blue">API</Tag>}
+          {(testKind==="functional"||testKind==="api")&&sdata&&<Tag c={sdata.sim?"":(sdata.pasted||sdata.source==="manual")?"blue":"green"}>{sdata.sim?"AI simulation":sdata.source==="manual"?"Imported":sdata.pasted?"Pasted story":"Jira ✓"}</Tag>}
           {testKind==="non-functional"&&(phase==="perfTest"||phase==="perfResult")&&<Tag c="amber">Performance</Tag>}
           {testKind==="ui-design"&&<Tag c="blue">UI Design Test</Tag>}
           {syncStatus === 'syncing' && <span style={{fontSize:11,color:'#94A3B8'}}>Syncing...</span>}
@@ -2860,9 +3094,9 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
         </div>
       </div>
       <div style={{display:"flex",gap:8}}>
-        {testKind==="functional"&&phase!=="input"&&sid&&<button onClick={openSaveModal} style={ghostBtn} title="Save current session to history">💾 Save</button>}
-        {testKind==="functional"&&phase!=="input"&&sid&&<button onClick={startNewStory} title="Start a new story" style={ghostBtn}>↩ New story</button>}
-        {testKind==="functional"&&phase!=="input"&&<button onClick={()=>setChat(o=>!o)} style={ghostBtn}>{chat?"Hide chat":"🤖 AI Chat"}</button>}
+        {(testKind==="functional"||testKind==="api")&&phase!=="input"&&sid&&<button onClick={openSaveModal} style={ghostBtn} title="Save current session to history">💾 Save</button>}
+        {(testKind==="functional"||testKind==="api")&&phase!=="input"&&sid&&<button onClick={startNewStory} title="Start a new story" style={ghostBtn}>↩ New story</button>}
+        {(testKind==="functional"||testKind==="api")&&phase!=="input"&&<button onClick={()=>setChat(o=>!o)} style={ghostBtn}>{chat?"Hide chat":"🤖 AI Chat"}</button>}
         {testKind==="non-functional"&&(phase==="perfTest"||phase==="perfResult")&&<button onClick={openSaveModal} disabled={!perfForm.testName.trim()} title="Save this test session to history" style={{...ghostBtn,opacity:perfForm.testName.trim()?1:0.4,cursor:perfForm.testName.trim()?"pointer":"not-allowed"}}>💾 Save</button>}
         {testKind==="non-functional"&&(phase==="perfTest"||phase==="perfResult")&&<button onClick={resetPerf} style={ghostBtn} title="Start a new performance test">↩ New Test</button>}
         {testKind==="non-functional"&&(phase==="perfTest"||phase==="perfResult")&&<button onClick={()=>setPerfChat(o=>!o)} style={ghostBtn}>{perfChat?"Hide chat":"🤖 AI Chat"}</button>}
@@ -2904,11 +3138,11 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
         {!loading&&phase==="testType"&&<div>
           <H2 style={{marginBottom:16}}>Choose Test Type</H2>
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))",gap:16}}>
-            {[{kind:"functional",icon:"✅",label:"Functional Test",sub:"User stories · Test cases · Execution",desc:"Generate and execute functional test cases from Jira user stories using AI.",bg:"var(--color-background-success)"},{kind:"non-functional",icon:"⚡",label:"Performance Test",sub:"Load · Stress · k6",desc:"Run k6 load and stress tests against your APIs with real-time metrics.",bg:"var(--color-background-warning)"},{kind:"ui-design",icon:"🎨",label:"UI Design Test",sub:"Figma · Visual compare · Bug export",desc:"Compare Figma designs against the live implementation. Auto-generate visual test cases and file bugs directly to Jira.",bg:"var(--color-background-info)"}].map(o=>(
+            {[{kind:"functional",icon:"✅",label:"Functional Test",sub:"User stories · Test cases · Execution",desc:"Generate and execute functional test cases from Jira user stories using AI.",bg:"var(--color-background-success)"},{kind:"non-functional",icon:"⚡",label:"Performance Test",sub:"Load · Stress · k6",desc:"Run k6 load and stress tests against your APIs with real-time metrics.",bg:"var(--color-background-warning)"},{kind:"ui-design",icon:"🎨",label:"UI Design Test",sub:"Figma · Visual compare · Bug export",desc:"Compare Figma designs against the live implementation. Auto-generate visual test cases and file bugs directly to Jira.",bg:"var(--color-background-info)"},{kind:"api",icon:"🔌",label:"API Test",sub:"Endpoints · Postman · Newman",desc:"Generate and run API test collections against your endpoints, exported as a Postman collection.",bg:"var(--color-background-info)"}].map(o=>(
               <div key={o.kind} className="qa-card-hover" style={{...card,cursor:"pointer",border:"2px solid var(--color-border-tertiary)",marginBottom:0}}
                 onMouseEnter={e=>e.currentTarget.style.borderColor="var(--accent)"}
                 onMouseLeave={e=>e.currentTarget.style.borderColor="var(--color-border-tertiary)"}
-                onClick={()=>{setTestKind(o.kind);setPhase(o.kind==="functional"?"input":o.kind==="ui-design"?"uidJiraTicket":"perfTest");}}>
+                onClick={()=>{setTestKind(o.kind);setPhase(o.kind==="functional"||o.kind==="api"?"input":o.kind==="ui-design"?"uidJiraTicket":"perfTest");}}>
                 <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10}}>
                   <div style={{width:44,height:44,borderRadius:10,background:o.bg,display:"flex",alignItems:"center",justifyContent:"center",fontSize:22}}>{o.icon}</div>
                   <div><div style={{fontWeight:600,fontSize:15}}>{o.label}</div><div style={{fontSize:12,color:"var(--color-text-tertiary)",marginTop:2}}>{o.sub}</div></div>
@@ -2926,10 +3160,11 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
           </div>}
           <div style={card}>
             <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:8}}>
-              <H2>{storyInputMode==="jira"?"Enter Jira story ID":"Paste story details"}</H2>
+              <H2>{storyInputMode==="jira"?"Enter Jira story ID":storyInputMode==="import"?"Import story from file":"Paste story details"}</H2>
               <div style={{display:"flex",gap:4,padding:3,borderRadius:9,background:"var(--color-background-secondary)",border:"1px solid var(--color-border-tertiary)",marginBottom:12}}>
                 <button onClick={()=>setStoryInputMode("jira")} style={{padding:"5px 12px",borderRadius:7,border:"none",background:storyInputMode==="jira"?"#ffffff":"transparent",color:storyInputMode==="jira"?"var(--color-text-primary)":"var(--color-text-secondary)",cursor:"pointer",fontSize:12,fontWeight:storyInputMode==="jira"?600:400}}>Fetch from Jira</button>
                 <button onClick={()=>setStoryInputMode("paste")} style={{padding:"5px 12px",borderRadius:7,border:"none",background:storyInputMode==="paste"?"#ffffff":"transparent",color:storyInputMode==="paste"?"var(--color-text-primary)":"var(--color-text-secondary)",cursor:"pointer",fontSize:12,fontWeight:storyInputMode==="paste"?600:400}}>Paste story text</button>
+                <button onClick={()=>{setStoryInputMode("import");setFetchError("");}} style={{padding:"5px 12px",borderRadius:7,border:"none",background:storyInputMode==="import"?"#ffffff":"transparent",color:storyInputMode==="import"?"var(--color-text-primary)":"var(--color-text-secondary)",cursor:"pointer",fontSize:12,fontWeight:storyInputMode==="import"?600:400}}>Import from file</button>
               </div>
             </div>
             {storyInputMode==="jira"?<>
@@ -2938,6 +3173,13 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
                 <div style={{flex:1}}><Lbl>Story ID</Lbl><input style={inp} value={sid} onChange={e=>{setSid(e.target.value);setFetchError("");}} placeholder={proj.jiraProjKey+"-123"} onKeyDown={e=>e.key==="Enter"&&sid&&doFetch()}/></div>
                 <Btn v="primary" onClick={()=>sid&&doFetch()}>Fetch story →</Btn>
               </div>
+              {fetchError&&<div style={{marginTop:12,padding:"10px 14px",borderRadius:8,background:"var(--color-background-danger)",border:"1px solid var(--color-text-danger)",color:"var(--color-text-danger)",fontSize:13}}>⚠ {fetchError}</div>}
+            </>:storyInputMode==="import"?<>
+              <div style={{fontSize:12,color:"var(--color-text-tertiary)",marginBottom:10,lineHeight:1.6}}>
+                For projects whose Jira isn't reachable from this platform. Upload a Jira <b>.xml</b> export (Jira → ••• → Export → XML), a <b>.json</b> file like <code style={{background:"var(--color-background-tertiary)",borderRadius:3,padding:"1px 5px",fontFamily:"monospace"}}>{'{ "key": "PROJ-123", "summary": "...", "description": "..." }'}</code>, or a plain <b>.txt</b> file (first line = summary, rest = description).
+              </div>
+              <input type="file" accept=".json,.txt,.xml" id="storyImportInput" style={{display:"none"}} onChange={e=>{const f=e.target.files[0]; if(f)handleStoryImport(f); e.target.value="";}}/>
+              <label htmlFor="storyImportInput" style={{display:"inline-flex",alignItems:"center",gap:8,padding:"8px 16px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"var(--color-background-tertiary)",cursor:"pointer",fontSize:13,fontWeight:500}}>📁 Choose file</label>
               {fetchError&&<div style={{marginTop:12,padding:"10px 14px",borderRadius:8,background:"var(--color-background-danger)",border:"1px solid var(--color-text-danger)",color:"var(--color-text-danger)",fontSize:13}}>⚠ {fetchError}</div>}
             </>:<>
               <div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:12}}>No Jira access needed — paste the story text directly for projects that can't be linked to Jira.</div>
@@ -4206,7 +4448,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
               {[
                 {icon:"🔍",title:"Story review + GAP analysis",desc:gapData?"View saved GAP analysis (already done)":"Analyze ACs for gaps and missing scenarios.",fn:gapData?()=>setPhase("gap"):doGap,done:!!gapData},
-                {icon:"📝",title:"Write test cases",desc:cases.length>0?`Resume — ${cases.length} test cases already generated`:"Generate structured manual test cases.",fn:()=>cases.length>0?setPhase("review"):setPhase("ctype"),done:cases.length>0}
+                {icon:"📝",title:"Write test cases",desc:cases.length>0?`Resume — ${cases.length} test cases already generated`:"Generate structured manual test cases.",fn:()=>cases.length>0?setPhase("review"):setPhase(testKind==="api"?"apiEndpoints":"ctype"),done:cases.length>0}
               ].map(o=><button key={o.title} onClick={o.fn} style={{padding:20,borderRadius:12,border:"1px solid "+(o.done?"var(--color-text-success)":"var(--color-border-secondary)"),background:o.done?"var(--color-background-success)":"var(--color-background-primary)",cursor:"pointer",textAlign:"left"}}>
                 <div style={{fontSize:24,marginBottom:8}}>{o.icon}{o.done&&<span style={{fontSize:14,marginLeft:6,color:"var(--color-text-success)"}}>✓</span>}</div><div style={{fontWeight:500,fontSize:15,marginBottom:4}}>{o.title}</div><div style={{fontSize:13,color:o.done?"var(--color-text-success)":"var(--color-text-secondary)",lineHeight:1.5}}>{o.desc}</div>
               </button>)}
@@ -4226,7 +4468,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
               </div>
               <div style={{whiteSpace:"pre-wrap",fontSize:14,lineHeight:1.85}}>{gapData.raw}</div>
             </div>
-            <Confirm icon="📝" title="Would you like to write test cases?" onYes={()=>setPhase("ctype")} yesLabel="Yes, write test cases"/>
+            <Confirm icon="📝" title="Would you like to write test cases?" onYes={()=>setPhase(testKind==="api"?"apiEndpoints":"ctype")} yesLabel="Yes, write test cases"/>
           </div>;
 
           const sevColor=s=>s==="high"?"var(--color-text-danger)":s==="medium"?"var(--color-text-warning)":"var(--color-text-success)";
@@ -4295,7 +4537,69 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
               {cov.note&&<div style={{fontSize:12,color:"var(--color-text-secondary)",marginTop:4}}>{cov.note}</div>}
             </div>
 
-            <Confirm icon="📝" title="Would you like to write test cases?" onYes={()=>setPhase("ctype")} yesLabel="Yes, write test cases"/>
+            <Confirm icon="📝" title="Would you like to write test cases?" onYes={()=>setPhase(testKind==="api"?"apiEndpoints":"ctype")} yesLabel="Yes, write test cases"/>
+          </div>;
+        })()}
+
+        {!loading&&phase==="apiEndpoints"&&(()=>{
+          const updateEndpoint=(id,patch)=>setApiEndpoints(eps=>eps.map(e=>e.id===id?{...e,...patch}:e));
+          const addHeader=id=>setApiEndpoints(eps=>eps.map(e=>e.id===id?{...e,headers:[...(e.headers||[]),{hid:uid(),key:"",value:""}]}:e));
+          const updateHeader=(id,hi,patch)=>setApiEndpoints(eps=>eps.map(e=>e.id!==id?e:{...e,headers:e.headers.map((h,i)=>i===hi?{...h,...patch}:h)}));
+          const removeHeader=(id,hi)=>setApiEndpoints(eps=>eps.map(e=>e.id!==id?e:{...e,headers:e.headers.filter((_,i)=>i!==hi)}));
+          const authBtn=(ep,v,label)=>(
+            <button key={v} onClick={()=>updateEndpoint(ep.id,{authType:v})} style={{padding:"6px 14px",borderRadius:8,border:"1px solid "+(ep.authType===v?"var(--color-text-info)":"var(--color-border-secondary)"),background:ep.authType===v?"var(--color-background-info)":"transparent",cursor:"pointer",fontSize:13,fontWeight:ep.authType===v?600:400,color:ep.authType===v?"var(--color-text-info)":"var(--color-text-secondary)"}}>{label}</button>
+          );
+          const hasInvalid=apiEndpoints.some(ep=>!ep.url.trim()||!isValidHttpUrl(ep.url));
+          return <div>
+            <div style={card}>
+              <H2 style={{marginBottom:4}}>Define API Endpoint(s)</H2>
+              <div style={{fontSize:13,color:"var(--color-text-secondary)"}}>Story: <b>{sid}</b> — describe each endpoint you want to test. Test cases will be generated per endpoint.</div>
+            </div>
+            {apiEndpoints.map((ep,idx)=>(
+              <div key={ep.id} style={card}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+                  <div style={{fontWeight:500}}>Endpoint {idx+1}</div>
+                  {apiEndpoints.length>1&&<button onClick={()=>setApiEndpoints(eps=>eps.filter(x=>x.id!==ep.id))} style={{...ghostBtn,padding:"4px 10px",fontSize:12,color:"var(--color-text-danger)"}}>✕ Remove</button>}
+                </div>
+                <div style={{display:"flex",flexDirection:"column",gap:12}}>
+                  <div><Lbl>Test Name (optional)</Lbl><input style={inp} value={ep.name} onChange={e=>updateEndpoint(ep.id,{name:e.target.value})} placeholder={ep.url||"Defaults to endpoint path"}/></div>
+                  <div style={{display:"flex",gap:12}}>
+                    <div style={{width:130}}><Lbl>Method</Lbl><select style={sel} value={ep.method} onChange={e=>updateEndpoint(ep.id,{method:e.target.value})}>{["GET","POST","PUT","PATCH","DELETE"].map(m=><option key={m}>{m}</option>)}</select></div>
+                    <div style={{flex:1}}><Lbl>Endpoint URL *</Lbl><input style={inp} value={ep.url} onChange={e=>updateEndpoint(ep.id,{url:e.target.value})} placeholder="https://api.example.com/users"/></div>
+                  </div>
+                  {ep.url.trim()&&!isValidHttpUrl(ep.url)&&<div style={{fontSize:12,color:"var(--color-text-danger)"}}>⚠ Must be a valid http(s) URL.</div>}
+                  <div style={{maxWidth:200}}><Lbl>Expected Status Code</Lbl><input style={inp} type="number" value={ep.expectedStatus} onChange={e=>updateEndpoint(ep.id,{expectedStatus:parseInt(e.target.value)||200})}/></div>
+                  <div>
+                    <Lbl>Authentication</Lbl>
+                    <div style={{display:"flex",gap:8,marginTop:6}}>
+                      {authBtn(ep,"none","🔓 None")}{authBtn(ep,"bearer","🔑 Bearer")}{authBtn(ep,"basic","👤 Basic")}
+                    </div>
+                  </div>
+                  {ep.authType==="bearer"&&<div><Lbl>Bearer Token</Lbl><input style={inp} value={ep.token} onChange={e=>updateEndpoint(ep.id,{token:e.target.value})} placeholder="eyJhbGci…"/></div>}
+                  {ep.authType==="basic"&&<div style={{display:"flex",gap:12}}>
+                    <div style={{flex:1}}><Lbl>Username</Lbl><input style={inp} value={ep.basicUsername} onChange={e=>updateEndpoint(ep.id,{basicUsername:e.target.value})} placeholder="admin"/></div>
+                    <div style={{flex:1}}><Lbl>Password</Lbl><input style={inp} type="password" value={ep.basicPassword} onChange={e=>updateEndpoint(ep.id,{basicPassword:e.target.value})} placeholder="••••••"/></div>
+                  </div>}
+                  {["POST","PUT","PATCH"].includes(ep.method)&&<div><Lbl>Request Body (JSON)</Lbl><textarea style={{...inp,height:76,fontFamily:"monospace",resize:"vertical"}} value={ep.requestBody} onChange={e=>updateEndpoint(ep.id,{requestBody:e.target.value})} placeholder='{"key":"value"}'/></div>}
+                  <div>
+                    <Lbl>Custom Headers (optional)</Lbl>
+                    {(ep.headers||[]).map((h,hi)=>(
+                      <div key={h.hid||hi} style={{display:"flex",gap:8,marginBottom:6}}>
+                        <input style={{...inp,flex:1}} value={h.key} onChange={e=>updateHeader(ep.id,hi,{key:e.target.value})} placeholder="Header name"/>
+                        <input style={{...inp,flex:1}} value={h.value} onChange={e=>updateHeader(ep.id,hi,{value:e.target.value})} placeholder="Value"/>
+                        <button onClick={()=>removeHeader(ep.id,hi)} style={{background:"none",border:"none",cursor:"pointer",color:"var(--color-text-danger)",fontSize:14,padding:"0 4px",lineHeight:1,flexShrink:0}}>✕</button>
+                      </div>
+                    ))}
+                    <button onClick={()=>addHeader(ep.id)} style={{padding:"4px 10px",borderRadius:6,border:"1px dashed var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:12,color:"var(--color-text-secondary)"}}>+ Add header</button>
+                  </div>
+                </div>
+              </div>
+            ))}
+            <button onClick={()=>setApiEndpoints(eps=>[...eps,API_ENDPOINT_DEFAULT()])} style={{...ghostBtn,borderStyle:"dashed",marginBottom:16}}>+ Add another endpoint</button>
+            <div style={{display:"flex",gap:12}}>
+              <Btn v="primary" onClick={()=>setPhase("ctype")} disabled={hasInvalid}>Continue →</Btn>
+              <button onClick={()=>setPhase("mode")} style={ghostBtn}>← Back</button>
+            </div>
           </div>;
         })()}
 
@@ -4381,13 +4685,20 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
                 <Lbl>Title</Lbl><input style={{...inp,marginBottom:8,fontWeight:500}} value={c.title} onChange={e=>editC(c.id,"title",e.target.value)} disabled={!editOn}/>
                 <Lbl>Preconditions</Lbl><input style={{...inp,marginBottom:8}} value={c.preconditions||""} onChange={e=>editC(c.id,"preconditions",e.target.value)} disabled={!editOn}/>
                 <Lbl>Test Data</Lbl><textarea style={{...ta,marginBottom:8,minHeight:50}} rows={2} value={c.testData||""} onChange={e=>editC(c.id,"testData",e.target.value)} disabled={!editOn} placeholder="e.g. username: admin / password: Test@123"/>
-                <Lbl>Steps</Lbl>
-                {(c.steps||[]).map((step,si)=><div key={si} style={{display:"flex",gap:6,marginBottom:4,alignItems:"center"}}>
-                  <span style={{fontSize:11,color:"var(--color-text-tertiary)",minWidth:18}}>{si+1}.</span>
-                  <input style={{...inp,flex:1}} value={step} onChange={e=>editS(c.id,si,e.target.value)} disabled={!editOn}/>
-                  {editOn&&<button onClick={()=>delStep(c.id,si)} style={{background:"none",border:"none",cursor:"pointer",color:"var(--color-text-danger)",fontSize:14,padding:"0 4px",lineHeight:1,flexShrink:0}}>✕</button>}
-                </div>)}
-                {editOn&&<button onClick={()=>addStep(c.id)} style={{marginTop:6,padding:"4px 10px",borderRadius:6,border:"1px dashed var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:12,color:"var(--color-text-secondary)"}}>+ Add step</button>}
+                {testKind==="api"&&<div style={{display:"flex",gap:8,marginBottom:8}}>
+                  <div style={{width:120}}><Lbl>Method</Lbl><select style={sel} value={c.method||"GET"} onChange={e=>editC(c.id,"method",e.target.value)} disabled={!editOn}>{["GET","POST","PUT","PATCH","DELETE"].map(m=><option key={m}>{m}</option>)}</select></div>
+                  <div style={{flex:1}}><Lbl>URL</Lbl><input style={inp} value={c.url||""} onChange={e=>editC(c.id,"url",e.target.value)} disabled={!editOn}/></div>
+                  <div style={{width:120}}><Lbl>Expected Status</Lbl><input style={inp} type="number" value={c.expectedStatus||200} onChange={e=>editC(c.id,"expectedStatus",parseInt(e.target.value)||200)} disabled={!editOn}/></div>
+                </div>}
+                {testKind!=="api"&&<>
+                  <Lbl>Steps</Lbl>
+                  {(c.steps||[]).map((step,si)=><div key={si} style={{display:"flex",gap:6,marginBottom:4,alignItems:"center"}}>
+                    <span style={{fontSize:11,color:"var(--color-text-tertiary)",minWidth:18}}>{si+1}.</span>
+                    <input style={{...inp,flex:1}} value={step} onChange={e=>editS(c.id,si,e.target.value)} disabled={!editOn}/>
+                    {editOn&&<button onClick={()=>delStep(c.id,si)} style={{background:"none",border:"none",cursor:"pointer",color:"var(--color-text-danger)",fontSize:14,padding:"0 4px",lineHeight:1,flexShrink:0}}>✕</button>}
+                  </div>)}
+                  {editOn&&<button onClick={()=>addStep(c.id)} style={{marginTop:6,padding:"4px 10px",borderRadius:6,border:"1px dashed var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:12,color:"var(--color-text-secondary)"}}>+ Add step</button>}
+                </>}
                 <Lbl>Expected result</Lbl><input style={{...inp,marginBottom:8}} value={c.expected||""} onChange={e=>editC(c.id,"expected",e.target.value)} disabled={!editOn}/>
                 <label style={{display:"flex",alignItems:"center",gap:8,fontSize:13,cursor:editOn?"pointer":"default",opacity:editOn?1:0.6}}>
                   <input type="checkbox" checked={c.automatable!==false} disabled={!editOn} onChange={e=>editC(c.id,"automatable",e.target.checked)}/> Automatable
@@ -4416,9 +4727,13 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
               <div style={{gridColumn:"1/-1"}}><Lbl>Title <span style={{color:"var(--color-text-danger)"}}>*</span></Lbl><input style={{...inp,borderColor:newCaseErr&&!newCase.title.trim()?"var(--color-text-danger)":undefined}} value={newCase.title} onChange={e=>{setNewCase(p=>({...p,title:e.target.value}));if(newCaseErr)setNewCaseErr("");}} placeholder="e.g. Submit form with valid data"/></div>
               <div><Lbl>Type</Lbl><select style={sel} value={newCase.type} onChange={e=>setNewCase(p=>({...p,type:e.target.value}))}><option value="happy">Happy flow</option><option value="edge">Edge case</option><option value="negative">Negative</option></select></div>
-              <div><Lbl>Platform</Lbl><select style={sel} value={newCase.platform} onChange={e=>setNewCase(p=>({...p,platform:e.target.value}))}><option value="web">Web</option><option value="mobile">Mobile</option><option value="both">Web + Mobile</option></select></div>
+              {testKind!=="api"&&<div><Lbl>Platform</Lbl><select style={sel} value={newCase.platform} onChange={e=>setNewCase(p=>({...p,platform:e.target.value}))}><option value="web">Web</option><option value="mobile">Mobile</option><option value="both">Web + Mobile</option></select></div>}
+              {testKind==="api"&&<div><Lbl>Method</Lbl><select style={sel} value={newCase.method} onChange={e=>setNewCase(p=>({...p,method:e.target.value}))}>{["GET","POST","PUT","PATCH","DELETE"].map(m=><option key={m}>{m}</option>)}</select></div>}
+              {testKind==="api"&&<div style={{gridColumn:"1/-1"}}><Lbl>URL</Lbl><input style={inp} value={newCase.url} onChange={e=>setNewCase(p=>({...p,url:e.target.value}))} placeholder="https://api.example.com/users"/></div>}
+              {testKind==="api"&&<div><Lbl>Expected Status</Lbl><input style={inp} type="number" value={newCase.expectedStatus} onChange={e=>setNewCase(p=>({...p,expectedStatus:parseInt(e.target.value)||200}))}/></div>}
               <div style={{gridColumn:"1/-1"}}><Lbl>Preconditions</Lbl><input style={inp} value={newCase.preconditions} onChange={e=>setNewCase(p=>({...p,preconditions:e.target.value}))} placeholder="e.g. User is logged in"/></div>
             </div>
+            {testKind!=="api"&&<>
             <Lbl>Steps</Lbl>
             {newCase.steps.map((s,i)=><div key={i} style={{display:"flex",gap:6,marginBottom:4,alignItems:"center"}}>
               <span style={{fontSize:11,color:"var(--color-text-tertiary)",minWidth:18}}>{i+1}.</span>
@@ -4426,6 +4741,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
               {newCase.steps.length>1&&<button onClick={()=>setNewCase(p=>({...p,steps:p.steps.filter((_,j)=>j!==i)}))} style={{padding:"4px 8px",borderRadius:6,border:"none",background:"var(--color-background-danger)",color:"var(--color-text-danger)",cursor:"pointer",fontSize:12}}>✕</button>}
             </div>)}
             <button onClick={()=>setNewCase(p=>({...p,steps:[...p.steps,""]}))} style={{marginBottom:10,padding:"4px 10px",borderRadius:6,border:"1px dashed var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:12,color:"var(--color-text-secondary)"}}>+ Add step</button>
+            </>}
             <div style={{marginBottom:12}}><Lbl>Expected result <span style={{color:"var(--color-text-danger)"}}>*</span></Lbl><input style={{...inp,borderColor:newCaseErr&&!newCase.expected.trim()?"var(--color-text-danger)":undefined}} value={newCase.expected} onChange={e=>{setNewCase(p=>({...p,expected:e.target.value}));if(newCaseErr)setNewCaseErr("");}} placeholder="e.g. Success message shown"/></div>
             <label style={{display:"flex",alignItems:"center",gap:8,fontSize:13,marginBottom:14,cursor:"pointer"}}>
               <input type="checkbox" checked={newCase.automatable} onChange={e=>setNewCase(p=>({...p,automatable:e.target.checked}))}/> Automatable
@@ -4442,12 +4758,12 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
 
         {!loading&&phase==="jira"&&<div>
           <div style={{...card,padding:"16px 20px"}}>
-            <div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:14}}>Story <b>{sid}</b> · <b>{approved.length}</b> approved cases · <Tag c="blue">web</Tag></div>
+            <div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:14}}>Story <b>{sid}</b> · <b>{approved.length}</b> approved cases · <Tag c="blue">{testKind==="api"?"API":"web"}</Tag></div>
             <div style={{display:"flex",gap:10}}>
-              <Btn v="primary" onClick={()=>{exportExcel(cases,sid);setAppUrl("");setPhase("urlPrompt");}}>⬇ Export AIO Excel</Btn>
-              <Btn v="ghost" onClick={()=>{exportCSV(cases,sid);setAppUrl("");setPhase("urlPrompt");}}>⬇ Export AIO CSV</Btn>
-              <Btn v="success" onClick={doAioImport}>⬆ Import to AIO Tests</Btn>
-              <button onClick={()=>{setAppUrl("");setPhase("urlPrompt");}} style={ghostBtn}>Skip</button>
+              <Btn v="primary" onClick={()=>{exportExcel(cases,sid);if(testKind==="api"){doApiScripts();}else{setAppUrl("");setPhase("urlPrompt");}}}>⬇ Export AIO Excel</Btn>
+              <Btn v="ghost" onClick={()=>{exportCSV(cases,sid);if(testKind==="api"){doApiScripts();}else{setAppUrl("");setPhase("urlPrompt");}}}>⬇ Export AIO CSV</Btn>
+              {testKind!=="api"&&<Btn v="success" onClick={doAioImport}>⬆ Import to AIO Tests</Btn>}
+              <button onClick={()=>{if(testKind==="api"){doApiScripts();}else{setAppUrl("");setPhase("urlPrompt");}}} style={ghostBtn}>{testKind==="api"?"Skip to Collection →":"Skip"}</button>
             </div>
           </div>
         </div>}
@@ -4613,7 +4929,28 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
           </div>
         </div>}
 
-        {!loading&&phase==="runAsk"&&<Confirm icon="▶️" title="Start test execution?" desc={"Live terminal output for "+selectedForScripts.length+" selected scripts."} onYes={()=>doRun()} yesLabel="Yes, run scripts"/>}
+        {!loading&&phase==="apiScripts"&&(()=>{
+          const itemCount=(apiCollection?.item||[]).length;
+          const skipped=approved.length-itemCount;
+          return <div>
+          <div style={card}>
+            <div style={{display:"flex",justifyContent:"space-between",marginBottom:12,alignItems:"center"}}><div style={{fontWeight:500}}>Postman Collection <span style={{fontSize:12,fontWeight:400,color:"var(--color-text-tertiary)"}}>v2.1</span></div><Tag c="blue">{itemCount} request{itemCount!==1?"s":""}</Tag></div>
+            {skipped>0&&<div style={{marginBottom:12,padding:"8px 12px",borderRadius:8,background:"var(--color-background-warning)",color:"var(--color-text-warning)",fontSize:12}}>⚠ {skipped} approved case{skipped!==1?"s were":" was"} skipped for missing or invalid URL{skipped!==1?"s":""}. Edit them in the Review step to include them.</div>}
+            {itemCount===0
+              ?<div style={{color:"var(--color-text-tertiary)",fontSize:13,padding:"8px 0"}}>No requests could be built. Go back to Review and make sure your approved cases have valid http(s) URLs.</div>
+              :<pre style={{background:"var(--color-background-tertiary)",borderRadius:8,padding:16,fontSize:12,fontFamily:"monospace",lineHeight:1.6,overflow:"auto",maxHeight:360,whiteSpace:"pre-wrap",wordBreak:"break-all",margin:0,marginBottom:12}}>{JSON.stringify(apiCollection,null,2)}</pre>}
+            <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+              <button onClick={()=>navigator.clipboard?.writeText(JSON.stringify(apiCollection,null,2))} style={ghostBtn}>📋 Copy</button>
+              <button onClick={()=>dlFile(JSON.stringify(apiCollection,null,2),sid+".postman_collection.json","application/json")} style={ghostBtn}>⬇ Download Collection</button>
+            </div>
+          </div>
+          <div style={{display:"flex",gap:10}}>
+            <Btn v="primary" onClick={()=>setPhase("runAsk")} disabled={itemCount===0}>▶ Run Tests</Btn>
+            <button onClick={()=>setPhase("review")} style={ghostBtn}>← Back to Review</button>
+          </div>
+        </div>;})()}
+
+        {!loading&&phase==="runAsk"&&<Confirm icon="▶️" title="Start test execution?" desc={testKind==="api"?"Live terminal output for "+(apiCollection?.item||[]).length+" requests via Newman.":"Live terminal output for "+selectedForScripts.length+" selected scripts."} onYes={testKind==="api"?doRunApi:()=>doRun()} yesLabel="Yes, run scripts"/>}
         {phase==="running"&&<div style={card}><div style={{fontWeight:500,marginBottom:12}}>▶ Running tests…</div><Terminal lines={execLines}/></div>}
 
         {phase==="result"&&result&&<div>
@@ -4621,7 +4958,8 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
             {[{l:"Total",v:result.total,c:"info"},{l:"Passed",v:result.pass.length,c:"success"},{l:"Failed",v:result.fail.length,c:result.fail.length>0?"danger":"success"}].map(x=><div key={x.l} style={{...card,marginBottom:0,textAlign:"center",padding:20}}><div style={{fontSize:30,fontWeight:500,color:`var(--color-text-${x.c})`}}>{x.v}</div><div style={{fontSize:13,color:"var(--color-text-secondary)",marginTop:2}}>{x.l}</div></div>)}
           </div>
           <div style={card}><div style={{fontWeight:500,marginBottom:10}}>Execution log</div><Terminal lines={execLines}/></div>
-          {result.fail.length>0&&<Btn v="primary" onClick={doFix}>🔧 Fix scripts</Btn>}
+          {result.fail.length>0&&testKind!=="api"&&<Btn v="primary" onClick={doFix}>🔧 Fix scripts</Btn>}
+          {result.fail.length>0&&testKind==="api"&&<Btn v="primary" onClick={()=>setPhase("apiEndpoints")}>✎ Adjust endpoints & regenerate</Btn>}
           <div style={{display:"flex",gap:10,marginTop:12}}>
             {(result.fail.length>0||manOnly.some(c=>c.manualStatus==="fail"||c.manualStatus==="blocked"))
               ?<Btn v="primary" onClick={()=>setPhase("bugReport")}>Bug Report →</Btn>
@@ -4733,7 +5071,10 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
             }}>Submit Bug</Btn>
           </div>
           {sessionBugs.length>0&&<div style={card}>
-            <H2>Bugs filed this session</H2>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+              <H2 style={{marginBottom:0}}>Bugs filed this session</H2>
+              <button onClick={()=>sessionBugs.forEach(b=>dlFile(bugExportText(b),b.bid+".txt","text/plain"))} style={{...ghostBtn,padding:"4px 10px",fontSize:12}}>⬇ Export all</button>
+            </div>
             {sessionBugs.map(b=><div key={b.bid} style={{borderBottom:"1px solid var(--color-border-tertiary)",padding:"8px 0"}}>
               {editingBugId===b.bid
                 ?<div style={{display:"flex",flexDirection:"column",gap:8,paddingTop:4}}>
@@ -4758,6 +5099,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
                       <Tag c={b.sev==="Critical"||b.sev==="High"?"red":"amber"}>{b.sev}</Tag>
                       {b.jKey&&<Tag c="green">{b.jKey}</Tag>}
                       <Tag c="blue">TC</Tag>
+                      <button title="Export for manual Jira upload" onClick={()=>dlFile(bugExportText(b),b.bid+".txt","text/plain")} style={{background:"none",border:"none",cursor:"pointer",color:"var(--color-text-tertiary)",fontSize:14,padding:"2px 5px"}}>⬇</button>
                       <button title="Edit" onClick={()=>{setEditingBugId(b.bid);setEditBugForm({summary:b.summary,sev:b.sev,desc:b.desc||""});}} style={{background:"none",border:"none",cursor:"pointer",color:"var(--color-text-tertiary)",fontSize:14,padding:"2px 5px"}}>✎</button>
                       <button title="Delete" onClick={()=>{
                         setSessionBugs(p=>p.filter(x=>x.bid!==b.bid));
@@ -4904,7 +5246,7 @@ const [phase,setPhase]=useState("project"); const [sid,setSid]=useState(""); con
         })()}
       </div>
 
-      {phase!=="input"&&chat&&testKind==="functional"&&<div style={{width:290,flexShrink:0,display:"flex",flexDirection:"column",height:"calc(100vh - 120px)",position:"sticky",top:0}}>
+      {phase!=="input"&&chat&&(testKind==="functional"||testKind==="api")&&<div style={{width:290,flexShrink:0,display:"flex",flexDirection:"column",height:"calc(100vh - 120px)",position:"sticky",top:0}}>
         <div style={{...card,flex:1,display:"flex",flexDirection:"column",overflow:"hidden",padding:16}}>
           <div style={{fontWeight:500,fontSize:14,marginBottom:12,display:"flex",alignItems:"center",gap:8}}>🤖 QA Assistant <Tag c="blue">{sid}</Tag></div>
           <div style={{flex:1,overflow:"auto"}}><AIChat proj={proj} sid={sid} sdata={sdata} cases={cases} gapData={gapData} result={result} sessionBugs={sessionBugs} coverageText={coverageText} platform={platform}/></div>
