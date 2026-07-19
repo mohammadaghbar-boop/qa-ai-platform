@@ -4885,13 +4885,24 @@ function LoginPage({onLogin}) {
     }
     setBusy(false);
   };
-  return <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",padding:"24px 16px",background:"radial-gradient(circle at 50% 0%, rgba(79,70,229,0.06), transparent 60%), linear-gradient(135deg, #f1f5f9 0%, #e2e8f0 100%)"}}>
+  const BRAND_BLUE="#185fa5";
+  return <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",padding:"24px 16px",backgroundColor:"var(--color-background-tertiary)",backgroundImage:"radial-gradient(circle farthest-side at 50% 50%, transparent 40%, var(--color-background-tertiary) 100%), url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='22' height='22'%3E%3Crect x='9' y='9' width='4' height='4' fill='rgba(90,110,150,0.35)'/%3E%3C/svg%3E\"), radial-gradient(circle at 50% 38%, rgba(74,114,207,0.16), rgba(74,114,207,0) 55%)",backgroundSize:"auto, 22px 22px, auto",backgroundPosition:"center, center, center",backgroundRepeat:"no-repeat, repeat, no-repeat"}}>
     {/* padding:undefined defers sizing to .qa-auth-card so the @media rule can shrink it on small screens — inline styles can't respond to media queries */}
     <div className="qa-auth-card" style={{...card,padding:undefined,marginBottom:0,boxShadow:"var(--shadow-lg)",animation:"qa-fade-up 0.35s ease both"}}>
-      <div style={{fontSize:24,fontWeight:800,marginBottom:3,letterSpacing:"-0.02em",textAlign:"center"}}>QA AI Platform</div>
-      <div style={{fontSize:13,color:"var(--color-text-tertiary)",marginBottom:28,textAlign:"center"}}>AI-powered QA workflow management</div>
-      <div style={{display:"flex",gap:8,marginBottom:22,padding:4,borderRadius:12,background:"var(--color-background-secondary)",border:"1px solid var(--color-border-tertiary)"}}>
-        {["admin","member"].map(r=><button key={r} type="button" className="qa-btn" disabled={busy} aria-pressed={r===mode} onClick={()=>{setMode(r);setErr("");setFieldErr({});setEmail(saved?.mode===r?saved.email:"");setPass("");}} style={{flex:1,padding:"8px 0",borderRadius:9,border:"none",background:r===mode?"#ffffff":"transparent",color:r===mode?"var(--color-text-primary)":"var(--color-text-secondary)",cursor:busy?"not-allowed":"pointer",fontSize:14,fontWeight:r===mode?600:400,boxShadow:r===mode?"var(--shadow-sm)":"none",opacity:busy?0.7:1}}>{r==="admin"?"QA Lead":"Team Member"}</button>)}
+      <svg width={180} height={135} viewBox="0 0 360 270" role="img" style={{display:"block",margin:"0 auto"}}>
+        <title>Itqan platform logo</title>
+        <g transform="translate(128,15)">
+          <rect x="0" y="0" width="62" height="62" rx="14" fill="#90AAD9"/>
+          <rect x="20" y="20" width="62" height="62" rx="14" fill="#4472C4"/>
+          <rect x="38" y="47" width="66" height="40" rx="14" fill="#1F4E9C"/>
+        </g>
+        <text x="180" y="200" textAnchor="middle" fontFamily="'Segoe UI', Arial, sans-serif" fontSize="56" fontWeight="700" fill="#163F82">ITQAN</text>
+        <text x="180" y="235" textAnchor="middle" fontFamily="'Segoe UI', Arial, sans-serif" fontSize="16" fontWeight="500" fill="#4472C4" letterSpacing="6">PLATFORM</text>
+      </svg>
+      <div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:2,textAlign:"center"}}>AI-powered QA workflow management</div>
+      <div style={{fontSize:11,color:"var(--color-text-tertiary)",marginBottom:24,textAlign:"center"}}>by Sitech</div>
+      <div style={{display:"flex",gap:8,marginBottom:20}}>
+        {["admin","member"].map(r=><button key={r} type="button" className="qa-btn" disabled={busy} aria-pressed={r===mode} onClick={()=>{setMode(r);setErr("");setFieldErr({});setEmail(saved?.mode===r?saved.email:"");setPass("");}} style={{flex:1,padding:"8px 0",borderRadius:8,border:r===mode?"none":"1px solid var(--color-border-secondary)",background:r===mode?BRAND_BLUE:"transparent",color:r===mode?"#fff":"var(--color-text-secondary)",cursor:busy?"not-allowed":"pointer",fontSize:14,fontWeight:500,opacity:busy?0.7:1}}>{r==="admin"?"QA Lead":"Team Member"}</button>)}
       </div>
       <form onSubmit={e=>{e.preventDefault();login();}} autoComplete="on" noValidate>
       <Lbl htmlFor="login-username">{mode==="admin"?"Username":"Email"}</Lbl>
@@ -4913,11 +4924,12 @@ function LoginPage({onLogin}) {
       {err&&<div key={err} role="alert" aria-live="polite" className="qa-shake" style={{display:"flex",alignItems:"flex-start",gap:8,background:"var(--color-background-danger)",border:"1px solid rgba(153,27,27,0.18)",borderRadius:8,padding:"10px 12px",marginBottom:14,fontSize:13,color:"var(--color-text-danger)"}}>
         <span aria-hidden="true">⚠</span><span>{err}</span>
       </div>}
-      <button type="submit" className="qa-btn" disabled={busy} style={{width:"100%",padding:"10px 0",borderRadius:10,border:"none",background:"var(--accent)",color:"#fff",cursor:busy?"not-allowed":"pointer",fontSize:14,fontWeight:600,opacity:busy?0.75:1,display:"flex",alignItems:"center",justifyContent:"center",gap:8}}>
+      <button type="submit" className="qa-btn" disabled={busy} style={{width:"100%",padding:"10px 0",borderRadius:10,border:"none",background:BRAND_BLUE,color:"#fff",cursor:busy?"not-allowed":"pointer",fontSize:14,fontWeight:600,opacity:busy?0.75:1,display:"flex",alignItems:"center",justifyContent:"center",gap:8}}>
         {busy&&<span aria-hidden="true" style={{width:14,height:14,border:"2px solid rgba(255,255,255,0.4)",borderTopColor:"#fff",borderRadius:"50%",animation:"qa-spin .7s linear infinite"}}/>}
         {busy?"Signing in…":"Sign in"}
       </button>
       </form>
+      {mode==="admin"&&<div style={{fontSize:12,color:"var(--color-text-tertiary)",marginTop:10,textAlign:"center"}}>Demo: admin / admin</div>}
       {!showForgot&&<button type="button" onClick={()=>setShowForgot(true)} style={{background:"none",border:"none",cursor:"pointer",fontSize:12,color:"var(--color-text-tertiary)",marginTop:14,textDecoration:"underline"}}>Forgot password?</button>}
       {showForgot&&(()=>{
         const closeForgot=()=>{setShowForgot(false);setResetStage("request");setResetEmail("");setRequestErr("");setRequestMsg("");setResetErr("");setResetToken("");setNewPwd("");setConfirmPwd("");setTokenFromLink(false);setResetOk(false);};
@@ -4929,7 +4941,7 @@ function LoginPage({onLogin}) {
             <input type="email" autoComplete="email" style={inp} value={resetEmail} onChange={e=>{setResetEmail(e.target.value);setRequestErr("");}} placeholder="jane@company.com" onKeyDown={e=>e.key==="Enter"&&requestReset()}/>
             {requestErr&&<div role="alert" style={{color:"var(--color-text-danger)",fontSize:12}}>{requestErr}</div>}
             <div style={{display:"flex",gap:8}}>
-              <button onClick={requestReset} disabled={requestBusy} className="qa-btn" style={{flex:1,padding:"8px 0",borderRadius:8,border:"none",background:"var(--accent)",color:"#fff",cursor:requestBusy?"not-allowed":"pointer",fontSize:13,fontWeight:500,opacity:requestBusy?0.7:1}}>{requestBusy?"Sending…":"Send reset link"}</button>
+              <button onClick={requestReset} disabled={requestBusy} className="qa-btn" style={{flex:1,padding:"8px 0",borderRadius:8,border:"none",background:BRAND_BLUE,color:"#fff",cursor:requestBusy?"not-allowed":"pointer",fontSize:13,fontWeight:500,opacity:requestBusy?0.7:1}}>{requestBusy?"Sending…":"Send reset link"}</button>
               <button onClick={closeForgot} style={{padding:"8px 14px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:13,color:"var(--color-text-secondary)"}}>Cancel</button>
             </div>
             <button onClick={()=>setResetStage("reset")} style={{background:"none",border:"none",cursor:"pointer",fontSize:12,color:"var(--color-text-tertiary)",textDecoration:"underline",alignSelf:"flex-start",marginTop:2}}>Already have a reset token?</button>
@@ -4951,7 +4963,7 @@ function LoginPage({onLogin}) {
             <PasswordField value={confirmPwd} onChange={e=>setConfirmPwd(e.target.value)} placeholder="Confirm new password" autoComplete="new-password"/>
             {resetErr&&<div role="alert" style={{color:"var(--color-text-danger)",fontSize:12}}>{resetErr}</div>}
             <div style={{display:"flex",gap:8}}>
-              <button onClick={doReset} disabled={resetBusy} className="qa-btn" style={{flex:1,padding:"8px 0",borderRadius:8,border:"none",background:"var(--accent)",color:"#fff",cursor:resetBusy?"not-allowed":"pointer",fontSize:13,fontWeight:500,opacity:resetBusy?0.7:1}}>{resetBusy?"Resetting…":"Reset Password"}</button>
+              <button onClick={doReset} disabled={resetBusy} className="qa-btn" style={{flex:1,padding:"8px 0",borderRadius:8,border:"none",background:BRAND_BLUE,color:"#fff",cursor:resetBusy?"not-allowed":"pointer",fontSize:13,fontWeight:500,opacity:resetBusy?0.7:1}}>{resetBusy?"Resetting…":"Reset Password"}</button>
               <button onClick={closeForgot} style={{padding:"8px 14px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"transparent",cursor:"pointer",fontSize:13,color:"var(--color-text-secondary)"}}>Cancel</button>
             </div>
           </div>}
