@@ -69,24 +69,29 @@ const MAX_BODY          = 20 * 1024 * 1024; // 20 MB per request
 const REQ_TIMEOUT       = 30000;            // 30 s for outgoing HTTP requests
 const API_SESSION_TTL   = 24 * 60 * 60 * 1000; // 24 h — API/Jira credential sessions
 const ADMIN_SESSION_TTL =  8 * 60 * 60 * 1000; // 8 h  — admin + member login sessions
+const RESEND_API_KEY    = process.env.RESEND_API_KEY || '';
+const RESEND_FROM_EMAIL = process.env.RESEND_FROM_EMAIL || 'QA AI Platform <onboarding@resend.dev>';
+const APP_URL           = process.env.APP_URL || '';
 
 // Empty MCP config — prevents claude CLI from using MCP tools (e.g. Atlassian)
 const EMPTY_MCP = path.join(os.tmpdir(), 'qa-platform-no-mcp.json');
 fs.writeFileSync(EMPTY_MCP, JSON.stringify({ mcpServers: {} }));
 
-/* ── Rate limiter (login endpoints) ─────────────────────────────────────── */
+/* ── Rate limiter (login + forgot-password endpoints) ───────────────────── */
 const loginAttempts = new Map(); // ip -> { count, resetAt }
-function checkRateLimit(ip) {
+const forgotPasswordAttempts = new Map(); // ip -> { count, resetAt } — separate bucket so reset requests don't lock out logins
+function checkRateLimit(ip, store = loginAttempts, limit = 10) {
   const now = Date.now();
-  let e = loginAttempts.get(ip);
+  let e = store.get(ip);
   if (!e || now > e.resetAt) e = { count: 0, resetAt: now + 15 * 60 * 1000 };
   e.count++;
-  loginAttempts.set(ip, e);
-  return e.count <= 10; // 10 attempts per 15 min
+  store.set(ip, e);
+  return e.count <= limit; // `limit` attempts per 15 min
 }
 setInterval(() => {
   const now = Date.now();
   for (const [ip, e] of loginAttempts) if (now > e.resetAt) loginAttempts.delete(ip);
+  for (const [ip, e] of forgotPasswordAttempts) if (now > e.resetAt) forgotPasswordAttempts.delete(ip);
 }, 5 * 60 * 1000);
 
 /* ── Input validators & sanitizers ──────────────────────────────────────── */
@@ -749,6 +754,49 @@ function attachToJira(jiraUrl, issueKey, auth, files) {
   });
 }
 
+/* ── Transactional email (Resend) ────────────────────────────────────────── */
+function escapeHtml(s) {
+  return String(s || '').replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+}
+function sendResetEmail(toEmail, memberName, resetLink) {
+  return new Promise((resolve, reject) => {
+    if (!RESEND_API_KEY) { reject(new Error('RESEND_API_KEY is not configured')); return; }
+    const html = `
+      <p>Hi ${escapeHtml(memberName || '')},</p>
+      <p>We received a request to reset your QA AI Platform password. This link expires in 1 hour and can only be used once.</p>
+      <p><a href="${escapeHtml(resetLink)}">Reset your password</a></p>
+      <p>If you didn't request this, you can safely ignore this email — your password will stay the same.</p>`;
+    const payload = JSON.stringify({
+      from:    RESEND_FROM_EMAIL,
+      to:      [toEmail],
+      subject: 'Reset your QA AI Platform password',
+      html
+    });
+    const opts = {
+      hostname: 'api.resend.com',
+      path:     '/emails',
+      method:   'POST',
+      timeout:  REQ_TIMEOUT,
+      headers: {
+        'Authorization': 'Bearer ' + RESEND_API_KEY,
+        'Content-Type':  'application/json',
+        'Content-Length': Buffer.byteLength(payload)
+      }
+    };
+    const req = https.request(opts, res => {
+      let data = ''; res.on('data', d => data += d);
+      res.on('end', () => {
+        if (res.statusCode >= 400) reject(new Error('Resend ' + res.statusCode + ': ' + data.slice(0, 200)));
+        else resolve(true);
+      });
+    });
+    req.on('timeout', () => { req.destroy(new Error('Resend request timed out')); });
+    req.on('error', reject);
+    req.write(payload);
+    req.end();
+  });
+}
+
 /* ── Playwright Test Runner ─────────────────────────────────────────────── */
 // Resolve the exact Playwright binary installed in THIS project. Going through `npx`
 // risks resolving a different cached copy of the `playwright` package than the
@@ -1316,7 +1364,9 @@ const server = http.createServer((req, res) => {
   }
 
   /* ── Serve app ── */
-  if (req.method === 'GET' && (req.url === '/' || req.url === '/index.html')) {
+  // Compare on the path only — a reset-password link like /?resetToken=... must still hit this route.
+  const urlPath = req.url.split('?')[0];
+  if (req.method === 'GET' && (urlPath === '/' || urlPath === '/index.html')) {
     try {
       const html = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
       res.writeHead(200, {
@@ -1967,6 +2017,43 @@ const server = http.createServer((req, res) => {
         saveServerDB(serverDB);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ ok: true }));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Invalid request' }));
+      }
+      return;
+    }
+
+    /* ── /api/auth/forgot-password (POST — public, self-service reset link) ── */
+    if (req.method === 'POST' && req.url === '/api/auth/forgot-password') {
+      const ip = req.socket.remoteAddress || 'unknown';
+      if (!checkRateLimit(ip, forgotPasswordAttempts, 5)) {
+        res.writeHead(429, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Too many reset requests. Please wait 15 minutes.' })); return;
+      }
+      // Always returns the same generic response, whether or not the email matches an
+      // account — otherwise this endpoint becomes a way to enumerate registered members.
+      const generic = { ok: true, message: 'If an account exists for that email, a reset link has been sent.' };
+      try {
+        const { email } = JSON.parse(body);
+        if (email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+          const member = (serverDB.members || []).find(m => m.email === email);
+          if (member) {
+            const token = crypto.randomBytes(32).toString('hex');
+            member.resetToken = token;
+            member.resetTokenExpiry = Date.now() + 3600000;
+            saveServerDB(serverDB);
+            appendAuditLog('reset-token-requested', { memberId: member.id });
+            const base = APP_URL || ((req.headers['x-forwarded-proto'] || 'http') + '://' + req.headers.host);
+            try {
+              await sendResetEmail(member.email, member.name, base + '/?resetToken=' + token);
+            } catch (e) {
+              console.error('[Auth] Failed to send reset email:', e.message);
+            }
+          }
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(generic));
       } catch (e) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'Invalid request' }));
